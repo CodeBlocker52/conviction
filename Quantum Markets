@@ -1,0 +1,391 @@
+# Quantum Markets, Explained Simply
+
+### And how Wavefund uses them to build a fund run by AI agents
+
+This guide is for anyone who knows the basics of crypto, Uniswap and prediction markets, but hasn't read Paradigm's "Quantum Markets" paper. No maths background needed. We'll build up one idea at a time, with plenty of examples.
+
+---
+
+## Contents
+
+1. [Quick refresher: prediction markets](#1-quick-refresher-prediction-markets)
+2. [Decision markets: using predictions to choose](#2-decision-markets-using-predictions-to-choose)
+3. [The problem: too many options, not enough money](#3-the-problem-too-many-options-not-enough-money)
+4. [The quantum markets trick](#4-the-quantum-markets-trick)
+5. [The school canteen example](#5-the-school-canteen-example)
+6. [The simple maths behind it](#6-the-simple-maths-behind-it)
+7. [Why it's safe: the money always adds up](#7-why-its-safe-the-money-always-adds-up)
+8. [Common questions about risk](#8-common-questions-about-risk)
+9. [What we're building: Wavefund](#9-what-were-building-wavefund)
+10. [One full Wavefund round, with numbers](#10-one-full-wavefund-round-with-numbers)
+11. [Who does what](#11-who-does-what)
+12. [Why this matters](#12-why-this-matters)
+13. [Mini glossary](#13-mini-glossary)
+
+---
+
+## 1. Quick refresher: prediction markets
+
+On a prediction market like Polymarket, you bet on whether something will happen.
+
+> "Will it rain in Mumbai tomorrow?"
+
+If YES costs $0.70, the crowd thinks there's roughly a 70% chance of rain. If it rains, each YES pays $1. If not, it pays $0.
+
+Prediction markets **guess the future**. They don't change it.
+
+---
+
+## 2. Decision markets: using predictions to choose
+
+A decision market uses the crowd's predictions to **make a choice**.
+
+Imagine a company deciding whether to launch a new product. It opens two markets:
+
+- "If we **launch**, what will our share price be next month?"
+- "If we **don't launch**, what will our share price be next month?"
+
+People trade both. Say the "launch" market predicts $120 and the "don't launch" market predicts $100. The company launches.
+
+Then the important part: **only the "launch" market counts.** The "don't launch" market is cancelled, and everyone who traded there gets their money back as if nothing happened. That makes sense, because we'll never find out what would have happened without the launch.
+
+This idea is sometimes called **futarchy**. A project called MetaDAO already uses it on Solana to make decisions for crypto projects.
+
+---
+
+## 3. The problem: too many options, not enough money
+
+Decision markets work well with two options. Real decisions often have many more.
+
+> "Which of these 100 trades should our fund make?"
+
+In a normal decision market, **each option needs its own market, and each market needs its own money.**
+
+| You have | Options | Money per option |
+|---|---|---|
+| $1,000 | 2 | $500 |
+| $1,000 | 10 | $100 |
+| $1,000 | 100 | $10 |
+
+With 100 options, your $1,000 opinion becomes a bunch of $10 opinions that barely move anything. So in practice, decision markets are limited to a handful of choices.
+
+This gets much worse with AI. An AI agent can come up with 10,000 ideas in seconds. There's no way to fund 10,000 separate markets.
+
+---
+
+## 4. The quantum markets trick
+
+Paradigm's insight is simple once you see it:
+
+> **Only one option will actually happen. So why make people split their money?**
+
+In a quantum market:
+
+1. **You deposit once.** Say $1,000.
+2. **You get the full $1,000 to bet with in every option at the same time.** Not $10 each: the full $1,000 in each.
+3. **At the deadline, the market picks the winning option** (the one the crowd predicts will do best).
+4. **Only bets on the winning option are real.** They pay out or lose.
+5. **Every other bet is erased,** as if it never happened. Your money for those options comes straight back.
+
+### Why "quantum"?
+
+In quantum physics, a tiny particle can be in many states at once until someone looks at it. Then it "collapses" into just one state.
+
+Here, all the options are live at once, and your money exists in all of them. When the deadline arrives, the market "collapses" into one winner, and only that version of events becomes real.
+
+---
+
+## 5. The school canteen example
+
+Let's make it concrete, the way you'd explain it to a 10-year-old.
+
+### The situation
+
+The school canteen wants to pick **next Friday's special lunch**. The goal is to sell as many plates as possible. There are three ideas:
+
+- 🍕 Pizza
+- 🍔 Burger
+- 🍜 Noodles
+
+The canteen will cook **100 plates** of whichever dish wins. Friday's result is simply: what fraction of those 100 plates got sold?
+
+### The "sells well" tickets
+
+For each dish there's a special ticket called a **"sells well" ticket**. Here's what it pays if that dish is chosen:
+
+> Each "sells well" ticket pays **1 coin × the fraction of plates sold**.
+> If 80 of 100 plates sell, each ticket pays **0.8 coins**.
+> If only 30 sell, each pays **0.3 coins**.
+
+There's also a **"sells badly"** ticket that pays the opposite: 1 coin minus the fraction sold. If 80 sell, it pays 0.2 coins.
+
+Kids buy and sell these tickets with each other all week. The price of a "sells well" ticket shows what the class thinks will happen. If pizza "sells well" tickets cost 0.7 coins, the class expects about 70 pizza plates to sell.
+
+### The old way: split your coins
+
+Riya has **30 coins**. She has opinions on all three dishes, so she splits them: 10 coins for pizza, 10 for burger, 10 for noodles. Each opinion only gets 10 coins of power.
+
+### The quantum way: one jar, three sets of magic coins
+
+Instead, Riya puts her **30 coins into a jar** with the canteen teacher. The teacher gives her:
+
+- 30 **pizza coins** (only work in the pizza market)
+- 30 **burger coins** (only work in the burger market)
+- 30 **noodle coins** (only work in the noodle market)
+
+These are magic coins: whichever dish **isn't** chosen, its magic coins turn to dust, and nothing done with them counts.
+
+Now Riya can use her full 30 coins of opinion on every dish.
+
+### The week of trading
+
+| Kid | Puts in the jar | What they do |
+|---|---|---|
+| **Riya** | 30 coins | Thinks pizza will sell great. Buys 10 pizza "sells well" tickets at 0.5 each, spending 5 pizza coins. Thinks noodles will flop, so buys 20 noodle "sells badly" tickets. |
+| **Aarav** | 30 coins | Thinks pizza is overhyped. Buys 20 pizza "sells badly" tickets at 0.5 each, spending 10 pizza coins. |
+| **Meera** | 30 coins | Loves burgers. Spends all 30 burger coins on burger "sells well" tickets. Doesn't touch pizza. |
+
+By Thursday, the prices settle like this:
+
+| Dish | Price of "sells well" | What the class expects |
+|---|---|---|
+| 🍕 Pizza | 0.75 | ~75 plates sold |
+| 🍔 Burger | 0.60 | ~60 plates sold |
+| 🍜 Noodles | 0.35 | ~35 plates sold |
+
+### Thursday: the collapse
+
+Pizza has the highest expected sales, so **pizza is chosen**.
+
+- All **burger** and **noodle** magic coins turn to dust.
+- Every trade in those markets is erased. Meera's burger bet and Riya's noodle bet never happened.
+
+### Friday: the result
+
+The canteen cooks 100 pizzas, and **80 sell**. So:
+
+- Each pizza "sells well" ticket pays **0.8 coins**
+- Each pizza "sells badly" ticket pays **0.2 coins**
+
+### Who ends up with what?
+
+| Kid | In the pizza market | Gets back from pizza | Final coins | Result |
+|---|---|---|---|---|
+| **Riya** | Spent 5 pizza coins on 10 "sells well" tickets; 25 pizza coins unused | 10 × 0.8 = 8, plus 25 unused = **33** | 33 | **+3** 🎉 |
+| **Aarav** | Spent 10 pizza coins on 20 "sells badly" tickets; 20 unused | 20 × 0.2 = 4, plus 20 unused = **24** | 24 | **−6** 😕 |
+| **Meera** | Didn't touch pizza; all 30 pizza coins unused | **30** | 30 | **0** 😐 |
+
+Notice three things:
+
+1. **Riya was right about pizza** and made money.
+2. **Aarav was wrong about pizza** and lost some coins.
+3. **Meera only bet on burgers,** which wasn't chosen, so her bet vanished. She got all her coins back, exactly as if she'd never played.
+
+And the noodle bet Riya made? Gone, no gain, no loss.
+
+**That's the whole idea of quantum markets.**
+
+---
+
+## 6. The simple maths behind it
+
+Four rules make everything work.
+
+### Rule 1: One deposit, credits everywhere
+
+If you deposit **D**, you can use up to **D** credits in **each** option's market.
+
+> Deposit $1,000 → up to $1,000 in option A, up to $1,000 in option B, up to $1,000 in option C…
+
+### Rule 2: Credits become "yes / no" pairs
+
+In each market, 1 credit can be turned into **1 LONG + 1 SHORT** ticket (like "sells well" + "sells badly"). Together they're always worth exactly 1 credit, because one pays the result and the other pays the rest.
+
+### Rule 3: The highest price wins
+
+The option whose LONG price is highest at the deadline is chosen. A higher LONG price means the crowd expects a better outcome.
+
+(In Wavefund we use the **average price over the last few minutes**, not one instant, so nobody can win by spiking the price at the last second.)
+
+### Rule 4: Only the winner pays
+
+When the result is known, with result **x** between 0 and 1:
+
+- each LONG pays **x**
+- each SHORT pays **1 − x**
+- unused credits pay **1**
+
+Every other market is erased.
+
+### Your final balance
+
+> **Final balance = what you deposited − credits you used in the winning market + what the winning market paid you**
+
+Everything you did in losing markets drops out of the formula completely.
+
+---
+
+## 7. Why it's safe: the money always adds up
+
+A fair question: *"If everyone gets their full deposit in every market, isn't the system creating fake money?"*
+
+No, because **only one market ever pays out.**
+
+Inside the winning market:
+
+- every LONG + SHORT pair was made from 1 credit, and together they pay exactly 1
+- unused credits pay 1
+
+So the winning market pays out exactly as many credits as were used in it, and nobody can use more credits in one market than they deposited.
+
+In the canteen: the three kids put in 90 coins. At the end they hold 33 + 24 + 30 = **87** coins, and the remaining **3** coins went to the canteen kids who sold Riya and Aarav their tickets at those prices. Riya's gain is balanced by someone else's loss. Nothing is created from thin air.
+
+The losing markets are like **practice rounds that never counted**.
+
+---
+
+## 8. Common questions about risk
+
+### "Is betting on more options riskier?"
+
+**No.** Compare two people:
+
+- **Person A** bets on 1 option that ends up winning, and 2 options that don't.
+- **Person B** bets on 1 option that ends up winning, and 1 option that doesn't.
+
+If A and B made the same bet in the winning market, **they end up with exactly the same result.** Bets in losing options are erased, so they add no risk at all, no matter how many there are.
+
+### "So what *am* I betting on?"
+
+Two separate things:
+
+1. **Which option wins.** You influence this with your trades, but you aren't paid for "picking the winner".
+2. **How well the winning option actually does.** This is what you're paid for. Two people can both bet in the winning market, and one can be right about the result and the other wrong, like Riya and Aarav.
+
+### "Can I lose more than I deposited?"
+
+**No.** The most you can lose is what you used in the winning market, which can never be more than your deposit.
+
+### "Can I push a bad option for free?"
+
+Not really. If you push a bad option up and it **wins because of you**, you're now holding that bet, and you'll lose when it does badly. That's the built-in punishment. (Pushing a *good* option *down* is the harder case. Wavefund defends against it by measuring prices over a final window and by giving every market deep liquidity, so it takes a lot of money to move a price and keep it there.)
+
+---
+
+## 9. What we're building: Wavefund
+
+> **A hedge fund run by a market of AI agents, where the market decides which agent trades.**
+
+Wavefund is a USDC fund on **Arc**, Circle's blockchain. Every round, it decides one thing:
+
+> **"What should the fund hold for the next period?"**
+
+### The flow
+
+```mermaid
+flowchart LR
+    A["1. AI agents pitch trades"] --> B["2. People bet on every pitch<br/>using one deposit"]
+    B --> C["3. Market picks the best pitch"]
+    C --> D["4. Fund makes that trade<br/>on Uniswap"]
+    D --> E["5. Wait and measure<br/>how the fund did"]
+    E --> F["6. Winners paid,<br/>other bets erased"]
+    F --> A
+```
+
+1. **AI agents pitch trades.** Each pitch is a plan like "Put 30% of the fund into ETH," with a one-line reason.
+2. **People bet on every pitch at once,** quantum-market style. Each pitch has its own small Uniswap pool where the price shows how well the crowd thinks the fund will do under that plan.
+3. **The market picks** the pitch with the best predicted result, but only if it beats "keep things as they are", which is always option 0.
+4. **The fund executes** the winning trade through Uniswap.
+5. **After the round,** we measure the fund's real result using trusted price feeds.
+6. **The winning market pays out.** All other bets are erased. The agent whose pitch won and made money gets a bonus, like a fund manager's performance fee.
+
+---
+
+## 10. One full Wavefund round, with numbers
+
+### The pitches
+
+| Option | Pitched by | Plan | Reason given |
+|---|---|---|---|
+| 0 | The protocol | Keep current holdings (all USDC) | Do nothing |
+| 1 | Momentum agent | 30% ETH | "ETH has been climbing all day" |
+| 2 | Risk-taker agent | 80% ETH | "Big move coming" |
+
+### The bets
+
+Your friend deposits **$1,000**. He gets $1,000 of credits in each option.
+
+- He thinks 30% ETH is smart, so he bets **for** option 1.
+- He thinks 80% ETH is too risky, so he bets **against** option 2.
+
+Other people and AI forecaster agents trade too.
+
+### The collapse
+
+At the deadline, the market's predictions are:
+
+| Option | Predicted fund result |
+|---|---|
+| 0: stay in cash | +0.0% |
+| 1: 30% ETH | **+0.6%** |
+| 2: 80% ETH | −0.5% |
+
+**Option 1 wins.** Option 2's market is erased, so your friend's "against" bet there never happened.
+
+### The trade and the result
+
+The fund swaps 30% of its USDC into ETH on Uniswap. Over the next period, **ETH rises 2%**, so the fund gains 30% × 2% = **0.6%**, which is what the market predicted.
+
+### The payout
+
+Your friend's bet on option 1 was right, so he walks away with about **$1,015**. If option 2 had won instead and gone badly, his "against" bet there would have paid.
+
+The momentum agent's pitch won and made money, so it earns a slice of the fund's profit. The risk-taker agent earns nothing this round.
+
+---
+
+## 11. Who does what
+
+| Who | What they do | How they earn |
+|---|---|---|
+| **The protocol** | Opens a new question every round, always adds "keep things as they are" as option 0 | Small fees |
+| **AI agents (pitchers)** | Pitch trades with a small deposit as a promise of good behaviour | Bonus from the fund's profit when their pitch wins and makes money; lose the deposit for junk pitches |
+| **Forecasters** (people or AI agents) | Bet on how the fund will do under each pitch | Profit when they're right about the winning pitch |
+| **Fund depositors** | Put USDC into the fund | The fund's returns |
+| **Uniswap** | Hosts every pitch's market, and executes the fund's trades | Trading fees for liquidity providers |
+
+**Is it perps or prediction markets?** The bets are prediction markets, specifically decision markets. The fund's own trades are separate: in this version it buys and sells on Uniswap. A later version on Solana could trade perps instead, so prediction markets would be steering perp trades.
+
+---
+
+## 12. Why this matters
+
+**Today**, an "AI-run fund" usually means trusting **one** AI. If it's wrong, nothing stops it.
+
+**With Wavefund:**
+
+- **Many agents compete.** Any agent can pitch, so the fund always gets the best ideas available, not just one agent's.
+- **Real money decides.** People only bet when they believe they're right, so the crowd's prediction is honest.
+- **The best agents rise.** Agents whose pitches win and make money earn more. Bad ones lose their deposits and fade away.
+- **It scales to thousands of ideas.** Thanks to the quantum trick, adding more pitches doesn't need more money from bettors.
+
+**In one sentence:**
+
+> It's a fund with no human manager: AI agents pitch trades, a prediction market picks the best one, and your money counts on every idea at once.
+
+---
+
+## 13. Mini glossary
+
+| Word | Meaning |
+|---|---|
+| **Prediction market** | A market where you bet on whether something will happen |
+| **Decision market** | A prediction market used to make a choice; only the chosen option's bets count |
+| **Futarchy** | Running decisions through decision markets |
+| **Quantum market** | A decision market where one deposit gives you full betting power in every option |
+| **Credits** | Your betting power inside one option's market; worth something only if that option wins |
+| **LONG / SHORT** | Tickets that pay more if the result is good / bad |
+| **Collapse** | The moment the market picks one winning option and erases the rest |
+| **Status quo** | Option 0, "keep things as they are", which the others must beat |
+| **Uniswap pool** | Where each option's tickets are traded, and where the fund makes its trade |
+| **Arc** | Circle's blockchain, where USDC is used for everything including fees |
