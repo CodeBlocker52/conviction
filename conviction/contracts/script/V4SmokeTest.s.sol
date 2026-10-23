@@ -107,6 +107,7 @@ contract TestCallback {
             address token0 = Currency.unwrap(key.currency0);
             uint256 amt = uint256(uint128(-d0));
             require(amt <= maxAmount0, "max amount0 exceeded");
+            pm.sync(key.currency0);
             IERC20(token0).safeTransferFrom(sender, address(pm), amt);
             pm.settle();
         }
@@ -114,6 +115,7 @@ contract TestCallback {
             address token1 = Currency.unwrap(key.currency1);
             uint256 amt = uint256(uint128(-d1));
             require(amt <= maxAmount1, "max amount1 exceeded");
+            pm.sync(key.currency1);
             IERC20(token1).safeTransferFrom(sender, address(pm), amt);
             pm.settle();
         }
@@ -147,6 +149,7 @@ contract TestCallback {
         address tokenIn = zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
         int128 amtIn = zeroForOne ? d0 : d1;
         if (amtIn < 0) {
+            pm.sync(Currency.wrap(tokenIn));
             IERC20(tokenIn).safeTransferFrom(sender, address(pm), uint256(uint128(-amtIn)));
             pm.settle();
         }
