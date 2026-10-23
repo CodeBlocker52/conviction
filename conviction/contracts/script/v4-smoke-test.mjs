@@ -106,7 +106,7 @@ const latestPrice = await publicClient.readContract({
   functionName: "latestPrice",
 });
 const [oracleAnswer, oracleDecimals, oracleUpdatedAt] = latestPrice;
-const now = BigInt(Math.floor(Date.now() / 1_000));
+const now = (await publicClient.getBlock()).timestamp;
 if (oracleUpdatedAt === 0n || oracleUpdatedAt > now || now - oracleUpdatedAt > 300n) {
   throw new Error("The on-chain ETH/USD oracle update is stale; refresh it before the smoke test.");
 }
