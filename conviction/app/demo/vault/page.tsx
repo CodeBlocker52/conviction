@@ -3,13 +3,15 @@
 import Link from "next/link";
 import DemoWorkspacePage from "../demo-workspace-page";
 import { INITIAL_SHARE_PRICE, INITIAL_VAULT_TVL, proposals, useDemo } from "../../demo-context";
+import LiveWorkspace from "../../live-workspace";
 
 function money(value: number) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export default function VaultPage() {
-  const { demo } = useDemo();
+  const { demo, mode } = useDemo();
+  if (mode === "live") return <main className="demo-page page-shell"><LiveWorkspace view="vault" notify={() => undefined} /></main>;
   const selectedId = demo.winningProposalId ?? demo.lastSettlement?.winningProposalId ?? 1;
   const allocation = proposals.find((proposal) => proposal.id === selectedId) ?? proposals[1];
   const tethPercent = selectedId === 1 ? 30 : selectedId === 2 ? 15 : 0;

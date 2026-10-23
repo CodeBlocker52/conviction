@@ -9,6 +9,7 @@ import {
   useDemo,
   type TradeSide,
 } from "./demo-context";
+import LiveWorkspace from "./live-workspace";
 
 function money(value: number) {
   const sign = value < 0 ? "-" : "";
@@ -44,7 +45,15 @@ function ActionButton({
 
 export type DemoWorkspaceView = "markets" | "portfolio" | "vault";
 
-export default function DemoWorkspace({
+export default function DemoWorkspace(props: {
+  notify: (message: string) => void;
+  view: DemoWorkspaceView;
+}) {
+  const { mode } = useDemo();
+  return mode === "live" ? <LiveWorkspace {...props} /> : <MockDemoWorkspace {...props} />;
+}
+
+function MockDemoWorkspace({
   notify,
   view,
 }: {

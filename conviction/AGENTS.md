@@ -45,7 +45,7 @@
 
 ## Phase Progress
 - [x] Phase A: Current core contracts deployed and v4 USDC/tETH smoke-tested
-- [ ] Phase A: Frontend wiring (plain viem + useWallet hook)
+- [x] Phase A: Frontend wiring (plain viem + `window.ethereum` wallet, live reads/writes, retained mock mode)
 - [ ] Phase B: WaveHook (Uniswap v4 hook per proposal)
 - [ ] Phase B: Full keeper automation
 
@@ -57,3 +57,4 @@
 - Proposal bond is `1 USDC` (`DEFAULT_BOND` is a constant, with no admin setter); do not change deployment state to lower it.
 - Keep USDC transfers and other write operations on the real Arc RPC, never Forge's local simulation.
 - Frontend uses plain viem and `window.ethereum`; do not add wagmi.
+- Live-mode WavefundVault user deposit/withdraw controls remain disabled until the queued-share contract upgrade is deployed; QuantumLP is separate market liquidity custody.

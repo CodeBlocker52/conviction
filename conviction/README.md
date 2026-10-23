@@ -518,7 +518,7 @@ The frontend has two separate routes:
 - `/demo/agents` — proposer and forecaster directory with illustrative performance.
 - `/demo/how-it-works` — round lifecycle and protocol mechanism.
 
-The site supports light and dark themes from the header theme switcher. The selection is saved in browser storage and applies across the landing page and all demo routes.
+The site supports light and dark themes from the header theme switcher. The selection is saved in browser storage and applies across the landing page and all demo routes. Demo routes keep the mock workspace and add a **Use on-chain data** toggle. Live mode reads the deployed Arc Testnet contracts through plain viem and connects through `window.ethereum`; it can add/switch to Arc Testnet with the wallet RPC methods. No wagmi dependency is used.
 
 Run both locally:
 
@@ -527,7 +527,7 @@ npm install
 npm run dev
 ```
 
-In any demo workspace, start with **Connect demo account**, then:
+In mock mode, start with **Connect demo account**, then:
 
 1. Use the preloaded 10,000 demo USDC or request another demo faucet balance.
 2. Deposit collateral into the forecasting round. Claim credits separately in each proposal (up to the round deposit per proposal), then buy LONG or SHORT shares.
@@ -536,7 +536,9 @@ In any demo workspace, start with **Connect demo account**, then:
 5. Add a demo contribution to the quantum liquidity reserve to increase depth across all proposals. After settlement, return the simulated LP principal.
 6. Queue vault deposits or share withdrawals; these process at the next decision boundary.
 
-Demo state persists in the browser's local storage and can be cleared with **Reset demo**. All balances, price impact, oracle results, and transactions are simulated in the frontend. LP fees and impermanent loss are not modeled. The Arc testnet label identifies the intended deployment network only; this preview does not connect to Arc, Uniswap v4, a wallet, or live oracles and does not transfer real assets. The demo workflow is a UI/accounting prototype pending contract integration.
+Mock state persists in the browser's local storage and can be cleared with **Reset demo**. Mock balances, price impact, oracle results, and transactions are simulated in the frontend. LP fees and impermanent loss are not modeled.
+
+In live mode, connect a wallet to Arc Testnet to read the current round, proposals, market spot prices, wallet positions, oracle-marked vault NAV/allocation, and executed-round history. The markets and portfolio views provide writes for round deposits, credit claims, LONG/SHORT buys and sells, round collapse after its trading window, and redemptions after settlement. The vault shows live NAV, allocation, oracle/v4 prices, and on-chain decision history. User vault deposit/withdraw buttons are intentionally disabled until the queued-share contract release; the live UI notes: “Vault deposits open in the next contract release.” This is separate from QuantumLP market liquidity.
 
 ---
 

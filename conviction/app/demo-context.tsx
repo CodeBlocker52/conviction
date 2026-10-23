@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 
 export type TradeSide = "LONG" | "SHORT";
 export type RoundPhase = "trading" | "evaluation" | "settled";
+export type DataMode = "mock" | "live";
 
 export type Proposal = {
   id: number;
@@ -164,6 +165,8 @@ type ActionResult = { ok: true; message: string } | { ok: false; message: string
 type DemoContextValue = {
   demo: DemoState;
   storageWarning: string;
+  mode: DataMode;
+  setMode: (mode: DataMode) => void;
   connectDemoAccount: () => void;
   addDemoFunds: (amount: number) => ActionResult;
   depositForecast: (amount: number) => ActionResult;
@@ -210,6 +213,7 @@ function calculateTwap(
 
 export function DemoProvider({ children }: { children: ReactNode }) {
   const [demo, setDemo] = useState<DemoState>(createInitialDemoState);
+  const [mode, setMode] = useState<DataMode>("mock");
   const [storageWarning, setStorageWarning] = useState("");
   const [hydrated, setHydrated] = useState(false);
 
@@ -254,6 +258,8 @@ export function DemoProvider({ children }: { children: ReactNode }) {
   const value = useMemo<DemoContextValue>(() => ({
     demo,
     storageWarning,
+    mode,
+    setMode,
     connectDemoAccount: () => {
       setDemo((current) => ({ ...current, demoAccountConnected: true }));
     },
@@ -472,7 +478,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
       });
       setStorageWarning("");
     },
-  }), [demo, storageWarning]);
+  }), [demo, mode, storageWarning]);
 
   return <DemoContext.Provider value={value}>{children}</DemoContext.Provider>;
 }

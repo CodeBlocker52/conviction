@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { INITIAL_VAULT_TVL, proposals, useDemo } from "../demo-context";
+import LiveOverview from "../live-overview";
 
 function money(value: number) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export default function DemoOverviewPage() {
-  const { demo } = useDemo();
+  const { demo, mode } = useDemo();
+  if (mode === "live") return <LiveOverview />;
   const bestProposal = proposals
     .filter((proposal) => proposal.id !== 0)
     .reduce((best, proposal) => (
