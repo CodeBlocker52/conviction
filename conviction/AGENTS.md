@@ -23,7 +23,7 @@
 ## Key Decisions
 - ConstantProductMarket uses Ownable (not AccessControl) — owner = QuantumRound
 - USDC transfers in forge scripts fail due to Arc blocklist precompile simulation issue — use `cast send` for post-deploy funding
-- `initialLiquidityPerProposal` is configurable; the upgrade script allocates 85% of available USDC across all 10 proposal slots and preserves the remainder for fees
+- `initialLiquidityPerProposal` is configurable; the upgrade script allocates 85% of available USDC across all 10 proposal slots, funds the demo vault with the selected amount, and preserves the rest for fees/follow-up
 - No live Arc Testnet ETH/USD feed was confirmed; current source uses keeper-updated `MockPriceOracle` (8 decimals) with a 5-minute maximum age and a 60-second updater
 - Vault trade output has a 500 bps adverse-slippage cap; a breach reverts the nested swap and cancels the round for full deposit refunds
 - `MAX_PROPOSALS_PER_ROUND` is 10 total proposals, including status quo proposal 0

@@ -15,10 +15,15 @@ import { MockPriceOracle } from "../src/MockPriceOracle.sol";
 
 address constant DEPLOY_USDC = 0x3600000000000000000000000000000000000000;
 address constant DEPLOY_POOL_MANAGER = 0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A;
+address constant EXISTING_TEST_ASSET = 0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d;
+address constant EXISTING_PROPOSAL_TOKENS = 0x328C5d7a02C4B29162e2F80520C89Ec9AfE5bD51;
+address constant EXISTING_PROPOSER_REGISTRY = 0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346;
+address constant LEGACY_QUANTUM_LP = 0x9CFF913Fbc88bC6572C1D0B5820Ea9dd40d11d06;
+address constant LEGACY_QUANTUM_ROUND = 0x7c601921721658D7f00f6Ec1d61DABbBA77A7118;
+address constant LEGACY_RESOLVER = 0x509ECfd14076149d402BD843CebE4df3e7889259;
 
 /// @notice Deploys the price-control upgrade while reusing only contracts without old-round references.
-/// @dev Requires DEPLOYER_PK, KEEPER_ADDR, EXISTING_TEST_ASSET, EXISTING_PROPOSAL_TOKENS,
-///      EXISTING_PROPOSER_REGISTRY, LEGACY_QUANTUM_LP, LEGACY_QUANTUM_ROUND, LEGACY_RESOLVER.
+/// @dev Reuses the verified Arc Testnet addresses recorded in contracts/deployments/SOURCES.md.
 contract Deploy is Script {
     error LegacyRoundHasOpenOrHistoricalRounds();
     error LegacyLPHasFunds();
@@ -29,12 +34,12 @@ contract Deploy is Script {
         uint256 deployerPk = vm.envUint("DEPLOYER_PK");
         address deployer = vm.addr(deployerPk);
         address keeper = vm.envAddress("KEEPER_ADDR");
-        address tEth = vm.envAddress("EXISTING_TEST_ASSET");
-        ProposalTokens proposalTokens = ProposalTokens(vm.envAddress("EXISTING_PROPOSAL_TOKENS"));
-        ProposerRegistry registry = ProposerRegistry(vm.envAddress("EXISTING_PROPOSER_REGISTRY"));
-        QuantumLP legacyLp = QuantumLP(vm.envAddress("LEGACY_QUANTUM_LP"));
-        QuantumRound legacyRound = QuantumRound(vm.envAddress("LEGACY_QUANTUM_ROUND"));
-        Resolver legacyResolver = Resolver(vm.envAddress("LEGACY_RESOLVER"));
+        address tEth = EXISTING_TEST_ASSET;
+        ProposalTokens proposalTokens = ProposalTokens(EXISTING_PROPOSAL_TOKENS);
+        ProposerRegistry registry = ProposerRegistry(EXISTING_PROPOSER_REGISTRY);
+        QuantumLP legacyLp = QuantumLP(LEGACY_QUANTUM_LP);
+        QuantumRound legacyRound = QuantumRound(LEGACY_QUANTUM_ROUND);
+        Resolver legacyResolver = Resolver(LEGACY_RESOLVER);
 
         if (legacyRound.roundCount() != 0) revert LegacyRoundHasOpenOrHistoricalRounds();
         if (legacyLp.totalLP() != 0 || IERC20(DEPLOY_USDC).balanceOf(address(legacyLp)) != 0) {
