@@ -91,7 +91,7 @@ The new QuantumRound was funded with `25.118770 USDC`; its initial per-proposal 
 
 ## Oracle source and current limitations
 
-The deployed `MockPriceOracle` is keeper-fed using Coinbase's public ETH/USD quote, stored with 8 decimal places. Updates are submitted by `contracts/script/update-oracle.mjs`; refresh at least every 60 seconds and immediately before NAV marks or resolution. The contract rejects stale values after five minutes.
+The deployed `MockPriceOracle` is keeper-fed using Coinbase's public ETH/USD quote, stored with 8 decimal places. The contract rejects stale values after five minutes. Run a one-shot update with `npm run oracle:update`; start or stop the managed watcher with `npm run oracle:start` / `npm run oracle:stop`. The watcher checks the latest round every 60 seconds and submits an update only while that round exists and is neither settled nor canceled, avoiding idle keeper transactions.
 
 No fresh, verifiable decentralized ETH/USD feed on Arc Testnet was confirmed during deployment checks. Pyth's verified Arc deployment was mainnet-only; Stork had an Arc Testnet contract but no verified fresh ETH/USD feed ID/value; Chainlink and RedStone listings did not identify a verified Arc Testnet feed. The keeper-fed oracle is therefore a centralized testnet fallback, not a production oracle.
 

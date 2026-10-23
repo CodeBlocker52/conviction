@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "oracle:update": "node --env-file=.env contracts/script/update-oracle.mjs",
+    "oracle:start": "node --env-file=.env contracts/script/update-oracle.mjs start",
+    "oracle:stop": "node --env-file=.env contracts/script/update-oracle.mjs stop"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.1.0",
