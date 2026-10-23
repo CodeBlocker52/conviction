@@ -145,8 +145,9 @@ const allowance = await publicClient.readContract({
   functionName: "allowance",
   args: [account.address, roundAddress],
 });
+let approvalResetHash;
 if (allowance > 0n) {
-  const resetHash = await walletClient.writeContract({
+  approvalResetHash = await walletClient.writeContract({
     address: usdcAddress,
     abi: usdcAbi,
     functionName: "approve",
@@ -154,7 +155,7 @@ if (allowance > 0n) {
     gas: 100_000n,
     gasPrice,
   });
-  await sendAndConfirm(resetHash);
+  await sendAndConfirm(approvalResetHash);
 }
 
 const approvalHash = await walletClient.writeContract({
@@ -177,6 +178,7 @@ const seedHash = await walletClient.writeContract({
 });
 await sendAndConfirm(seedHash);
 
+let vaultApprovalResetHash;
 let vaultApprovalHash;
 let vaultFundingHash;
 if (vaultFundingAmount > 0n) {
@@ -187,7 +189,7 @@ if (vaultFundingAmount > 0n) {
     args: [account.address, vaultAddress],
   });
   if (vaultAllowance > 0n) {
-    const resetHash = await walletClient.writeContract({
+    vaultApprovalResetHash = await walletClient.writeContract({
       address: usdcAddress,
       abi: usdcAbi,
       functionName: "approve",
@@ -195,7 +197,7 @@ if (vaultFundingAmount > 0n) {
       gas: 100_000n,
       gasPrice,
     });
-    await sendAndConfirm(resetHash);
+    await sendAndConfirm(vaultApprovalResetHash);
   }
 
   vaultApprovalHash = await walletClient.writeContract({
@@ -221,10 +223,12 @@ if (vaultFundingAmount > 0n) {
 
 console.log(`Liquidity per proposal: ${liquidityPerProposal} USDC base units`);
 console.log(`Protocol seed funded: ${seedAmount} USDC base units`);
+if (approvalResetHash) console.log(`Seed approval reset: ${approvalResetHash}`);
 console.log(`Approve: ${approvalHash}`);
 console.log(`Seed: ${seedHash}`);
 if (vaultFundingAmount > 0n) {
   console.log(`Vault funded: ${vaultFundingAmount} USDC base units`);
+  if (vaultApprovalResetHash) console.log(`Vault approval reset: ${vaultApprovalResetHash}`);
   console.log(`Vault approve: ${vaultApprovalHash}`);
   console.log(`Vault funding: ${vaultFundingHash}`);
 }
