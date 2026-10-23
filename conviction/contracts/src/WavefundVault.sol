@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -40,7 +41,7 @@ interface IQuantumRoundVault {
 /// @title WavefundVault
 /// @notice Phase A vault that rebalances USDC/tETH exposure and reports realised returns to Resolver.
 /// @dev Uses oracle-marked NAV and Uniswap v4 PoolManager unlock-callback swaps.
-contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
+contract WavefundVault is AccessControl, ERC20, ReentrancyGuard, IUnlockCallback {
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
     using BalanceDeltaLibrary for BalanceDelta;
@@ -63,6 +64,9 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
 
     /// @notice 1e18 fixed-point scalar.
     uint256 private constant ONE_E18 = 1e18;
+
+    /// @notice One USDC in base units; the initial share price is 1 USDC per share.
+    uint256 private constant INITIAL_SHARE_PRICE_USDC = 1_000_000;
 
     /// @notice Maximum age of an oracle update accepted at execution or resolution.
     uint64 public constant MAX_ORACLE_AGE = 5 minutes;
@@ -133,6 +137,15 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @notice Thrown when a round is canceled and cannot be reported or traded.
     error RoundCancelled();
 
+    /// @notice Thrown when a deposit would mint no shares or shares cannot be priced.
+    error InvalidShareAmount();
+
+    /// @notice Thrown when an asset or amount is not eligible for admin rescue.
+    error NotUnallocatedFunds();
+
+    /// @notice Thrown when the vault cannot satisfy a queued withdrawal.
+    error InsufficientWithdrawalLiquidity();
+
     /// @notice Thrown when the private atomic rebalance helper is called by anyone except this contract.
     error OnlySelf();
 
@@ -143,6 +156,30 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @notice Emitted when admin funds the vault.
     /// @param amount USDC amount in 6-decimal base units.
     event VaultFunded(uint256 amount);
+
+    /// @notice Emitted when a user queues a USDC deposit for the next trade boundary.
+    event DepositRequested(address indexed account, uint256 amountUsdc);
+
+    /// @notice Emitted when a queued USDC deposit is priced and issued as vault shares.
+    event DepositProcessed(address indexed account, uint256 amountUsdc, uint256 shares);
+
+    /// @notice Emitted when a user queues vault shares for withdrawal at the next trade boundary.
+    event WithdrawalRequested(address indexed account, uint256 shares);
+
+    /// @notice Emitted when queued shares are burned and their oracle-marked value is paid.
+    event WithdrawalProcessed(address indexed account, uint256 shares, uint256 amountUsdc);
+
+    /// @notice Emitted when a queued deposit is canceled and its USDC is returned.
+    event DepositRequestCanceled(address indexed account, uint256 amountUsdc);
+
+    /// @notice Emitted when a queued withdrawal is canceled and its shares are returned.
+    event WithdrawalRequestCanceled(address indexed account, uint256 shares);
+
+    /// @notice Emitted when admin capital is recognized as vault shares.
+    event AdminBalanceMigrated(address indexed account, uint256 amountUsdc, uint256 shares);
+
+    /// @notice Emitted when admin rescues tokens not accounted for as user assets.
+    event UnallocatedFundsRescued(address indexed token, address indexed recipient, uint256 amount);
 
     /// @notice Emitted once a round trade is executed.
     /// @param roundId Round identifier.
@@ -204,6 +241,21 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @notice Current vault tETH holdings tracked in 18-decimal units.
     uint256 public totalVaultTEth;
 
+    /// @notice USDC deposits held for users until the next decision boundary.
+    uint256 public totalQueuedDepositUsdc;
+
+    /// @notice Shares held in escrow for withdrawals at the next decision boundary.
+    uint256 public totalQueuedWithdrawalShares;
+
+    /// @notice Per-user USDC deposits awaiting the next decision boundary.
+    mapping(address account => uint256 amountUsdc) public queuedDepositUsdc;
+
+    /// @notice Per-user shares held in escrow for withdrawal.
+    mapping(address account => uint256 shares) public queuedWithdrawalShares;
+
+    mapping(address account => bool queued) private _isQueuedAccount;
+    address[] private _queuedAccounts;
+
     /// @notice Per-round execution/reporting snapshots.
     mapping(uint256 roundId => RoundState) public roundState;
 
@@ -226,7 +278,7 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
         address priceOracle_,
         uint16 maxSlippageBps_,
         address initialAdmin
-    ) {
+    ) ERC20("Wavefund Vault Share", "WAVE") {
         if (
             poolManager_ == address(0) || tEth_ == address(0) || resolver_ == address(0) || quantumRound_ == address(0)
                 || priceOracle_ == address(0) || initialAdmin == address(0)
@@ -270,15 +322,119 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
         emit Deposited(amount);
     }
 
-    /// @notice Admin-funds the vault with USDC for demo/bootstrap liquidity.
+    /// @notice Admin-funds the vault and issues shares at the current oracle-marked NAV.
     /// @param amount USDC amount in 6-decimal base units.
     function fundVault(uint256 amount) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
         if (amount == 0) revert ZeroAmount();
 
+        uint256 shares = _sharesForAdminFunding(amount);
         IERC20(USDC).safeTransferFrom(msg.sender, address(this), amount);
         totalVaultUsdc += amount;
+        _mint(msg.sender, shares);
 
         emit VaultFunded(amount);
+    }
+
+    /// @notice Imports admin-owned USDC into this vault and records it as share-backed assets.
+    /// @dev The legacy deployed vault has no withdrawal path; this cannot pull funds from it.
+    ///      Admin must first hold the migratable USDC and approve this contract.
+    /// @param amount USDC amount in 6-decimal base units.
+    function migrateAdminFundedBalance(uint256 amount) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (amount == 0) revert ZeroAmount();
+
+        uint256 shares = _sharesForAdminFunding(amount);
+        IERC20(USDC).safeTransferFrom(msg.sender, address(this), amount);
+        totalVaultUsdc += amount;
+        _mint(msg.sender, shares);
+
+        emit AdminBalanceMigrated(msg.sender, amount, shares);
+    }
+
+    /// @notice Queues a USDC deposit to be priced and issued as shares at the next decision boundary.
+    /// @param amount USDC amount in 6-decimal base units.
+    function requestDeposit(uint256 amount) external nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+
+        IERC20(USDC).safeTransferFrom(msg.sender, address(this), amount);
+        queuedDepositUsdc[msg.sender] += amount;
+        totalQueuedDepositUsdc += amount;
+        _queueAccount(msg.sender);
+
+        emit DepositRequested(msg.sender, amount);
+    }
+
+    /// @notice Queues shares for withdrawal at the next decision boundary.
+    /// @param shares Amount of 18-decimal WAVE shares to withdraw.
+    function requestWithdraw(uint256 shares) external nonReentrant {
+        if (shares == 0) revert ZeroAmount();
+
+        _transfer(msg.sender, address(this), shares);
+        queuedWithdrawalShares[msg.sender] += shares;
+        totalQueuedWithdrawalShares += shares;
+        _queueAccount(msg.sender);
+
+        emit WithdrawalRequested(msg.sender, shares);
+    }
+
+    /// @notice Cancels the caller's pending deposit and returns its USDC.
+    function cancelDepositRequest() external nonReentrant {
+        uint256 amount = queuedDepositUsdc[msg.sender];
+        if (amount == 0) revert ZeroAmount();
+
+        delete queuedDepositUsdc[msg.sender];
+        totalQueuedDepositUsdc -= amount;
+        _removeQueueAccountIfEmpty(msg.sender);
+        IERC20(USDC).safeTransfer(msg.sender, amount);
+
+        emit DepositRequestCanceled(msg.sender, amount);
+    }
+
+    /// @notice Cancels the caller's pending withdrawal and returns escrowed shares.
+    function cancelWithdrawRequest() external nonReentrant {
+        uint256 shares = queuedWithdrawalShares[msg.sender];
+        if (shares == 0) revert ZeroAmount();
+
+        delete queuedWithdrawalShares[msg.sender];
+        totalQueuedWithdrawalShares -= shares;
+        _removeQueueAccountIfEmpty(msg.sender);
+        _transfer(address(this), msg.sender, shares);
+
+        emit WithdrawalRequestCanceled(msg.sender, shares);
+    }
+
+    /// @notice Rescues only token balances not accounted for as assets owed to vault shareholders.
+    /// @param token USDC or the configured tETH token.
+    /// @param amount Token amount to rescue.
+    /// @param recipient Destination for the rescued tokens.
+    function rescueUnallocatedFunds(address token, uint256 amount, address recipient)
+        external
+        nonReentrant
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (amount == 0) revert ZeroAmount();
+        if (recipient == address(0)) revert ZeroAddress();
+
+        uint256 protectedAmount;
+        if (token == USDC) {
+            protectedAmount = totalQueuedDepositUsdc;
+            if (totalSupply() > 0) protectedAmount += totalVaultUsdc;
+            else if (amount <= totalVaultUsdc) totalVaultUsdc -= amount;
+            else totalVaultUsdc = 0;
+        } else if (token == address(tEth)) {
+            if (totalSupply() > 0) protectedAmount = totalVaultTEth;
+            else if (amount <= totalVaultTEth) totalVaultTEth -= amount;
+            else totalVaultTEth = 0;
+        } else {
+            revert NotUnallocatedFunds();
+        }
+
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        if (balance < protectedAmount || amount > balance - protectedAmount) {
+            revert NotUnallocatedFunds();
+        }
+
+        IERC20(token).safeTransfer(recipient, amount);
+        emit UnallocatedFundsRescued(token, recipient, amount);
     }
 
     /// @notice Executes one round rebalance toward winner target tETH allocation.
@@ -291,6 +447,8 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
         if (quantumRound.roundEvaluationEnd(roundId) == 0) revert PriceUnavailable();
 
         (uint256 priceUsdcPerTEth, uint64 publishedAt) = _readFreshOraclePrice();
+        _processQueuedRequests(priceUsdcPerTEth);
+
         uint256 currentTEthValueUsdc = _tEthValueInUsdc(totalVaultTEth, priceUsdcPerTEth);
         uint256 totalValueUsdc = totalVaultUsdc + currentTEthValueUsdc;
         if (totalValueUsdc == 0) revert PriceUnavailable();
@@ -414,6 +572,23 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
         return VaultPriceMath.fromOracle(answer, answerDecimals);
     }
 
+    /// @notice Returns the current oracle-marked vault NAV in 6-decimal USDC units.
+    function totalAssetsUsdc() external view returns (uint256) {
+        (uint256 priceUsdcPerTEth,) = _readFreshOraclePrice();
+        return _vaultValueUsdc(priceUsdcPerTEth);
+    }
+
+    /// @notice Returns USDC base units per WAVE share with 18 additional decimal places.
+    /// @dev An empty vault reports the initial price of 1 USDC per share.
+    function navPerShare() external view returns (uint256) {
+        (uint256 priceUsdcPerTEth,) = _readFreshOraclePrice();
+        uint256 supply = totalSupply();
+        uint256 navUsdc = _vaultValueUsdc(priceUsdcPerTEth);
+        if (supply == 0) return navUsdc == 0 ? INITIAL_SHARE_PRICE_USDC * ONE_E18 : 0;
+
+        return FullMath.mulDiv(navUsdc, ONE_E18 * ONE_E18, supply);
+    }
+
     function _readFreshOraclePrice() internal view returns (uint256 priceUsdcPerTEth, uint64 publishedAt) {
         (int256 answer, uint8 answerDecimals, uint64 updatedAt) = priceOracle.latestPrice();
         if (updatedAt == 0 || updatedAt > block.timestamp || block.timestamp - updatedAt > MAX_ORACLE_AGE) {
@@ -528,6 +703,125 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     function _vaultValueUsdc(uint256 priceUsdcPerTEth) internal view returns (uint256 valueUsdc) {
         uint256 tEthValueUsdc = _tEthValueInUsdc(totalVaultTEth, priceUsdcPerTEth);
         return totalVaultUsdc + tEthValueUsdc;
+    }
+
+    function _sharesForAdminFunding(uint256 amount) internal view returns (uint256 shares) {
+        uint256 supply = totalSupply();
+        if (supply == 0) {
+            if (totalVaultUsdc != 0 || totalVaultTEth != 0) revert InvalidShareAmount();
+            return FullMath.mulDiv(amount, ONE_E18, INITIAL_SHARE_PRICE_USDC);
+        }
+
+        (uint256 priceUsdcPerTEth,) = _readFreshOraclePrice();
+        uint256 navUsdc = _vaultValueUsdc(priceUsdcPerTEth);
+        if (navUsdc == 0) revert InvalidShareAmount();
+
+        shares = FullMath.mulDiv(amount, supply, navUsdc);
+        if (shares == 0) revert InvalidShareAmount();
+    }
+
+    function _processQueuedRequests(uint256 priceUsdcPerTEth) internal {
+        uint256 accountCount = _queuedAccounts.length;
+        if (accountCount == 0) return;
+
+        address[] memory accounts = _queuedAccounts;
+        delete _queuedAccounts;
+
+        uint256 navUsdc = _vaultValueUsdc(priceUsdcPerTEth);
+        uint256 supply = totalSupply();
+
+        for (uint256 i; i < accountCount; ++i) {
+            address account = accounts[i];
+            uint256 amountUsdc = queuedDepositUsdc[account];
+            if (amountUsdc == 0) continue;
+
+            uint256 shares = _sharesForDeposit(amountUsdc, navUsdc, supply);
+            delete queuedDepositUsdc[account];
+            totalQueuedDepositUsdc -= amountUsdc;
+            totalVaultUsdc += amountUsdc;
+            _mint(account, shares);
+
+            emit DepositProcessed(account, amountUsdc, shares);
+        }
+
+        for (uint256 i; i < accountCount; ++i) {
+            address account = accounts[i];
+            uint256 shares = queuedWithdrawalShares[account];
+            if (shares == 0) continue;
+
+            uint256 amountUsdc = supply == 0 ? 0 : FullMath.mulDiv(shares, navUsdc, supply);
+            delete queuedWithdrawalShares[account];
+            totalQueuedWithdrawalShares -= shares;
+            _burn(address(this), shares);
+
+            if (amountUsdc > 0) {
+                _ensureWithdrawalLiquidity(amountUsdc, priceUsdcPerTEth);
+                totalVaultUsdc -= amountUsdc;
+                IERC20(USDC).safeTransfer(account, amountUsdc);
+            }
+
+            emit WithdrawalProcessed(account, shares, amountUsdc);
+        }
+
+        for (uint256 i; i < accountCount; ++i) {
+            _isQueuedAccount[accounts[i]] = false;
+        }
+    }
+
+    function _sharesForDeposit(uint256 amountUsdc, uint256 navUsdc, uint256 supply)
+        internal
+        pure
+        returns (uint256 shares)
+    {
+        if (supply == 0) {
+            if (navUsdc != 0) revert InvalidShareAmount();
+            shares = FullMath.mulDiv(amountUsdc, ONE_E18, INITIAL_SHARE_PRICE_USDC);
+        } else {
+            if (navUsdc == 0) revert InvalidShareAmount();
+            shares = FullMath.mulDiv(amountUsdc, supply, navUsdc);
+        }
+
+        if (shares == 0) revert InvalidShareAmount();
+    }
+
+    function _ensureWithdrawalLiquidity(uint256 amountUsdc, uint256 priceUsdcPerTEth) internal {
+        if (totalVaultUsdc >= amountUsdc) return;
+
+        uint256 shortfallUsdc = amountUsdc - totalVaultUsdc;
+        uint256 requestedTEthIn = FullMath.mulDiv(shortfallUsdc, ONE_E18, priceUsdcPerTEth);
+        if (FullMath.mulDiv(requestedTEthIn, priceUsdcPerTEth, ONE_E18) < shortfallUsdc) {
+            ++requestedTEthIn;
+        }
+        if (requestedTEthIn > totalVaultTEth) revert InsufficientWithdrawalLiquidity();
+
+        (uint256 tEthInUsed, uint256 usdcOut) = _swapTEthForUsdc(requestedTEthIn);
+        uint256 expectedUsdcOut = FullMath.mulDiv(tEthInUsed, priceUsdcPerTEth, ONE_E18);
+        if (tEthInUsed != requestedTEthIn || !VaultPriceMath.withinSlippage(expectedUsdcOut, usdcOut, maxSlippageBps)) {
+            revert SlippageCapExceeded(expectedUsdcOut, usdcOut);
+        }
+        if (totalVaultUsdc < amountUsdc) revert InsufficientWithdrawalLiquidity();
+    }
+
+    function _queueAccount(address account) internal {
+        if (_isQueuedAccount[account]) return;
+
+        _isQueuedAccount[account] = true;
+        _queuedAccounts.push(account);
+    }
+
+    function _removeQueueAccountIfEmpty(address account) internal {
+        if (queuedDepositUsdc[account] != 0 || queuedWithdrawalShares[account] != 0) return;
+        if (!_isQueuedAccount[account]) return;
+
+        _isQueuedAccount[account] = false;
+        uint256 accountCount = _queuedAccounts.length;
+        for (uint256 i; i < accountCount; ++i) {
+            if (_queuedAccounts[i] != account) continue;
+
+            _queuedAccounts[i] = _queuedAccounts[accountCount - 1];
+            _queuedAccounts.pop();
+            return;
+        }
     }
 
     /// @notice Converts tETH amount to USDC value using provided USDC-per-tETH price.

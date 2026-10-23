@@ -84,6 +84,11 @@ Note: longBal + shortBal ≤ creditsClaimed (credits not converted to either = l
 ## Vault (Phase A)
 WavefundVault:
 - Holds USDC and tETH
+- Issues transferable 18-decimal WAVE shares; admin bootstrap funding also receives shares at the current oracle-marked NAV (initially 1 USDC per share)
+- Users queue USDC deposits or escrow WAVE shares for withdrawal; both are processed at the next `executeTrade` decision boundary against the same pre-flow oracle NAV and share supply
+- Withdrawal proceeds are paid in USDC, liquidating tETH through the configured v4 pool when needed and applying the vault slippage cap; users may cancel an unprocessed request
+- Admin rescue is limited to token balances above pending deposits and shareholder-backed assets. QuantumRound capital deposits do not issue user shares; they accrue to existing holders, or remain admin-rescuable when the vault has no shares
+- `migrateAdminFundedBalance` imports admin-held USDC into a replacement vault and issues shares; it cannot pull tokens from a legacy vault that has no withdrawal/approval path
 - Keeper marks pre-trade NAV from a fresh ETH/USD oracle update, then calls executeTrade(roundId, winnerTEthBps)
 - Vault swaps on Uniswap v4 USDC/tETH pool (no hook, fee=3000, tickSpacing=60) toward the target allocation
 - Swap output must be within 500 bps of the oracle-implied expected output; otherwise the swap rolls back and the round is canceled

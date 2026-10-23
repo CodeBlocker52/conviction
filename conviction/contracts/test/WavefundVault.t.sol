@@ -92,6 +92,175 @@ contract WavefundVaultTest is Test {
         vault.executeTrade(1, 0);
     }
 
+    function test_FundingMintsInitialOneDollarShares() public view {
+        assertEq(vault.balanceOf(address(this)), 10e18);
+        assertEq(vault.totalSupply(), 10e18);
+        assertEq(vault.navPerShare(), 1_000_000e18);
+        assertEq(vault.totalAssetsUsdc(), 10_000_000);
+    }
+
+    function test_QueuedDepositMintsSharesOnlyAtDecisionBoundary() public {
+        address depositor = address(0xBEEF);
+        usdc.mint(depositor, 2_000_000);
+
+        vm.startPrank(depositor);
+        usdc.approve(address(vault), 2_000_000);
+        vault.requestDeposit(2_000_000);
+        vm.stopPrank();
+
+        assertEq(vault.balanceOf(depositor), 0);
+        assertEq(vault.queuedDepositUsdc(depositor), 2_000_000);
+        assertEq(vault.totalQueuedDepositUsdc(), 2_000_000);
+        assertEq(vault.totalVaultUsdc(), 10_000_000);
+
+        vault.executeTrade(1, 0);
+
+        assertEq(vault.balanceOf(depositor), 2e18);
+        assertEq(vault.queuedDepositUsdc(depositor), 0);
+        assertEq(vault.totalQueuedDepositUsdc(), 0);
+        assertEq(vault.totalVaultUsdc(), 12_000_000);
+        assertEq(vault.totalSupply(), 12e18);
+    }
+
+    function test_QueuedWithdrawalBurnsSharesAndPaysAtDecisionBoundary() public {
+        address depositor = address(0xBEEF);
+        usdc.mint(depositor, 2_000_000);
+
+        vm.startPrank(depositor);
+        usdc.approve(address(vault), 2_000_000);
+        vault.requestDeposit(2_000_000);
+        vm.stopPrank();
+        vault.executeTrade(1, 0);
+
+        vm.prank(depositor);
+        vault.requestWithdraw(1e18);
+
+        assertEq(vault.balanceOf(depositor), 1e18);
+        assertEq(vault.balanceOf(address(vault)), 1e18);
+        assertEq(vault.queuedWithdrawalShares(depositor), 1e18);
+
+        vault.executeTrade(2, 0);
+
+        assertEq(vault.balanceOf(depositor), 1e18);
+        assertEq(vault.balanceOf(address(vault)), 0);
+        assertEq(vault.queuedWithdrawalShares(depositor), 0);
+        assertEq(usdc.balanceOf(depositor), 1_000_000);
+        assertEq(vault.totalVaultUsdc(), 11_000_000);
+        assertEq(vault.totalSupply(), 11e18);
+    }
+
+    function test_QueuedWithdrawalCanBeCanceledAndRestoresEscrowedShares() public {
+        vault.requestWithdraw(1e18);
+
+        assertEq(vault.balanceOf(address(this)), 9e18);
+        assertEq(vault.balanceOf(address(vault)), 1e18);
+
+        vault.cancelWithdrawRequest();
+
+        assertEq(vault.balanceOf(address(this)), 10e18);
+        assertEq(vault.balanceOf(address(vault)), 0);
+        assertEq(vault.queuedWithdrawalShares(address(this)), 0);
+        assertEq(vault.totalQueuedWithdrawalShares(), 0);
+    }
+
+    function test_QueuedDepositCanBeCanceledAndCannotBeRescued() public {
+        address depositor = address(0xBEEF);
+        usdc.mint(depositor, 1_000_000);
+
+        vm.startPrank(depositor);
+        usdc.approve(address(vault), 1_000_000);
+        vault.requestDeposit(1_000_000);
+        vm.stopPrank();
+
+        vm.expectRevert(WavefundVault.NotUnallocatedFunds.selector);
+        vault.rescueUnallocatedFunds(VAULT_TEST_USDC, 1, address(this));
+
+        vm.prank(depositor);
+        vault.cancelDepositRequest();
+
+        assertEq(usdc.balanceOf(depositor), 1_000_000);
+        assertEq(vault.totalQueuedDepositUsdc(), 0);
+        assertEq(vault.queuedDepositUsdc(depositor), 0);
+    }
+
+    function test_AdminCanRescueOnlyUnaccountedTokenBalance() public {
+        vm.expectRevert(WavefundVault.NotUnallocatedFunds.selector);
+        vault.rescueUnallocatedFunds(VAULT_TEST_USDC, 1, address(this));
+
+        usdc.mint(address(vault), 1_000_000);
+        vault.rescueUnallocatedFunds(VAULT_TEST_USDC, 1_000_000, address(this));
+
+        assertEq(vault.totalVaultUsdc(), 10_000_000);
+        assertEq(usdc.balanceOf(address(vault)), 10_000_000);
+        assertEq(vault.balanceOf(address(this)), 10e18);
+    }
+
+    function test_AdminCanImportAvailableLegacyFundingAsShares() public {
+        usdc.mint(address(this), 1_000_000);
+        usdc.approve(address(vault), 1_000_000);
+
+        vault.migrateAdminFundedBalance(1_000_000);
+
+        assertEq(vault.balanceOf(address(this)), 11e18);
+        assertEq(vault.totalSupply(), 11e18);
+        assertEq(vault.totalVaultUsdc(), 11_000_000);
+    }
+
+    function test_UnownedProtocolDepositDoesNotReportAnInvalidSharePrice() public {
+        WavefundVault emptyVault = new WavefundVault(
+            address(0x1234), address(0x5678), address(resolver), address(round), address(oracle), 500, address(this)
+        );
+        emptyVault.grantRole(emptyVault.QUANTUM_ROUND_ROLE(), address(this));
+        usdc.mint(address(this), 1_000_000);
+        usdc.approve(address(emptyVault), 1_000_000);
+
+        emptyVault.depositFromRound(1_000_000);
+
+        assertEq(emptyVault.totalSupply(), 0);
+        assertEq(emptyVault.navPerShare(), 0);
+    }
+
+    function test_QueuedSharesUseOracleNavFromEachDecisionBoundaryAndRemainSolvent() public {
+        address firstDepositor = address(0xBEEF);
+        usdc.mint(firstDepositor, 2_000_000);
+        vm.startPrank(firstDepositor);
+        usdc.approve(address(vault), 2_000_000);
+        vault.requestDeposit(2_000_000);
+        vm.stopPrank();
+        vault.executeTrade(1, 0);
+
+        _mockUnlock(12_000_000, 4e15);
+        vault.executeTrade(2, 10_000);
+
+        oracle.updatePrice(330_000_000_000);
+        address secondDepositor = address(0xCAFE);
+        usdc.mint(secondDepositor, 1_000_000);
+        vm.startPrank(secondDepositor);
+        usdc.approve(address(vault), 1_000_000);
+        vault.requestDeposit(1_000_000);
+        vm.stopPrank();
+
+        _mockUnlock(1_000_000, 303_030_303_030_303);
+        vault.executeTrade(3, 10_000);
+
+        assertEq(vault.balanceOf(secondDepositor), 909_090_909_090_909_090);
+        assertGt(vault.navPerShare(), 1_099_999e18);
+        assertLt(vault.navPerShare(), 1_100_000e18);
+        _assertShareSolvency();
+
+        vm.prank(secondDepositor);
+        vault.requestWithdraw(0.5e18);
+
+        _mockUnlock(166_666_363_636_364, 549_999);
+        _mockUnlock(4_136_363_636_363_636, 13_649_999);
+        vault.executeTrade(4, 0);
+
+        assertEq(usdc.balanceOf(secondDepositor), 549_999);
+        assertEq(vault.queuedWithdrawalShares(secondDepositor), 0);
+        assertEq(vault.totalAssetsUsdc(), 13_649_999);
+        _assertShareSolvency();
+    }
+
     function test_SlippageBreachRollsBackSwapAndCancelsRound() public {
         bytes memory unlockPayload = abi.encode(uint256(10_000_000));
         bytes memory unlockResponse = abi.encode(uint256(10_000_000), uint256(3_000_000_000_000_000));
@@ -126,5 +295,18 @@ contract WavefundVaultTest is Test {
 
         assertEq(resolver.lastRound(), 1);
         assertEq(resolver.lastReturn(), 1e18);
+    }
+
+    function _mockUnlock(uint256 amountIn, uint256 amountOut) internal {
+        bytes memory payload = abi.encode(amountIn);
+        bytes memory response = abi.encode(amountIn, amountOut);
+        vm.mockCall(address(0x1234), abi.encodeWithSignature("unlock(bytes)", payload), abi.encode(response));
+    }
+
+    function _assertShareSolvency() internal view {
+        uint256 representedAssets = vault.navPerShare() * vault.totalSupply() / 1e36;
+        uint256 totalAssets = vault.totalAssetsUsdc();
+        assertLe(representedAssets, totalAssets);
+        assertLe(totalAssets - representedAssets, 1);
     }
 }

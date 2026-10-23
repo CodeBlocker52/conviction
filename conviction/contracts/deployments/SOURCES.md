@@ -29,6 +29,8 @@ Keeper: `0xE7DD9a5fafa5739B466C61914311e39717f7192c`
 
 The current addresses have code on Arc Testnet. The upgrade reused tETH, ProposalTokens, and ProposerRegistry after checking roles and state; the previous round had no rounds opened. Old QuantumRound protocol seed had no rescue path and remains locked.
 
+The deployed WavefundVault address above is still the pre-share contract. Its 2 USDC balance cannot be withdrawn or migrated: the deployed bytecode has no admin withdrawal/rescue, token-approval, or arbitrary-call path, and it is not an upgradeable proxy. The updated source adds queued WAVE shares and an admin funding-import method, but that method can only import USDC the admin controls and approves; it cannot access the legacy contract's balance. No replacement vault has been deployed.
+
 ### Superseded deployment
 
 These addresses are historical and are not the current frontend configuration:
