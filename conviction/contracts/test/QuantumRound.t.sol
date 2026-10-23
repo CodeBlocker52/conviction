@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test, Vm} from "forge-std/Test.sol";
-import {StdInvariant} from "forge-std/StdInvariant.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Test, Vm } from "forge-std/Test.sol";
+import { StdInvariant } from "forge-std/StdInvariant.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {QuantumRound} from "../src/QuantumRound.sol";
-import {ConstantProductMarket} from "../src/ConstantProductMarket.sol";
-import {ProposalTokens, ProposalTokenImpl} from "../src/ProposalTokens.sol";
-import {ProposerRegistry} from "../src/ProposerRegistry.sol";
-import {Resolver} from "../src/Resolver.sol";
-import {MockUSDC} from "../test-helpers/MockUSDC.sol";
+import { QuantumRound } from "../src/QuantumRound.sol";
+import { ConstantProductMarket } from "../src/ConstantProductMarket.sol";
+import { ProposalTokens, ProposalTokenImpl } from "../src/ProposalTokens.sol";
+import { ProposerRegistry } from "../src/ProposerRegistry.sol";
+import { Resolver } from "../src/Resolver.sol";
+import { MockUSDC } from "../test-helpers/MockUSDC.sol";
 
 /// @dev Canonical Arc testnet USDC address (hardcoded constant in QuantumRound).
 address constant USDC_ADDR = 0x3600000000000000000000000000000000000000;
@@ -28,44 +28,67 @@ contract QuantumRoundTest is Test {
     // ─────────────────────────────────────────────────────────
     // System
     // ─────────────────────────────────────────────────────────
-    MockUSDC          internal usdc;
-    ProposalTokens    internal proposalTokens;
+    MockUSDC internal usdc;
+    ProposalTokens internal proposalTokens;
     ConstantProductMarket internal market;
-    ProposerRegistry  internal registry;
-    Resolver          internal resolver;
-    QuantumRound      internal qr;
+    ProposerRegistry internal registry;
+    Resolver internal resolver;
+    QuantumRound internal qr;
 
     // ─────────────────────────────────────────────────────────
     // Actors
     // ─────────────────────────────────────────────────────────
-    address internal admin     = makeAddr("admin");
-    address internal alice     = makeAddr("alice");    // depositor / trader
-    address internal proposer  = makeAddr("proposer"); // registered proposer
-    address internal treasury  = makeAddr("treasury");
+    address internal admin = makeAddr("admin");
+    address internal alice = makeAddr("alice"); // depositor / trader
+    address internal proposer = makeAddr("proposer"); // registered proposer
+    address internal treasury = makeAddr("treasury");
 
     // ─────────────────────────────────────────────────────────
     // Round parameters
     // ─────────────────────────────────────────────────────────
-    uint64  internal TRADING_END;
-    uint64  internal HORIZON      = 7 days;
-    uint96  internal R_MIN        = 0.5e18;
-    uint96  internal R_MAX        = 2e18;
-    uint32  internal TWAP_WINDOW  = 1 hours;
+    uint64 internal TRADING_END;
+    uint64 internal HORIZON = 7 days;
+    uint96 internal R_MIN = 0.5e18;
+    uint96 internal R_MAX = 2e18;
+    uint32 internal TWAP_WINDOW = 1 hours;
 
     // ─────────────────────────────────────────────────────────
     // Events (copied for expectEmit matching)
     // ─────────────────────────────────────────────────────────
-    event RoundOpened(uint256 indexed roundId, uint64 tradingEnd, uint64 evaluationEnd, uint96 rMin, uint96 rMax, uint32 twapWindow);
-    event ProposalCreated(uint256 indexed roundId, uint256 indexed proposalId, address indexed proposer_, uint16 tEthBps, string rationaleURI);
+    event RoundOpened(
+        uint256 indexed roundId, uint64 tradingEnd, uint64 evaluationEnd, uint96 rMin, uint96 rMax, uint32 twapWindow
+    );
+    event ProposalCreated(
+        uint256 indexed roundId,
+        uint256 indexed proposalId,
+        address indexed proposer_,
+        uint16 tEthBps,
+        string rationaleURI
+    );
     event Deposited(uint256 indexed roundId, address indexed user, uint256 amount);
     event CreditsClaimed(uint256 indexed roundId, uint256 indexed proposalId, address indexed user, uint256 amount);
-    event Trade(uint256 indexed roundId, uint256 indexed proposalId, address indexed user, string side, uint256 amountIn, uint256 amountOut);
+    event Trade(
+        uint256 indexed roundId,
+        uint256 indexed proposalId,
+        address indexed user,
+        string side,
+        uint256 amountIn,
+        uint256 amountOut
+    );
     event Collapsed(uint256 indexed roundId, uint256 winnerProposalId, uint256[] twaps);
     event Settled(uint256 indexed roundId, int256 realisedReturn);
     event Redeemed(uint256 indexed roundId, address indexed user, uint256 payout);
     event BondRefunded(uint256 indexed roundId, uint256 indexed proposalId, address indexed proposer_, uint256 amount);
-    event BondSlashed(uint256 indexed roundId, uint256 indexed proposalId, address indexed proposer_, address treas, uint256 amount);
-    event ProposerFeeEarned(uint256 indexed roundId, uint256 indexed proposalId, address indexed proposer_, int256 realisedReturn, uint256 proposerFee);
+    event BondSlashed(
+        uint256 indexed roundId, uint256 indexed proposalId, address indexed proposer_, address treas, uint256 amount
+    );
+    event ProposerFeeEarned(
+        uint256 indexed roundId,
+        uint256 indexed proposalId,
+        address indexed proposer_,
+        int256 realisedReturn,
+        uint256 proposerFee
+    );
     event ResolverSet(address indexed resolver_);
 
     // ─────────────────────────────────────────────────────────
@@ -81,8 +104,8 @@ contract QuantumRoundTest is Test {
         // 2. Deploy peripheral contracts.
         vm.startPrank(admin);
         proposalTokens = new ProposalTokens(admin);
-        market         = new ConstantProductMarket(30, admin); // 0.3% fee; owner=admin temporarily
-        registry       = new ProposerRegistry(USDC_ADDR, admin);
+        market = new ConstantProductMarket(30, admin); // 0.3% fee; owner=admin temporarily
+        registry = new ProposerRegistry(USDC_ADDR, admin);
         vm.stopPrank();
 
         // 3. Deploy QuantumRound with a placeholder resolver (updated after).
@@ -92,14 +115,18 @@ contract QuantumRoundTest is Test {
             address(proposalTokens),
             address(market),
             address(registry),
-            admin,         // initialAdmin
+            admin, // initialAdmin
             treasury,
-            admin          // temporary resolver placeholder
+            admin // temporary resolver placeholder
         );
 
         // 4. Deploy Resolver with real QuantumRound address.
         vm.prank(admin);
         resolver = new Resolver(address(qr), admin);
+
+        bytes32 resolverRole = resolver.RESOLVER_ROLE();
+        vm.prank(admin);
+        resolver.grantRole(resolverRole, admin);
 
         // 5. Wire up: update qr.resolver to the real Resolver.
         vm.prank(admin);
@@ -162,7 +189,7 @@ contract QuantumRoundTest is Test {
         vm.prank(proposer);
         usdc.approve(address(registry), DEFAULT_BOND);
         vm.prank(proposer);
-        qr.propose(roundId, QuantumRound.Allocation({tEthBps: tEthBps}), "ipfs://test");
+        qr.propose(roundId, QuantumRound.Allocation({ tEthBps: tEthBps }), "ipfs://test");
         proposalId = _getRound(roundId).proposalCount - 1;
     }
 
@@ -184,7 +211,8 @@ contract QuantumRoundTest is Test {
             bool collapsed,
             bool settled,
             int256 realisedReturn,
-            uint256 totalDeposited
+            uint256 totalDeposited,
+            bool cancelled
         ) = qr.rounds(roundId);
         r.id = id;
         r.tradingEnd = tradingEnd;
@@ -199,6 +227,7 @@ contract QuantumRoundTest is Test {
         r.settled = settled;
         r.realisedReturn = realisedReturn;
         r.totalDeposited = totalDeposited;
+        r.cancelled = cancelled;
     }
 
     // ─────────────────────────────────────────────────────────
@@ -261,6 +290,42 @@ contract QuantumRoundTest is Test {
         vm.prank(alice);
         vm.expectRevert();
         qr.addProtocolLiquiditySeed(INITIAL_LIQUIDITY);
+    }
+
+    function test_RescueProtocolSeed_WithdrawsOnlyUnallocatedSeed() public {
+        uint256 roundId = _openRound();
+        uint256 userDeposit = 10_000_000;
+        _fundAndDeposit(alice, roundId, userDeposit);
+        uint256 unallocatedSeed = qr.protocolLiquiditySeed();
+        uint256 balanceBefore = usdc.balanceOf(address(qr));
+
+        vm.prank(admin);
+        qr.rescueProtocolSeed(unallocatedSeed);
+
+        assertEq(qr.protocolLiquiditySeed(), 0);
+        assertEq(usdc.balanceOf(address(qr)), balanceBefore - unallocatedSeed);
+        assertEq(qr.deposits(roundId, alice), userDeposit);
+        assertEq(_getRound(roundId).totalDeposited, userDeposit);
+    }
+
+    function test_RescueProtocolSeed_CannotWithdrawAllocatedSeed() public {
+        uint256 roundId = _openRound();
+        uint256 allocatedSeed = qr.initialLiquidityPerProposal();
+        uint256 tooMuch = qr.protocolLiquiditySeed() + 1;
+
+        vm.prank(admin);
+        vm.expectRevert(QuantumRound.InsufficientProtocolLiquidity.selector);
+        qr.rescueProtocolSeed(tooMuch);
+
+        assertEq(qr.protocolLiquiditySeed(), INITIAL_LIQUIDITY * 20 - allocatedSeed);
+        assertEq(usdc.balanceOf(address(qr)), INITIAL_LIQUIDITY * 20);
+        assertEq(_getRound(roundId).proposalCount, 1);
+    }
+
+    function test_RescueProtocolSeed_OnlyAdmin() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        qr.rescueProtocolSeed(1);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -356,7 +421,7 @@ contract QuantumRoundTest is Test {
         vm.prank(proposer);
         vm.expectEmit(true, true, true, false, address(qr));
         emit ProposalCreated(roundId, 1, proposer, 5000, "ipfs://test");
-        qr.propose(roundId, QuantumRound.Allocation({tEthBps: 5000}), "ipfs://test");
+        qr.propose(roundId, QuantumRound.Allocation({ tEthBps: 5000 }), "ipfs://test");
 
         QuantumRound.Round memory r = _getRound(roundId);
         assertEq(r.proposalCount, 2);
@@ -379,7 +444,7 @@ contract QuantumRoundTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(QuantumRound.NotRegistered.selector);
-        qr.propose(roundId, QuantumRound.Allocation({tEthBps: 5000}), "ipfs://test");
+        qr.propose(roundId, QuantumRound.Allocation({ tEthBps: 5000 }), "ipfs://test");
     }
 
     function test_Propose_InvalidAllocation_Reverts() public {
@@ -391,7 +456,7 @@ contract QuantumRoundTest is Test {
 
         vm.prank(proposer);
         vm.expectRevert(QuantumRound.InvalidAllocation.selector);
-        qr.propose(roundId, QuantumRound.Allocation({tEthBps: 10_001}), "ipfs://test");
+        qr.propose(roundId, QuantumRound.Allocation({ tEthBps: 10_001 }), "ipfs://test");
     }
 
     function test_Propose_TradingClosed_Reverts() public {
@@ -404,7 +469,7 @@ contract QuantumRoundTest is Test {
 
         vm.prank(proposer);
         vm.expectRevert(QuantumRound.TradingClosed.selector);
-        qr.propose(roundId, QuantumRound.Allocation({tEthBps: 5000}), "ipfs://test");
+        qr.propose(roundId, QuantumRound.Allocation({ tEthBps: 5000 }), "ipfs://test");
     }
 
     function test_Propose_MaxProposals_Reverts() public {
@@ -427,7 +492,7 @@ contract QuantumRoundTest is Test {
             vm.prank(p);
             usdc.approve(address(registry), DEFAULT_BOND);
             vm.prank(p);
-            qr.propose(roundId, QuantumRound.Allocation({tEthBps: 5000}), "ipfs://test");
+            qr.propose(roundId, QuantumRound.Allocation({ tEthBps: 5000 }), "ipfs://test");
         }
 
         // now at MAX, next propose should revert
@@ -440,7 +505,7 @@ contract QuantumRoundTest is Test {
 
         vm.prank(extra);
         vm.expectRevert(QuantumRound.InvalidAllocation.selector);
-        qr.propose(roundId, QuantumRound.Allocation({tEthBps: 5000}), "ipfs://test");
+        qr.propose(roundId, QuantumRound.Allocation({ tEthBps: 5000 }), "ipfs://test");
     }
 
     // ─────────────────────────────────────────────────────────
@@ -449,7 +514,7 @@ contract QuantumRoundTest is Test {
 
     function test_Deposit_Happy() public {
         uint256 roundId = _openRound();
-        uint256 amount  = 10_000_000; // 10 USDC
+        uint256 amount = 10_000_000; // 10 USDC
 
         // Fund alice with USDC and approve QR — then check the Deposited event fires on qr.deposit().
         // expectEmit must be placed immediately before the emitting call, not before helper mints.
@@ -581,7 +646,7 @@ contract QuantumRoundTest is Test {
     function test_BuyLong_Happy() public {
         (uint256 roundId, uint256 proposalId) = _setupForTrading();
 
-        address longAddr   = proposalTokens.longToken(roundId, proposalId);
+        address longAddr = proposalTokens.longToken(roundId, proposalId);
         address creditAddr = proposalTokens.creditToken(roundId, proposalId);
         uint256 creditsBefore = ProposalTokenImpl(creditAddr).balanceOf(alice);
 
@@ -616,9 +681,9 @@ contract QuantumRoundTest is Test {
         vm.prank(alice);
         qr.buyLong(roundId, proposalId, 2_000_000, 0);
 
-        address longAddr   = proposalTokens.longToken(roundId, proposalId);
+        address longAddr = proposalTokens.longToken(roundId, proposalId);
         address creditAddr = proposalTokens.creditToken(roundId, proposalId);
-        uint256 longBal    = ProposalTokenImpl(longAddr).balanceOf(alice);
+        uint256 longBal = ProposalTokenImpl(longAddr).balanceOf(alice);
 
         uint256 creditsBefore = ProposalTokenImpl(creditAddr).balanceOf(alice);
 
@@ -641,7 +706,7 @@ contract QuantumRoundTest is Test {
     function test_BuyShort_Happy() public {
         (uint256 roundId, uint256 proposalId) = _setupForTrading();
 
-        address shortAddr  = proposalTokens.shortToken(roundId, proposalId);
+        address shortAddr = proposalTokens.shortToken(roundId, proposalId);
         address creditAddr = proposalTokens.creditToken(roundId, proposalId);
         uint256 creditsBefore = ProposalTokenImpl(creditAddr).balanceOf(alice);
 
@@ -667,9 +732,9 @@ contract QuantumRoundTest is Test {
         vm.prank(alice);
         qr.buyShort(roundId, proposalId, 2_000_000, 0);
 
-        address shortAddr  = proposalTokens.shortToken(roundId, proposalId);
+        address shortAddr = proposalTokens.shortToken(roundId, proposalId);
         address creditAddr = proposalTokens.creditToken(roundId, proposalId);
-        uint256 shortBal   = ProposalTokenImpl(shortAddr).balanceOf(alice);
+        uint256 shortBal = ProposalTokenImpl(shortAddr).balanceOf(alice);
         uint256 creditsBefore = ProposalTokenImpl(creditAddr).balanceOf(alice);
 
         vm.prank(alice);
@@ -727,7 +792,7 @@ contract QuantumRoundTest is Test {
     }
 
     function test_Collapse_BondRefunded_NonSpam() public {
-        uint256 roundId    = _openRound();
+        uint256 roundId = _openRound();
         uint256 proposalId = _propose(roundId, 5000);
 
         // Buy long on proposal 1 heavily to push TWAP above spam threshold
@@ -750,8 +815,8 @@ contract QuantumRoundTest is Test {
     }
 
     function test_Collapse_BondSlashed_Spam() public {
-        uint256 roundId    = _openRound();
-        uint256 proposalId = _propose(roundId, 5000);
+        uint256 roundId = _openRound();
+        _propose(roundId, 5000);
         // No trading — TWAP stays at initial price (1e18) which is above spam threshold
         // But to force slashing we need TWAP < 0.2e18 which requires MASSIVE sell pressure
         // Instead: just warp and collapse; the price is 1e18 > 0.2e18, so bond is refunded not slashed.
@@ -870,7 +935,7 @@ contract QuantumRoundTest is Test {
     }
 
     function test_Settle_ProposerFeeEarned_EmittedWhenPositive() public {
-        uint256 roundId    = _openRound();
+        uint256 roundId = _openRound();
         uint256 proposalId = _propose(roundId, 5000);
 
         // Make the proposal win by buying heavily
@@ -906,7 +971,7 @@ contract QuantumRoundTest is Test {
     // ─────────────────────────────────────────────────────────
 
     function _fullRound(int256 realisedReturn) internal returns (uint256 roundId, uint256 proposalId) {
-        roundId    = _openRound();
+        roundId = _openRound();
         proposalId = _propose(roundId, 5000);
 
         uint256 deposit = 20_000_000; // 20 USDC
@@ -962,10 +1027,36 @@ contract QuantumRoundTest is Test {
         qr.redeem(roundId);
     }
 
+    function test_CancelRound_RefundsDepositsAtPar() public {
+        uint256 roundId = _openRound();
+        _propose(roundId, 5_000);
+        uint256 deposit = 10_000_000;
+        _fundAndDeposit(alice, roundId, deposit);
+        assertEq(usdc.balanceOf(proposer), 0);
+
+        bytes32 vaultRole = qr.VAULT_ROLE();
+        vm.prank(admin);
+        qr.grantRole(vaultRole, admin);
+        vm.prank(admin);
+        qr.cancelRound(roundId);
+        assertEq(usdc.balanceOf(proposer), DEFAULT_BOND);
+
+        QuantumRound.Round memory round = _getRound(roundId);
+        assertTrue(round.cancelled);
+        assertTrue(round.settled);
+        assertEq(round.realisedReturn, 1e18);
+
+        uint256 balanceBefore = usdc.balanceOf(alice);
+        vm.prank(alice);
+        qr.redeem(roundId);
+        assertEq(usdc.balanceOf(alice) - balanceBefore, deposit);
+        assertEq(qr.deposits(roundId, alice), 0);
+    }
+
     function test_Redeem_TotalPayoutLeDepositBound() public {
         (uint256 roundId,) = _fullRound(1.5e18);
 
-        uint256 deposit    = qr.deposits(roundId, alice);
+        uint256 deposit = qr.deposits(roundId, alice);
         uint256 usdcBefore = usdc.balanceOf(alice);
         vm.prank(alice);
         qr.redeem(roundId);
@@ -1004,13 +1095,13 @@ contract QuantumRoundTest is Test {
 
         // 7. SellLong (partial)
         address longAddr = proposalTokens.longToken(roundId, proposalId);
-        uint256 longBal  = ProposalTokenImpl(longAddr).balanceOf(alice);
+        uint256 longBal = ProposalTokenImpl(longAddr).balanceOf(alice);
         vm.prank(alice);
         qr.sellLong(roundId, proposalId, longBal / 2, 0);
 
         // 8. SellShort (partial)
         address shortAddr = proposalTokens.shortToken(roundId, proposalId);
-        uint256 shortBal  = ProposalTokenImpl(shortAddr).balanceOf(alice);
+        uint256 shortBal = ProposalTokenImpl(shortAddr).balanceOf(alice);
         vm.prank(alice);
         qr.sellShort(roundId, proposalId, shortBal / 2, 0);
 
@@ -1067,36 +1158,31 @@ contract QuantumRoundTest is Test {
 // ─────────────────────────────────────────────────────────────────────────────
 
 contract QuantumRoundHandler is Test {
-    MockUSDC          internal usdc;
-    QuantumRound      internal qr;
-    ProposalTokens    internal proposalTokens;
-    ProposerRegistry  internal registry;
+    MockUSDC internal usdc;
+    QuantumRound internal qr;
+    ProposalTokens internal proposalTokens;
+    ProposerRegistry internal registry;
 
-    address internal admin    = makeAddr("inv-admin");
-    address internal alice    = makeAddr("inv-alice");
+    address internal admin = makeAddr("inv-admin");
+    address internal alice = makeAddr("inv-alice");
     address internal proposer_ = makeAddr("inv-proposer");
 
     uint256 public currentRoundId;
     uint256 public totalExpectedDeposits;
 
-    uint64  internal TRADING_END;
-    uint64  internal constant HORIZON     = 7 days;
-    uint96  internal constant R_MIN       = 0.5e18;
-    uint96  internal constant R_MAX       = 2e18;
-    uint32  internal constant TWAP_WINDOW = 1 hours;
-    uint256 internal constant HANDLER_INIT_LIQ  = 500_000_000;
-    uint256 internal constant DEFAULT_BOND_AMT  = 1_000_000;
+    uint64 internal TRADING_END;
+    uint64 internal constant HORIZON = 7 days;
+    uint96 internal constant R_MIN = 0.5e18;
+    uint96 internal constant R_MAX = 2e18;
+    uint32 internal constant TWAP_WINDOW = 1 hours;
+    uint256 internal constant HANDLER_INIT_LIQ = 500_000_000;
+    uint256 internal constant DEFAULT_BOND_AMT = 1_000_000;
 
-    constructor(
-        MockUSDC _usdc,
-        QuantumRound _qr,
-        ProposalTokens _pt,
-        ProposerRegistry _reg
-    ) {
-        usdc           = _usdc;
-        qr             = _qr;
+    constructor(MockUSDC _usdc, QuantumRound _qr, ProposalTokens _pt, ProposerRegistry _reg) {
+        usdc = _usdc;
+        qr = _qr;
         proposalTokens = _pt;
-        registry       = _reg;
+        registry = _reg;
     }
 
     function openRound() external {
@@ -1125,21 +1211,21 @@ contract QuantumRoundHandler is Test {
         vm.prank(alice);
         try qr.deposit(currentRoundId, amount) {
             totalExpectedDeposits += amount;
-        } catch {}
+        } catch { }
     }
 }
 
 contract QuantumRoundInvariantTest is StdInvariant, Test {
-    MockUSDC           internal usdc;
-    ProposalTokens     internal proposalTokens;
+    MockUSDC internal usdc;
+    ProposalTokens internal proposalTokens;
     ConstantProductMarket internal market;
-    ProposerRegistry   internal registry;
-    Resolver           internal resolver;
-    QuantumRound       internal qr;
+    ProposerRegistry internal registry;
+    Resolver internal resolver;
+    QuantumRound internal qr;
 
     QuantumRoundHandler internal handler;
 
-    address internal admin    = makeAddr("inv-admin");
+    address internal admin = makeAddr("inv-admin");
     address internal treasury = makeAddr("inv-treasury");
 
     function setUp() public {
@@ -1149,8 +1235,8 @@ contract QuantumRoundInvariantTest is StdInvariant, Test {
 
         vm.startPrank(admin);
         proposalTokens = new ProposalTokens(admin);
-        market         = new ConstantProductMarket(30, admin);
-        registry       = new ProposerRegistry(USDC_ADDR, admin);
+        market = new ConstantProductMarket(30, admin);
+        registry = new ProposerRegistry(USDC_ADDR, admin);
         vm.stopPrank();
 
         vm.prank(admin);

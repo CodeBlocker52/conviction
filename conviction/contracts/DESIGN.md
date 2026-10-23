@@ -12,8 +12,8 @@ Wavefund is a quantum-market prediction protocol where AI agents ("proposers") c
 |---|---|---|
 | Proposer (AI agent) | Submits allocation proposals with a bond | ProposerRegistry, QuantumRound |
 | Forecaster (user) | Deposits USDC, claims credits, trades LONG/SHORT | QuantumRound |
-| Keeper | Opens rounds, collapses, calls reportReturn | QuantumRound, WavefundVault |
-| Resolver | Submits realised vault return | Resolver |
+| Keeper | Opens rounds, collapses, updates ETH/USD price, executes and reports rounds | QuantumRound, WavefundVault, MockPriceOracle |
+| Resolver | Accepts vault-authorized realised returns and settles rounds | Resolver |
 | LP | Deposits USDC into QuantumLP (stub in Phase A) | QuantumLP |
 
 ## Round Lifecycle
@@ -55,6 +55,10 @@ redeem()                [forecaster, after settled]
     → unclaimed deposit returned 1:1
 ```
 
+If vault execution breaches its 500 bps oracle-relative slippage cap, the nested swap is reverted atomically and the vault cancels the round. Forecasters can then redeem their full deposits at par; any proposal bonds are returned. Canceled rounds cannot be settled or traded afterward.
+
+Admin may rescue only `protocolLiquiditySeed`, which is reduced when a proposal market is allocated. User deposits remain accounted for per round, and seed allocated to an existing round is not rescuable. QuantumLP is a Phase A custody stub; providers can always withdraw their own recorded balance. Its former global withdrawal toggle had no round lifecycle caller and is removed.
+
 ## Price Discovery (Phase A)
 Each proposal uses a constant-product market (x*y=k) where:
 - x = credit reserve (USDC units)
@@ -80,11 +84,13 @@ Note: longBal + shortBal ≤ creditsClaimed (credits not converted to either = l
 ## Vault (Phase A)
 WavefundVault:
 - Holds USDC and tETH
-- When a non-status-quo winner is selected, keeper calls executeTrade(roundId, winnerTEthBps)
-- Vault swaps on Uniswap v4 USDC/tETH pool (no hook, fee=3000, tickSpacing=60) to hit target allocation
-- After evaluation period, keeper calls reportReturn() which reads current vault NAV and computes realisedReturn
-
-Phase A includes a `setMockPrice` override so the demo can run without a live Uniswap pool.
+- Keeper marks pre-trade NAV from a fresh ETH/USD oracle update, then calls executeTrade(roundId, winnerTEthBps)
+- Vault swaps on Uniswap v4 USDC/tETH pool (no hook, fee=3000, tickSpacing=60) toward the target allocation
+- Swap output must be within 500 bps of the oracle-implied expected output; otherwise the swap rolls back and the round is canceled
+- After the evaluation period, reportReturn requires a fresh update published on or after evaluationEnd and submits the oracle-marked return
+- Arc Testnet currently has no confirmed supported ETH/USD feed in this deployment; MockPriceOracle uses 8-decimal prices uploaded by the keeper from the public Coinbase ETH/USD spot endpoint
+- The oracle timestamps updates on-chain, so the keeper must update immediately after reading the external API; this is a trusted testnet fallback, not a decentralized oracle
+- The keeper updater supports a 60-second watch interval; update it again immediately before executing a NAV mark or reporting a resolution
 
 ## Contract Dependencies
 ```
@@ -94,10 +100,13 @@ QuantumRound
   └── ProposerRegistry (bond custody)
 
 Resolver → QuantumRound.settle()
+  └── only WavefundVault is granted RESOLVER_ROLE in the deployment
 
 WavefundVault
   ├── IPoolManager (Uniswap v4, 0x2756...)
   └── Resolver.submitReturn()
+  ├── MockPriceOracle.latestPrice()
+  └── QuantumRound.cancelRound() on slippage breach
 ```
 
 ## Key Constants
@@ -107,8 +116,10 @@ WavefundVault
 | initialLiquidityPerProposal | 5 USDC (testnet) / 500 USDC (prod) | Per-proposal market seed |
 | SPAM_THRESHOLD_PRICE | 0.2e18 | TWAP below this = bond slashed |
 | EPSILON | 0.005e18 | Winner margin above status quo |
-| MAX_PROPOSALS_PER_ROUND | 20 | Gas safety cap |
+| MAX_PROPOSALS_PER_ROUND | 10 | Includes status quo proposal 0 |
 | EMERGENCY_SETTLE_DELAY | 2 days | Permissionless settle fallback |
+| MAX_ORACLE_AGE | 5 minutes | Maximum age accepted at trade execution/reporting |
+| maxSlippageBps | 500 | Maximum adverse swap slippage relative to oracle output |
 
 ## Phase B Roadmap
 1. WaveHook.sol: custom Uniswap v4 hook per proposal, replacing ConstantProductMarket

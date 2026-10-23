@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title QuantumLP
 /// @notice Phase A LP stub that custodizes USDC deposits for future liquidity programs.
@@ -24,9 +24,6 @@ contract QuantumLP is AccessControl, ReentrancyGuard {
     /// @notice Aggregate LP deposits.
     uint256 public totalLP;
 
-    /// @notice Round settlement gate flag for withdrawals.
-    bool public withdrawalsEnabled;
-
     /// @notice Canonical USDC token instance.
     IERC20 public immutable usdc;
 
@@ -39,17 +36,11 @@ contract QuantumLP is AccessControl, ReentrancyGuard {
     /// @notice Thrown when user has no LP balance.
     error NoBalance();
 
-    /// @notice Thrown when withdrawals are not yet enabled.
-    error WithdrawalsNotEnabled();
-
     /// @notice Emitted when LP deposits USDC.
     event LPDeposited(address indexed provider, uint256 amount);
 
     /// @notice Emitted when LP withdraws USDC.
     event LPWithdrawn(address indexed provider, uint256 amount);
-
-    /// @notice Emitted when withdrawal mode is updated.
-    event WithdrawalsEnabledSet(bool enabled);
 
     /// @notice Deploys LP stub.
     /// @param initialAdmin Address granted admin + quantum-round roles.
@@ -74,10 +65,8 @@ contract QuantumLP is AccessControl, ReentrancyGuard {
         emit LPDeposited(msg.sender, amount);
     }
 
-    /// @notice Withdraws full LP balance when withdrawals are enabled after settlement.
+    /// @notice Withdraws the caller's full LP balance.
     function withdraw() external nonReentrant {
-        if (!withdrawalsEnabled) revert WithdrawalsNotEnabled();
-
         uint256 amount = lpBalances[msg.sender];
         if (amount == 0) revert NoBalance();
 
@@ -86,13 +75,5 @@ contract QuantumLP is AccessControl, ReentrancyGuard {
         usdc.safeTransfer(msg.sender, amount);
 
         emit LPWithdrawn(msg.sender, amount);
-    }
-
-    /// @notice Enables or disables LP withdrawals.
-    /// @dev TODO(Phase B): replace global toggle with per-round withdrawal accounting and queueing.
-    /// @param enabled New withdrawal enabled flag.
-    function setWithdrawalsEnabled(bool enabled) external onlyRole(QUANTUM_ROUND_ROLE) {
-        withdrawalsEnabled = enabled;
-        emit WithdrawalsEnabledSet(enabled);
     }
 }

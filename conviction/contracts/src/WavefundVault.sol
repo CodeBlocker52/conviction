@@ -1,25 +1,28 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import { IPoolManager } from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import { IUnlockCallback } from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import { IHooks } from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import { PoolKey } from "@uniswap/v4-core/src/types/PoolKey.sol";
+import { Currency } from "@uniswap/v4-core/src/types/Currency.sol";
+import { CurrencyLibrary } from "@uniswap/v4-core/src/types/Currency.sol";
+import { BalanceDelta } from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import { BalanceDeltaLibrary } from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import { PoolId } from "@uniswap/v4-core/src/types/PoolId.sol";
+import { PoolIdLibrary } from "@uniswap/v4-core/src/types/PoolId.sol";
+import { SwapParams } from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import { StateLibrary } from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import { TickMath } from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import { FullMath } from "@uniswap/v4-core/src/libraries/FullMath.sol";
+
+import { IPriceOracle } from "./IPriceOracle.sol";
+import { VaultPriceMath } from "./VaultPriceMath.sol";
 
 /// @notice Minimal resolver interface used by WavefundVault.
 interface IResolver {
@@ -29,9 +32,14 @@ interface IResolver {
     function submitReturn(uint256 roundId, int256 realisedReturn) external;
 }
 
+interface IQuantumRoundVault {
+    function cancelRound(uint256 roundId) external;
+    function roundEvaluationEnd(uint256 roundId) external view returns (uint64);
+}
+
 /// @title WavefundVault
 /// @notice Phase A vault that rebalances USDC/tETH exposure and reports realised returns to Resolver.
-/// @dev Uses Uniswap v4 PoolManager unlock-callback swap flow; also supports admin mock pricing for deterministic demos.
+/// @dev Uses oracle-marked NAV and Uniswap v4 PoolManager unlock-callback swaps.
 contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
@@ -53,24 +61,30 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @notice Uniswap v4 pool tick spacing for USDC/tETH pool.
     int24 public constant POOL_TICK_SPACING = 60;
 
-    /// @notice 2^96 used for Q64.96 math.
-    uint256 private constant Q96 = 2 ** 96;
-
     /// @notice 1e18 fixed-point scalar.
     uint256 private constant ONE_E18 = 1e18;
 
+    /// @notice Maximum age of an oracle update accepted at execution or resolution.
+    uint64 public constant MAX_ORACLE_AGE = 5 minutes;
+
     /// @notice Snapshot state for a round at trade execution time.
     struct RoundState {
-        /// @notice Vault USDC-equivalent value (6-decimal USDC units) at executeTrade.
+        /// @notice Oracle-marked NAV immediately before the attempted trade (6-decimal USDC units).
         uint256 startValueUsdc;
-        /// @notice Vault tETH balance (18 decimals) at executeTrade.
+        /// @notice Vault tETH balance (18 decimals) immediately before the trade.
         uint256 tEthAtStart;
-        /// @notice Vault USDC balance (6 decimals) at executeTrade.
+        /// @notice Vault USDC balance (6 decimals) immediately before the trade.
         uint256 usdcAtStart;
+        /// @notice Oracle ETH/USD price in 6-decimal USDC per 1e18 tETH at the start mark.
+        uint256 startPriceUsdc;
+        /// @notice Timestamp of the pre-trade NAV mark.
+        uint64 navTimestamp;
         /// @notice True once executeTrade ran for this round.
         bool executed;
         /// @notice True once reportReturn ran for this round.
         bool reported;
+        /// @notice True when a swap exceeded the slippage cap and the round was canceled.
+        bool cancelled;
     }
 
     /// @notice Swap callback state staged before `poolManager.unlock`.
@@ -107,6 +121,21 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @notice Thrown when a usable price cannot be obtained.
     error PriceUnavailable();
 
+    /// @notice Thrown when the configured slippage cap is invalid.
+    error InvalidSlippageCap();
+
+    /// @notice Thrown when the price update is stale, future-dated, or predates evaluation end.
+    error StaleOraclePrice();
+
+    /// @notice Thrown when a trade exceeds the configured oracle-relative slippage cap.
+    error SlippageCapExceeded(uint256 expectedOut, uint256 actualOut);
+
+    /// @notice Thrown when a round is canceled and cannot be reported or traded.
+    error RoundCancelled();
+
+    /// @notice Thrown when the private atomic rebalance helper is called by anyone except this contract.
+    error OnlySelf();
+
     /// @notice Emitted when USDC is deposited from QuantumRound.
     /// @param amount USDC amount in 6-decimal base units.
     event Deposited(uint256 amount);
@@ -122,15 +151,19 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @param deltaTEth tETH delta (positive when tETH bought, negative when tETH sold).
     event TradeExecuted(uint256 indexed roundId, uint16 winnerTEthBps, int256 deltaUsdc, int256 deltaTEth);
 
+    /// @notice Emitted immediately before the round rebalance using the current oracle price.
+    event NAVMarked(uint256 indexed roundId, uint256 navUsdc, uint256 priceUsdcPerTEth, uint64 publishedAt);
+
+    /// @notice Emitted when the atomic rebalance exceeds the oracle-relative slippage cap.
+    event SlippageBreach(uint256 indexed roundId, uint256 expectedOut, uint256 actualOut, uint16 maxSlippageBps);
+
+    /// @notice Emitted after the round is canceled and all deposits become redeemable at par.
+    event TradeCancelled(uint256 indexed roundId);
+
     /// @notice Emitted when return is reported to resolver.
     /// @param roundId Round identifier.
     /// @param realisedReturn Realised return ratio in 1e18 fixed-point.
     event ReturnReported(uint256 indexed roundId, int256 realisedReturn);
-
-    /// @notice Emitted when mock pricing mode is updated.
-    /// @param priceUsdc Mock USDC-per-1-tETH price in 6-decimal USDC units.
-    /// @param useMock Whether mock mode is enabled.
-    event MockPriceSet(uint256 priceUsdc, bool useMock);
 
     /// @notice Emitted after each swap callback execution.
     /// @param usdcForTEth True when the executed direction is USDC->tETH.
@@ -146,6 +179,15 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
 
     /// @notice Resolver receiving realised returns.
     IResolver public immutable resolver;
+
+    /// @notice QuantumRound that can be canceled after a failed slippage check.
+    IQuantumRoundVault public immutable quantumRound;
+
+    /// @notice ETH/USD oracle; its converted answer is USDC base units per 1e18 tETH.
+    IPriceOracle public immutable priceOracle;
+
+    /// @notice Maximum permitted execution slippage relative to the oracle price.
+    uint16 public immutable maxSlippageBps;
 
     /// @notice True when USDC is sorted as currency0 in pool key.
     bool public immutable usdcIsCurrency0;
@@ -165,12 +207,6 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @notice Per-round execution/reporting snapshots.
     mapping(uint256 roundId => RoundState) public roundState;
 
-    /// @notice Toggle for mock price usage in spotPriceTEthInUsdc.
-    bool public useMockPrice;
-
-    /// @notice Mock USDC-per-1-tETH price (6-decimal USDC units).
-    uint256 public mockTEthPriceUsdc;
-
     /// @notice Staged swap callback data used by `unlockCallback`.
     SwapCallbackData private pendingSwap;
 
@@ -178,15 +214,33 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @param poolManager_ Uniswap v4 PoolManager address.
     /// @param tEth_ tETH ERC20 token address.
     /// @param resolver_ Resolver contract address.
+    /// @param quantumRound_ Round contract authorized to cancel on slippage breach.
+    /// @param priceOracle_ ETH/USD price source.
+    /// @param maxSlippageBps_ Maximum permitted swap slippage in basis points.
     /// @param initialAdmin Initial admin/keeper role grantee.
-    constructor(address poolManager_, address tEth_, address resolver_, address initialAdmin) {
-        if (poolManager_ == address(0) || tEth_ == address(0) || resolver_ == address(0) || initialAdmin == address(0)) {
+    constructor(
+        address poolManager_,
+        address tEth_,
+        address resolver_,
+        address quantumRound_,
+        address priceOracle_,
+        uint16 maxSlippageBps_,
+        address initialAdmin
+    ) {
+        if (
+            poolManager_ == address(0) || tEth_ == address(0) || resolver_ == address(0) || quantumRound_ == address(0)
+                || priceOracle_ == address(0) || initialAdmin == address(0)
+        ) {
             revert ZeroAddress();
         }
+        if (maxSlippageBps_ > 10_000) revert InvalidSlippageCap();
 
         poolManager = IPoolManager(poolManager_);
         tEth = IERC20(tEth_);
         resolver = IResolver(resolver_);
+        quantumRound = IQuantumRoundVault(quantumRound_);
+        priceOracle = IPriceOracle(priceOracle_);
+        maxSlippageBps = maxSlippageBps_;
 
         Currency usdcCurrency = Currency.wrap(USDC);
         Currency tEthCurrency = Currency.wrap(tEth_);
@@ -232,106 +286,142 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @param winnerTEthBps Winner target allocation in basis points (0..10000).
     function executeTrade(uint256 roundId, uint16 winnerTEthBps) external nonReentrant onlyRole(KEEPER_ROLE) {
         RoundState storage state = roundState[roundId];
-        if (state.executed) revert TradeAlreadyExecuted();
+        if (state.executed || state.cancelled) revert TradeAlreadyExecuted();
         if (winnerTEthBps > 10_000) revert PriceUnavailable();
+        if (quantumRound.roundEvaluationEnd(roundId) == 0) revert PriceUnavailable();
 
-        uint256 priceUsdcPerTEth = spotPriceTEthInUsdc();
+        (uint256 priceUsdcPerTEth, uint64 publishedAt) = _readFreshOraclePrice();
         uint256 currentTEthValueUsdc = _tEthValueInUsdc(totalVaultTEth, priceUsdcPerTEth);
         uint256 totalValueUsdc = totalVaultUsdc + currentTEthValueUsdc;
-
-        uint256 targetTEthValueUsdc = FullMath.mulDiv(totalValueUsdc, winnerTEthBps, 10_000);
-
-        int256 deltaUsdc;
-        int256 deltaTEth;
-
-        if (targetTEthValueUsdc > currentTEthValueUsdc) {
-            uint256 buyValueUsdc = targetTEthValueUsdc - currentTEthValueUsdc;
-            if (buyValueUsdc > totalVaultUsdc) revert InsufficientVaultFunds();
-
-            uint256 tEthOut = _swapUsdcForTEth(buyValueUsdc);
-            deltaUsdc = -int256(buyValueUsdc);
-            deltaTEth = int256(tEthOut);
-        } else if (targetTEthValueUsdc < currentTEthValueUsdc) {
-            uint256 sellValueUsdc = currentTEthValueUsdc - targetTEthValueUsdc;
-            uint256 tEthIn = FullMath.mulDiv(sellValueUsdc, ONE_E18, priceUsdcPerTEth);
-            if (tEthIn > totalVaultTEth) revert InsufficientVaultFunds();
-
-            if (tEthIn > 0) {
-                uint256 usdcOut = _swapTEthForUsdc(tEthIn);
-                deltaUsdc = int256(usdcOut);
-                deltaTEth = -int256(tEthIn);
-            }
-        }
+        if (totalValueUsdc == 0) revert PriceUnavailable();
 
         state.startValueUsdc = totalValueUsdc;
         state.tEthAtStart = totalVaultTEth;
         state.usdcAtStart = totalVaultUsdc;
-        state.executed = true;
+        state.startPriceUsdc = priceUsdcPerTEth;
+        state.navTimestamp = uint64(block.timestamp);
         state.reported = false;
 
-        emit TradeExecuted(roundId, winnerTEthBps, deltaUsdc, deltaTEth);
+        emit NAVMarked(roundId, totalValueUsdc, priceUsdcPerTEth, publishedAt);
+
+        try this.performTrade(winnerTEthBps, priceUsdcPerTEth) returns (int256 deltaUsdc, int256 deltaTEth) {
+            state.executed = true;
+            emit TradeExecuted(roundId, winnerTEthBps, deltaUsdc, deltaTEth);
+        } catch (bytes memory reason) {
+            bytes4 errorSelector = bytes4(0);
+            if (reason.length >= 4) {
+                assembly ("memory-safe") {
+                    errorSelector := mload(add(reason, 32))
+                }
+            }
+            if (errorSelector != SlippageCapExceeded.selector || reason.length != 68) {
+                assembly ("memory-safe") {
+                    revert(add(reason, 32), mload(reason))
+                }
+            }
+
+            uint256 expectedOut;
+            uint256 actualOut;
+            assembly ("memory-safe") {
+                expectedOut := mload(add(reason, 36))
+                actualOut := mload(add(reason, 68))
+            }
+
+            state.cancelled = true;
+            quantumRound.cancelRound(roundId);
+            emit SlippageBreach(roundId, expectedOut, actualOut, maxSlippageBps);
+            emit TradeCancelled(roundId);
+        }
     }
 
-    /// @notice Reports realised return for a round to Resolver.
-    /// @param roundId Round identifier.
+    /// @dev Runs as a nested self-call so a slippage breach can roll back the swap, then persist cancellation.
+    function performTrade(uint16 winnerTEthBps, uint256 priceUsdcPerTEth)
+        external
+        returns (int256 deltaUsdc, int256 deltaTEth)
+    {
+        if (msg.sender != address(this)) revert OnlySelf();
+
+        uint256 currentTEthValueUsdc = _tEthValueInUsdc(totalVaultTEth, priceUsdcPerTEth);
+        uint256 totalValueUsdc = totalVaultUsdc + currentTEthValueUsdc;
+        uint256 targetTEthValueUsdc = FullMath.mulDiv(totalValueUsdc, winnerTEthBps, 10_000);
+
+        if (targetTEthValueUsdc > currentTEthValueUsdc) {
+            uint256 requestedUsdcIn = targetTEthValueUsdc - currentTEthValueUsdc;
+            if (requestedUsdcIn > totalVaultUsdc) revert InsufficientVaultFunds();
+
+            (uint256 usdcInUsed, uint256 tEthOut) = _swapUsdcForTEth(requestedUsdcIn);
+            uint256 expectedTEthOut = FullMath.mulDiv(requestedUsdcIn, ONE_E18, priceUsdcPerTEth);
+            if (
+                usdcInUsed != requestedUsdcIn
+                    || !VaultPriceMath.withinSlippage(expectedTEthOut, tEthOut, maxSlippageBps)
+            ) {
+                revert SlippageCapExceeded(expectedTEthOut, tEthOut);
+            }
+            deltaUsdc = -int256(usdcInUsed);
+            deltaTEth = int256(tEthOut);
+        } else if (targetTEthValueUsdc < currentTEthValueUsdc) {
+            uint256 requestedTEthIn =
+                FullMath.mulDiv(currentTEthValueUsdc - targetTEthValueUsdc, ONE_E18, priceUsdcPerTEth);
+            if (requestedTEthIn > totalVaultTEth) revert InsufficientVaultFunds();
+
+            if (requestedTEthIn > 0) {
+                (uint256 tEthInUsed, uint256 usdcOut) = _swapTEthForUsdc(requestedTEthIn);
+                uint256 expectedUsdcOut = FullMath.mulDiv(requestedTEthIn, priceUsdcPerTEth, ONE_E18);
+                if (
+                    tEthInUsed != requestedTEthIn
+                        || !VaultPriceMath.withinSlippage(expectedUsdcOut, usdcOut, maxSlippageBps)
+                ) {
+                    revert SlippageCapExceeded(expectedUsdcOut, usdcOut);
+                }
+                deltaUsdc = int256(usdcOut);
+                deltaTEth = -int256(tEthInUsed);
+            }
+        }
+    }
+
+    /// @notice Marks evaluation NAV and submits the realized return to Resolver.
+    /// @dev The oracle update must be published on or after evaluationEnd and remain fresh.
     function reportReturn(uint256 roundId) external nonReentrant onlyRole(KEEPER_ROLE) {
         RoundState storage state = roundState[roundId];
+        if (state.cancelled) revert RoundCancelled();
         if (!state.executed) revert TradeNotExecuted();
         if (state.reported) revert ReturnAlreadyReported();
         if (state.startValueUsdc == 0) revert PriceUnavailable();
 
-        uint256 currentValueUsdc = _vaultValueUsdc();
+        (uint256 priceUsdcPerTEth, uint64 publishedAt) = _readFreshOraclePrice();
+        uint64 evaluationEnd = quantumRound.roundEvaluationEnd(roundId);
+        if (evaluationEnd == 0 || publishedAt < evaluationEnd) revert StaleOraclePrice();
+
+        uint256 currentValueUsdc = _vaultValueUsdc(priceUsdcPerTEth);
         uint256 realisedReturnU18 = FullMath.mulDiv(currentValueUsdc, ONE_E18, state.startValueUsdc);
 
         state.reported = true;
+        resolver.submitReturn(roundId, int256(realisedReturnU18));
 
-        int256 realisedReturn = int256(realisedReturnU18);
-        resolver.submitReturn(roundId, realisedReturn);
-
-        emit ReturnReported(roundId, realisedReturn);
+        emit ReturnReported(roundId, int256(realisedReturnU18));
     }
 
-    /// @notice Returns spot price of tETH in USDC units per 1e18 tETH units.
-    /// @dev Return scale is 6-decimal USDC base units (e.g., 2500 USDC => 2_500_000_000).
-    /// @return priceUsdc USDC base units per 1e18 tETH.
-    function spotPriceTEthInUsdc() public view returns (uint256 priceUsdc) {
-        if (useMockPrice) {
-            if (mockTEthPriceUsdc == 0) revert PriceUnavailable();
-            return mockTEthPriceUsdc;
-        }
-
-        PoolKey memory key = _poolKey();
-        PoolId poolId = key.toId();
+    /// @notice Returns the v4 pool price as 6-decimal USDC per 1e18 tETH.
+    function spotPriceTEthInUsdc() public view returns (uint256) {
+        PoolId poolId = _poolKey().toId();
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, poolId);
-
-        if (sqrtPriceX96 == 0) revert PriceUnavailable();
-
-        // priceRaw = token1_units / token0_units = sqrtPriceX96^2 / 2^192
-        uint256 priceRaw = FullMath.mulDiv(uint256(sqrtPriceX96), uint256(sqrtPriceX96), Q96);
-        priceRaw = FullMath.mulDiv(priceRaw, 1, Q96);
-        if (priceRaw == 0) revert PriceUnavailable();
-
-        if (usdcIsCurrency0) {
-            // priceRaw = tETH_units / USDC_units => invert to USDC_units per 1e18 tETH.
-            priceUsdc = FullMath.mulDiv(ONE_E18, ONE_E18, priceRaw);
-        } else {
-            // priceRaw = USDC_units / tETH_units => scale by 1e18 tETH units.
-            priceUsdc = FullMath.mulDiv(priceRaw, ONE_E18, 1);
-        }
-
-        if (priceUsdc == 0) revert PriceUnavailable();
+        return VaultPriceMath.fromSqrtPriceX96(sqrtPriceX96, usdcIsCurrency0);
     }
 
-    /// @notice Sets mock pricing mode for deterministic Phase A demo operation.
-    /// @param priceUsdc Mock USDC-per-1-tETH price in 6-decimal USDC base units.
-    /// @param useMock Whether to use mock price in spotPriceTEthInUsdc.
-    function setMockPrice(uint256 priceUsdc, bool useMock) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (priceUsdc == 0) revert ZeroAmount();
+    /// @notice Returns the latest ETH/USD oracle price in 6-decimal USDC per 1e18 tETH.
+    function oraclePriceTEthInUsdc() public view returns (uint256) {
+        (int256 answer, uint8 answerDecimals,) = priceOracle.latestPrice();
+        return VaultPriceMath.fromOracle(answer, answerDecimals);
+    }
 
-        mockTEthPriceUsdc = priceUsdc;
-        useMockPrice = useMock;
+    function _readFreshOraclePrice() internal view returns (uint256 priceUsdcPerTEth, uint64 publishedAt) {
+        (int256 answer, uint8 answerDecimals, uint64 updatedAt) = priceOracle.latestPrice();
+        if (updatedAt == 0 || updatedAt > block.timestamp || block.timestamp - updatedAt > MAX_ORACLE_AGE) {
+            revert StaleOraclePrice();
+        }
 
-        emit MockPriceSet(priceUsdc, useMock);
+        priceUsdcPerTEth = VaultPriceMath.fromOracle(answer, answerDecimals);
+        publishedAt = updatedAt;
     }
 
     /// @notice Uniswap v4 unlock callback used to run and settle/take a staged swap.
@@ -391,48 +481,52 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
 
     /// @notice Swaps USDC for tETH via PoolManager unlock callback flow.
     /// @param usdcAmountIn USDC exact-input amount (6-decimal base units).
+    /// @return usdcInUsed USDC input consumed (6-decimal base units).
     /// @return tEthOut tETH amount received (18-decimal base units).
-    function _swapUsdcForTEth(uint256 usdcAmountIn) internal returns (uint256 tEthOut) {
+    function _swapUsdcForTEth(uint256 usdcAmountIn) internal returns (uint256 usdcInUsed, uint256 tEthOut) {
         if (usdcAmountIn == 0) revert ZeroAmount();
         if (usdcAmountIn > totalVaultUsdc) revert InsufficientVaultFunds();
 
-        pendingSwap = SwapCallbackData({usdcForTEth: true, amountIn: usdcAmountIn, active: true});
+        pendingSwap = SwapCallbackData({ usdcForTEth: true, amountIn: usdcAmountIn, active: true });
         bytes memory unlockResult = poolManager.unlock(abi.encode(usdcAmountIn));
         pendingSwap.active = false;
 
-        (uint256 usdcInUsed, uint256 tEthReceived) = abi.decode(unlockResult, (uint256, uint256));
+        uint256 tEthReceived;
+        (usdcInUsed, tEthReceived) = abi.decode(unlockResult, (uint256, uint256));
         if (usdcInUsed > totalVaultUsdc) revert InsufficientVaultFunds();
 
         totalVaultUsdc -= usdcInUsed;
         totalVaultTEth += tEthReceived;
 
-        return tEthReceived;
+        return (usdcInUsed, tEthReceived);
     }
 
     /// @notice Swaps tETH for USDC via PoolManager unlock callback flow.
     /// @param tEthAmountIn tETH exact-input amount (18-decimal base units).
+    /// @return tEthInUsed tETH input consumed (18-decimal base units).
     /// @return usdcOut USDC amount received (6-decimal base units).
-    function _swapTEthForUsdc(uint256 tEthAmountIn) internal returns (uint256 usdcOut) {
+    function _swapTEthForUsdc(uint256 tEthAmountIn) internal returns (uint256 tEthInUsed, uint256 usdcOut) {
         if (tEthAmountIn == 0) revert ZeroAmount();
         if (tEthAmountIn > totalVaultTEth) revert InsufficientVaultFunds();
 
-        pendingSwap = SwapCallbackData({usdcForTEth: false, amountIn: tEthAmountIn, active: true});
+        pendingSwap = SwapCallbackData({ usdcForTEth: false, amountIn: tEthAmountIn, active: true });
         bytes memory unlockResult = poolManager.unlock(abi.encode(tEthAmountIn));
         pendingSwap.active = false;
 
-        (uint256 tEthInUsed, uint256 usdcReceived) = abi.decode(unlockResult, (uint256, uint256));
+        uint256 usdcReceived;
+        (tEthInUsed, usdcReceived) = abi.decode(unlockResult, (uint256, uint256));
         if (tEthInUsed > totalVaultTEth) revert InsufficientVaultFunds();
 
         totalVaultTEth -= tEthInUsed;
         totalVaultUsdc += usdcReceived;
 
-        return usdcReceived;
+        return (tEthInUsed, usdcReceived);
     }
 
-    /// @notice Returns vault total value in 6-decimal USDC units using current spot price source.
+    /// @notice Returns vault total value in 6-decimal USDC units using the supplied oracle price.
     /// @return valueUsdc Vault value in USDC base units.
-    function _vaultValueUsdc() internal view returns (uint256 valueUsdc) {
-        uint256 tEthValueUsdc = _tEthValueInUsdc(totalVaultTEth, spotPriceTEthInUsdc());
+    function _vaultValueUsdc(uint256 priceUsdcPerTEth) internal view returns (uint256 valueUsdc) {
+        uint256 tEthValueUsdc = _tEthValueInUsdc(totalVaultTEth, priceUsdcPerTEth);
         return totalVaultUsdc + tEthValueUsdc;
     }
 
@@ -448,7 +542,13 @@ contract WavefundVault is AccessControl, ReentrancyGuard, IUnlockCallback {
     /// @notice Builds canonical USDC/tETH pool key.
     /// @return key PoolKey for the USDC/tETH pool.
     function _poolKey() internal view returns (PoolKey memory key) {
-        return PoolKey({currency0: currency0, currency1: currency1, fee: POOL_FEE, tickSpacing: POOL_TICK_SPACING, hooks: IHooks(address(0))});
+        return PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: POOL_FEE,
+            tickSpacing: POOL_TICK_SPACING,
+            hooks: IHooks(address(0))
+        });
     }
 
     /// @notice Syncs a currency balance, transfers owed tokens to PoolManager, then settles owed delta.

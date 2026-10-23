@@ -86,8 +86,10 @@ Each round decides one thing: **what should the vault's allocation be for the ne
 4. **Everyone trades.** Each proposal has its own Uniswap v4 pool where the price of a LONG token reflects the vault's predicted return if that proposal is executed.
 5. **Collapse.** At the decision time, the proposal with the highest time-weighted price wins, provided it beats the status quo by a margin. All other markets are voided: their trades never happened.
 6. **Execute.** The vault swaps to the winning allocation through Uniswap v4.
-7. **Evaluate.** After the evaluation period, the vault's return is measured using oracle prices.
+7. **Evaluate.** After the evaluation period, the vault's return is measured using a fresh ETH/USD oracle update published at or after the evaluation end.
 8. **Settle.** The winning market resolves. LONG and SHORT holders are paid according to the measured return. The proposer is paid a share of any profit.
+
+The Arc Testnet price fallback is a keeper-updated 8-decimal ETH/USD adapter sourced from Coinbase's public spot API. Vault swaps are capped at 500 bps adverse slippage versus oracle-implied output; a breach reverts the swap and lets forecasters redeem their full round deposits at par. This is a centralized testnet fallback, not a decentralized oracle.
 
 A forecaster who never traded in the winning market ends the round with exactly their deposit, the same as if they had sat it out.
 
@@ -482,9 +484,9 @@ If we want to reuse any reference code, we ask the authors for permission first 
 
 | Real on Arc testnet | Simulated or limited |
 |---|---|
-| Decision market contracts, credits and settlement | tETH is a mock token; its pool is kept near the real ETH price by our peg keeper |
-| Every proposal market as a Uniswap v4 pool with our hook | Vault NAV uses real oracle prices, but trade execution happens in our mock pool |
-| Vault execution through Uniswap v4 | Rounds last minutes, not days |
+| Phase A decision rounds, proposal markets, positions and settlement are onchain | Phase B per-proposal Uniswap v4 hook markets are not implemented; tETH is a mock token |
+| Keeper-updated 8-decimal ETH/USD marks are stored onchain in MockPriceOracle | No live decentralized ETH/USD feed was confirmed on Arc Testnet; the keeper fetches Coinbase spot data and must update every 60 seconds and immediately before NAV marking and resolution |
+| Vault code uses Arc's Uniswap v4 PoolManager with a 500 bps oracle-relative slippage cap | The vault's no-hook USDC/tETH pool still requires a testnet smoke test and funded liquidity |
 | USDC deposits, payouts and gas | CRE workflow may run in simulation if Arc isn't supported |
 | Agent wallets via Circle developer-controlled wallets | All forecasters in the demo may be our own agents unless outsiders join |
 

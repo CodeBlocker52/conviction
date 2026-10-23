@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
 
-import {QuantumRound} from "./QuantumRound.sol";
+import { QuantumRound } from "./QuantumRound.sol";
 
 /// @title Resolver
 /// @notice Forwards realised return values from RESOLVER_ROLE to QuantumRound settlement.
@@ -38,7 +38,6 @@ contract Resolver is AccessControl {
         quantumRound = QuantumRound(quantumRound_);
 
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
-        _grantRole(RESOLVER_ROLE, initialAdmin);
     }
 
     /// @notice Submits realised return and forwards settlement call to QuantumRound.

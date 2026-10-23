@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Script, console2} from "forge-std/Script.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { Script, console2 } from "forge-std/Script.sol";
+import { IPoolManager } from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import { PoolKey } from "@uniswap/v4-core/src/types/PoolKey.sol";
+import { PoolId, PoolIdLibrary } from "@uniswap/v4-core/src/types/PoolId.sol";
+import { Currency, CurrencyLibrary } from "@uniswap/v4-core/src/types/Currency.sol";
+import { IHooks } from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import { SwapParams, ModifyLiquidityParams } from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import { BalanceDelta } from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 // PoolManager addresses on Arc testnet (RC2) sourced from Peach testnet docs
 // Verified: PositionManager(0x87Dd...).poolManager() == 0x2756... on-chain
@@ -51,9 +51,7 @@ contract V4SmokeTest is Script {
         callback = new TestCallback(POOL_MANAGER, USDC, address(tEth));
 
         // 3. Sort tokens (currency0 < currency1 numerically)
-        (address token0, address token1) = address(tEth) < USDC
-            ? (address(tEth), USDC)
-            : (USDC, address(tEth));
+        (address token0, address token1) = address(tEth) < USDC ? (address(tEth), USDC) : (USDC, address(tEth));
 
         console2.log("token0:", token0, "token1:", token1);
 
@@ -92,8 +90,8 @@ contract V4SmokeTest is Script {
             key,
             deployer,
             int24(-887220), // lower tick (near min)
-            int24(887220),  // upper tick (near max)
-            int256(1e18),   // liquidityDelta
+            int24(887220), // upper tick (near max)
+            int256(1e18), // liquidityDelta
             usdcAmount,
             tEthAmount
         );
@@ -101,8 +99,10 @@ contract V4SmokeTest is Script {
         try callback.execute(addLiqData) returns (bytes memory result) {
             console2.log("Add liquidity: SUCCESS");
             (int128 delta0, int128 delta1) = abi.decode(result, (int128, int128));
-            console2.log("  delta0:"); console2.logInt(int256(delta0));
-            console2.log("  delta1:"); console2.logInt(int256(delta1));
+            console2.log("  delta0:");
+            console2.logInt(int256(delta0));
+            console2.log("  delta1:");
+            console2.logInt(int256(delta1));
         } catch (bytes memory err) {
             console2.log("Add liquidity: FAILED");
             console2.logBytes(err);
@@ -120,15 +120,17 @@ contract V4SmokeTest is Script {
             zeroForOne,
             int256(swapIn), // negative = exactIn
             zeroForOne
-                ? uint160(4295128740) // MIN_SQRT_PRICE + 1
+                ? uint160(4295128740)  // MIN_SQRT_PRICE + 1
                 : uint160(1461446703485210103287273052203988822378723970341) // MAX_SQRT_PRICE - 1
         );
 
         try callback.execute(swapData) returns (bytes memory result) {
             console2.log("Swap 100 USDC -> tETH: SUCCESS");
             (int128 delta0, int128 delta1) = abi.decode(result, (int128, int128));
-            console2.log("  delta0:"); console2.logInt(int256(delta0));
-            console2.log("  delta1:"); console2.logInt(int256(delta1));
+            console2.log("  delta0:");
+            console2.logInt(int256(delta0));
+            console2.log("  delta1:");
+            console2.logInt(int256(delta1));
         } catch (bytes memory err) {
             console2.log("Swap: FAILED");
             console2.logBytes(err);
@@ -152,11 +154,14 @@ contract MockERC20 {
     event Approval(address indexed owner, address indexed spender, uint256 amount);
 
     constructor(string memory _name, string memory _sym, uint8 _dec) {
-        name = _name; symbol = _sym; decimals = _dec;
+        name = _name;
+        symbol = _sym;
+        decimals = _dec;
     }
 
     function mint(address to, uint256 amount) external {
-        balanceOf[to] += amount; totalSupply += amount;
+        balanceOf[to] += amount;
+        totalSupply += amount;
         emit Transfer(address(0), to, amount);
     }
 
@@ -167,14 +172,16 @@ contract MockERC20 {
     }
 
     function transfer(address to, uint256 amount) external returns (bool) {
-        balanceOf[msg.sender] -= amount; balanceOf[to] += amount;
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
         emit Transfer(msg.sender, to, amount);
         return true;
     }
 
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
         if (allowance[from][msg.sender] != type(uint256).max) allowance[from][msg.sender] -= amount;
-        balanceOf[from] -= amount; balanceOf[to] += amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
         emit Transfer(from, to, amount);
         return true;
     }
@@ -185,7 +192,10 @@ contract MockERC20 {
 contract TestCallback {
     using SafeERC20 for IERC20;
 
-    enum Action { ADD_LIQUIDITY, SWAP }
+    enum Action {
+        ADD_LIQUIDITY,
+        SWAP
+    }
 
     IPoolManager public immutable pm;
     address public immutable usdc;
@@ -217,8 +227,7 @@ contract TestCallback {
     }
 
     function _addLiquidity(bytes calldata data) internal returns (bytes memory) {
-        (
-            ,  // action
+        (, // action
             PoolKey memory key,
             address sender,
             int24 tickLower,
@@ -231,10 +240,7 @@ contract TestCallback {
         (BalanceDelta delta,) = pm.modifyLiquidity(
             key,
             ModifyLiquidityParams({
-                tickLower: tickLower,
-                tickUpper: tickUpper,
-                liquidityDelta: liquidityDelta,
-                salt: bytes32(0)
+                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: liquidityDelta, salt: bytes32(0)
             }),
             ""
         );
@@ -246,12 +252,14 @@ contract TestCallback {
         if (d0 < 0) {
             address token0 = Currency.unwrap(key.currency0);
             uint256 amt = uint256(uint128(-d0));
+            require(amt <= maxAmount0, "max amount0 exceeded");
             IERC20(token0).safeTransferFrom(sender, address(pm), amt);
             pm.settle();
         }
         if (d1 < 0) {
             address token1 = Currency.unwrap(key.currency1);
             uint256 amt = uint256(uint128(-d1));
+            require(amt <= maxAmount1, "max amount1 exceeded");
             IERC20(token1).safeTransferFrom(sender, address(pm), amt);
             pm.settle();
         }
@@ -260,8 +268,7 @@ contract TestCallback {
     }
 
     function _swap(bytes calldata data) internal returns (bytes memory) {
-        (
-            ,  // action
+        (, // action
             PoolKey memory key,
             address sender,
             bool zeroForOne,
