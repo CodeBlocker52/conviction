@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -165,13 +166,13 @@ export async function confirm(prompt, expectedText) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("Execution requires an interactive terminal so the transaction plan can be confirmed.");
   }
-  process.stdout.write(`${prompt}\nType ${expectedText} to continue: `);
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk);
-    break;
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  let answer;
+  try {
+    answer = await terminal.question(`${prompt}\nType ${expectedText} to continue: `);
+  } finally {
+    terminal.close();
   }
-  const answer = Buffer.concat(chunks).toString("utf8").trim();
   if (answer !== expectedText) throw new Error("Confirmation did not match; no next action was sent.");
 }
 
