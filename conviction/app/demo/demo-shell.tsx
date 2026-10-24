@@ -3,9 +3,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { formatUnits } from "viem";
 import { useDemo } from "../demo-context";
 import ThemeToggle from "../theme-toggle";
 import { useWallet } from "../hooks/useWallet";
+import { addresses, erc20Abi, publicClient } from "../lib/contracts";
 
 const navigation = [
   { label: "Home", href: "/demo" },
@@ -31,10 +33,52 @@ export default function DemoShell({ children }: { children: ReactNode }) {
   const wallet = useWallet();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [walletError, setWalletError] = useState("");
+  const [usdcBalance, setUsdcBalance] = useState<bigint | null>(null);
+  const [balanceError, setBalanceError] = useState("");
 
   useEffect(() => {
     document.title = `${pageTitles[pathname] ?? "Demo"} — Wavefund`;
   }, [pathname]);
+
+  useEffect(() => {
+    const address = wallet.address;
+    if (!address) {
+      setUsdcBalance(null);
+      setBalanceError("");
+      return;
+    }
+
+    let active = true;
+    const refreshBalance = () => {
+      publicClient.readContract({
+        address: addresses.usdc,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [address],
+      }).then((balance) => {
+        if (!active) return;
+        setUsdcBalance(balance);
+        setBalanceError("");
+      }).catch((error: unknown) => {
+        if (!active) return;
+        setBalanceError(`Could not read ERC-20 USDC balance: ${error instanceof Error ? error.message : "Unknown RPC error."}`);
+      });
+    };
+
+    refreshBalance();
+    const timer = window.setInterval(refreshBalance, 15_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [wallet.address]);
+
+  const shortAddress = wallet.address
+    ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}`
+    : "";
+  const balanceText = usdcBalance === null
+    ? "USDC…"
+    : `${Number(formatUnits(usdcBalance, 6)).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC`;
 
   return (
     <div className="demo-app">
@@ -90,14 +134,15 @@ export default function DemoShell({ children }: { children: ReactNode }) {
                   ? wallet.switchToArc()
                   : wallet.connect();
                 connectOrSwitch.catch((error: unknown) => {
-                  setWalletError(error instanceof Error ? error.message : "Could not connect wallet.");
+                  setWalletError(error instanceof Error ? error.message : "The wallet returned an unknown error.");
                 });
               }}
+              title={wallet.address ? `${wallet.address} · ${balanceText}` : undefined}
             >
               {wallet.address && wallet.chainId !== 5_042_002
-                ? "Switch to Arc"
+                ? `${shortAddress} · Switch to Arc`
                 : wallet.address
-                  ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}`
+                  ? `${shortAddress} · ${balanceText}`
                   : wallet.connecting
                     ? "Connecting…"
                     : "Connect wallet"}
@@ -105,9 +150,9 @@ export default function DemoShell({ children }: { children: ReactNode }) {
           )}
         </div>
       </header>
-      {mode === "live" && (walletError || wallet.error || (wallet.address && wallet.chainId !== 5_042_002)) && (
+      {mode === "live" && (walletError || wallet.error || balanceError || (wallet.address && wallet.chainId !== 5_042_002)) && (
         <div className="storage-warning page-shell" role="status">
-          {walletError || wallet.error || "Switch your wallet to Arc Testnet to transact."}
+          {walletError || wallet.error || balanceError || "Switch your wallet to Arc Testnet to transact."}
         </div>
       )}
       {children}
