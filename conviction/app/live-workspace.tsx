@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { DemoWorkspaceView } from "./demo-workspace";
 import { addresses, arcTestnet } from "./lib/contracts";
-import { toTokenAmount, toUsdc, useQuantumRound, type LiveProposal } from "./hooks/useQuantumRound";
+import { toShareAmount, toTokenAmount, toUsdc, useQuantumRound, type LiveProposal } from "./hooks/useQuantumRound";
 import { useWallet } from "./hooks/useWallet";
 
 function money(value: number) {
@@ -33,6 +33,8 @@ export default function LiveWorkspace({
   const [depositAmount, setDepositAmount] = useState("0.1");
   const [claimAmount, setClaimAmount] = useState("0.1");
   const [tradeAmount, setTradeAmount] = useState("0.1");
+  const [vaultDepositAmount, setVaultDepositAmount] = useState("1");
+  const [vaultWithdrawAmount, setVaultWithdrawAmount] = useState("");
   const [side, setSide] = useState<"LONG" | "SHORT">("LONG");
   const proposal = round?.proposals.find((item) => item.id === selectedId) ?? round?.proposals[0] ?? null;
   const currentAllocation = snapshot?.vault.tEthAllocationBps ?? 0;
@@ -40,6 +42,10 @@ export default function LiveWorkspace({
   const canTransact = Boolean(wallet.address && wallet.chainId === arcTestnet.id);
 
   const history = useMemo(() => snapshot?.history.slice().reverse() ?? [], [snapshot?.history]);
+  const vaultShareCount = toShareAmount(snapshot?.vault.shareSupply ?? 0n);
+  const vaultSharePrice = vaultShareCount > 0
+    ? toUsdc(snapshot?.vault.navUsdc ?? 0n) / vaultShareCount
+    : 1;
 
   async function perform(label: string, operation: () => Promise<`0x${string}`>) {
     try {
@@ -91,12 +97,21 @@ export default function LiveWorkspace({
           </article>
         </section>
         <section className="vault-flow-panel" aria-label="Vault deposit and withdrawal">
-          <div className="vault-flow-copy"><span className="eyebrow">VAULT FLOWS</span><h3>Deposit into the fund</h3><p>Vault deposits open in the next contract release.</p></div>
+          <div className="vault-flow-copy">
+            <span className="eyebrow">VAULT FLOWS · WAVE SHARES</span>
+            <h3>Deposit into the fund</h3>
+            <p>Deposits and withdrawals queue for the next decision boundary and use the same oracle-marked NAV per share.</p>
+            <p>Your balance: {toShareAmount(snapshot.vault.shareBalance).toLocaleString(undefined, { maximumFractionDigits: 6 })} WAVE · Share price: {money(vaultSharePrice)}</p>
+            {snapshot.vault.queuedDeposit > 0n && <p>Queued deposit: {money(toUsdc(snapshot.vault.queuedDeposit))} USDC</p>}
+            {snapshot.vault.queuedWithdrawal > 0n && <p>Queued withdrawal: {toShareAmount(snapshot.vault.queuedWithdrawal).toLocaleString(undefined, { maximumFractionDigits: 6 })} WAVE</p>}
+          </div>
           <div className="vault-flow-controls">
-            <label className="inline-money-input"><input aria-label="Vault deposit amount in USDC" type="number" disabled placeholder="USDC" /><span>USDC</span></label>
-            <button className="button button-outline" type="button" disabled>Queue deposit</button>
-            <label className="inline-money-input"><input aria-label="Vault shares to withdraw" type="number" disabled placeholder="Shares to withdraw" /><span>shares</span></label>
-            <button className="button button-outline" type="button" disabled>Queue withdrawal</button>
+            <label className="inline-money-input"><input aria-label="Vault deposit amount in USDC" type="number" min="0.000001" step="0.1" value={vaultDepositAmount} onChange={(event) => setVaultDepositAmount(event.target.value)} placeholder="USDC" /><span>USDC</span></label>
+            <button className="button button-outline" type="button" disabled={!canTransact} onClick={() => perform("Queue vault deposit", () => live.depositToVault(vaultDepositAmount))}>Queue deposit</button>
+            <label className="inline-money-input"><input aria-label="Vault shares to withdraw" type="number" min="0.000000000000000001" step="0.1" value={vaultWithdrawAmount} onChange={(event) => setVaultWithdrawAmount(event.target.value)} placeholder="Shares to withdraw" /><span>WAVE</span></label>
+            <button className="button button-outline" type="button" disabled={!canTransact || snapshot.vault.shareBalance === 0n} onClick={() => perform("Queue vault withdrawal", () => live.withdrawFromVault(vaultWithdrawAmount))}>Queue withdrawal</button>
+            {snapshot.vault.queuedDeposit > 0n && <button className="button button-outline" type="button" disabled={!canTransact} onClick={() => perform("Cancel vault deposit", live.cancelVaultDeposit)}>Cancel deposit</button>}
+            {snapshot.vault.queuedWithdrawal > 0n && <button className="button button-outline" type="button" disabled={!canTransact} onClick={() => perform("Cancel vault withdrawal", live.cancelVaultWithdrawal)}>Cancel withdrawal</button>}
           </div>
         </section>
         <section className="positions-panel">

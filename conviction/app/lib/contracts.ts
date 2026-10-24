@@ -16,7 +16,8 @@ export const addresses = {
   market: getAddress("0xEC6d767c62029A2868E1475873D9C2aE172F72df"),
   quantumRound: getAddress("0x82a666Fc211c6A9a2509F941eA974AB0a7dDDb41"),
   resolver: getAddress("0xeA89585fb62e6eB63D101409093D88A94A936A4C"),
-  vault: getAddress("0x65648366C96Af7b3c2ECdC1B78A06d975A1505F3"),
+  vault: getAddress("0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D"),
+  legacyVault: getAddress("0x65648366C96Af7b3c2ECdC1B78A06d975A1505F3"),
   priceOracle: getAddress("0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d"),
   quantumLp: getAddress("0x885512902D1f5d05f81A678FdFFE0e339623c415"),
 } as const;
@@ -30,6 +31,7 @@ export const erc20Abi = parseAbi([
   "function allowance(address owner,address spender) view returns (uint256)",
   "function approve(address spender,uint256 value) returns (bool)",
   "function balanceOf(address owner) view returns (uint256)",
+  "function totalSupply() view returns (uint256)",
 ]);
 
 export const quantumRoundAbi = parseAbi([
@@ -66,6 +68,14 @@ export const proposalTokensAbi = parseAbi([
 export const vaultAbi = parseAbi([
   "function totalVaultUsdc() view returns (uint256)",
   "function totalVaultTEth() view returns (uint256)",
+  "function totalQueuedDepositUsdc() view returns (uint256)",
+  "function totalQueuedWithdrawalShares() view returns (uint256)",
+  "function queuedDepositUsdc(address) view returns (uint256)",
+  "function queuedWithdrawalShares(address) view returns (uint256)",
+  "function requestDeposit(uint256)",
+  "function requestWithdraw(uint256)",
+  "function cancelDepositRequest()",
+  "function cancelWithdrawRequest()",
   "function spotPriceTEthInUsdc() view returns (uint256)",
   "function oraclePriceTEthInUsdc() view returns (uint256)",
   "function roundState(uint256) view returns (uint256 startValueUsdc,uint256 tEthAtStart,uint256 usdcAtStart,uint256 startPriceUsdc,uint64 navTimestamp,bool executed,bool reported,bool cancelled)",

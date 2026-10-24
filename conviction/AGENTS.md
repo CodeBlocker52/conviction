@@ -10,7 +10,7 @@
 | ConstantProductMarket | `0xEC6d767c62029A2868E1475873D9C2aE172F72df` |
 | QuantumRound | `0x82a666Fc211c6A9a2509F941eA974AB0a7dDDb41` |
 | Resolver | `0xeA89585fb62e6eB63D101409093D88A94A936A4C` |
-| WavefundVault | `0x65648366C96Af7b3c2ECdC1B78A06d975A1505F3` |
+| WavefundVault (queued WAVE shares) | `0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D` |
 | QuantumLP | `0x885512902D1f5d05f81A678FdFFE0e339623c415` |
 | MockPriceOracle | `0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d` |
 | USDC (predeploy) | `0x3600000000000000000000000000000000000000` |
@@ -29,6 +29,7 @@
 - Vault trade output has a 500 bps adverse-slippage cap; a breach reverts the nested swap and cancels the round for full deposit refunds
 - `MAX_PROPOSALS_PER_ROUND` is 10 total proposals, including status quo proposal 0
 - On a fresh deployment, grant `RESOLVER_ROLE` to WavefundVault, `VAULT_ROLE` on QuantumRound to the vault, and `QUANTUM_ROUND_ROLE` on the vault to QuantumRound; do not grant `RESOLVER_ROLE` to the keeper
+- The prior WavefundVault `0x65648366C96Af7b3c2ECdC1B78A06d975A1505F3` is superseded. Its 2 USDC is unrecoverable because its deployed code has no withdrawal or arbitrary-call path.
 - QuantumRound admin rescue is capped by unallocated `protocolLiquiditySeed`; round-allocated seed and user deposits cannot be rescued
 - QuantumLP no longer has a global withdrawal toggle; providers can withdraw their own LP balance at any time
 - All proposal/market state keyed by (roundId, proposalId) to avoid cross-round collisions
@@ -57,4 +58,4 @@
 - Proposal bond is `1 USDC` (`DEFAULT_BOND` is a constant, with no admin setter); do not change deployment state to lower it.
 - Keep USDC transfers and other write operations on the real Arc RPC, never Forge's local simulation.
 - Frontend uses plain viem and `window.ethereum`; do not add wagmi.
-- Live-mode WavefundVault user deposit/withdraw controls remain disabled until the queued-share contract upgrade is deployed; QuantumLP is separate market liquidity custody.
+- Live-mode WavefundVault deposits and withdrawals queue as WAVE shares and process at the next `executeTrade` decision boundary; QuantumLP is separate market liquidity custody.

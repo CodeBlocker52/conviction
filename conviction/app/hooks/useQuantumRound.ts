@@ -70,6 +70,10 @@ export type LiveSnapshot = {
     oraclePriceUsdc: bigint;
     spotPriceUsdc: bigint;
     tEthAllocationBps: number;
+    shareSupply: bigint;
+    shareBalance: bigint;
+    queuedDeposit: bigint;
+    queuedWithdrawal: bigint;
   };
   history: VaultHistoryItem[];
 };
@@ -83,6 +87,13 @@ function decimalUnits(value: string) {
   return amount;
 }
 
+function shareUnits(value: string) {
+  if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error("Enter a valid positive share amount.");
+  const amount = parseUnits(value, 18);
+  if (amount <= 0n) throw new Error("Share amount must be greater than zero.");
+  return amount;
+}
+
 export function useQuantumRound(enabled: boolean) {
   const { address, chainId, walletClient } = useWallet();
   const [snapshot, setSnapshot] = useState<LiveSnapshot | null>(null);
@@ -91,7 +102,18 @@ export function useQuantumRound(enabled: boolean) {
   const [refreshIndex, setRefreshIndex] = useState(0);
 
   const refresh = useCallback(async () => {
-    const [roundCount, usdcBalance, vaultUsdc, vaultTEth, oraclePrice, spotPrice] = await Promise.all([
+    const [
+      roundCount,
+      usdcBalance,
+      vaultUsdc,
+      vaultTEth,
+      oraclePrice,
+      spotPrice,
+      shareSupply,
+      shareBalance,
+      queuedDeposit,
+      queuedWithdrawal,
+    ] = await Promise.all([
       publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "roundCount" }),
       address
         ? publicClient.readContract({ address: addresses.usdc, abi: erc20Abi, functionName: "balanceOf", args: [address] })
@@ -100,6 +122,16 @@ export function useQuantumRound(enabled: boolean) {
       publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "totalVaultTEth" }),
       publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "oraclePriceTEthInUsdc" }),
       publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "spotPriceTEthInUsdc" }),
+      publicClient.readContract({ address: addresses.vault, abi: erc20Abi, functionName: "totalSupply" }),
+      address
+        ? publicClient.readContract({ address: addresses.vault, abi: erc20Abi, functionName: "balanceOf", args: [address] })
+        : Promise.resolve(0n),
+      address
+        ? publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "queuedDepositUsdc", args: [address] })
+        : Promise.resolve(0n),
+      address
+        ? publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "queuedWithdrawalShares", args: [address] })
+        : Promise.resolve(0n),
     ]);
     const navUsdc = vaultUsdc + (vaultTEth * oraclePrice) / 10n ** 18n;
     const tEthValue = (vaultTEth * oraclePrice) / 10n ** 18n;
@@ -305,6 +337,10 @@ export function useQuantumRound(enabled: boolean) {
         oraclePriceUsdc: oraclePrice,
         spotPriceUsdc: spotPrice,
         tEthAllocationBps,
+        shareSupply,
+        shareBalance,
+        queuedDeposit,
+        queuedWithdrawal,
       },
       history,
     });
@@ -481,6 +517,69 @@ export function useQuantumRound(enabled: boolean) {
     }));
   }, [ensureWallet, submit]);
 
+  const depositToVault = useCallback(async (amount: string) => {
+    const { address: account, walletClient: client } = ensureWallet();
+    const amountUnits = decimalUnits(amount);
+    const allowance = await publicClient.readContract({
+      address: addresses.usdc,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [account, addresses.vault],
+    });
+    if (allowance < amountUnits) {
+      await submit(() => client.writeContract({
+        account,
+        chain: arcTestnet,
+        address: addresses.usdc,
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [addresses.vault, amountUnits],
+      }));
+    }
+    return submit(() => client.writeContract({
+      account,
+      chain: arcTestnet,
+      address: addresses.vault,
+      abi: vaultAbi,
+      functionName: "requestDeposit",
+      args: [amountUnits],
+    }));
+  }, [ensureWallet, submit]);
+
+  const withdrawFromVault = useCallback(async (shares: string) => {
+    const { address: account, walletClient: client } = ensureWallet();
+    return submit(() => client.writeContract({
+      account,
+      chain: arcTestnet,
+      address: addresses.vault,
+      abi: vaultAbi,
+      functionName: "requestWithdraw",
+      args: [shareUnits(shares)],
+    }));
+  }, [ensureWallet, submit]);
+
+  const cancelVaultDeposit = useCallback(async () => {
+    const { address: account, walletClient: client } = ensureWallet();
+    return submit(() => client.writeContract({
+      account,
+      chain: arcTestnet,
+      address: addresses.vault,
+      abi: vaultAbi,
+      functionName: "cancelDepositRequest",
+    }));
+  }, [ensureWallet, submit]);
+
+  const cancelVaultWithdrawal = useCallback(async () => {
+    const { address: account, walletClient: client } = ensureWallet();
+    return submit(() => client.writeContract({
+      account,
+      chain: arcTestnet,
+      address: addresses.vault,
+      abi: vaultAbi,
+      functionName: "cancelWithdrawRequest",
+    }));
+  }, [ensureWallet, submit]);
+
   return {
     snapshot,
     loading,
@@ -491,6 +590,10 @@ export function useQuantumRound(enabled: boolean) {
     trade,
     collapse,
     redeem,
+    depositToVault,
+    withdrawFromVault,
+    cancelVaultDeposit,
+    cancelVaultWithdrawal,
   };
 }
 
@@ -500,4 +603,8 @@ export function toUsdc(value: bigint) {
 
 export function toTokenAmount(value: bigint) {
   return Number(formatUnits(value, 6));
+}
+
+export function toShareAmount(value: bigint) {
+  return Number(formatUnits(value, 18));
 }

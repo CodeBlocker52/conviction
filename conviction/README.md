@@ -538,7 +538,17 @@ In mock mode, start with **Connect demo account**, then:
 
 Mock state persists in the browser's local storage and can be cleared with **Reset demo**. Mock balances, price impact, oracle results, and transactions are simulated in the frontend. LP fees and impermanent loss are not modeled.
 
-In live mode, connect a wallet to Arc Testnet to read the current round, proposals, market spot prices, wallet positions, oracle-marked vault NAV/allocation, and executed-round history. The markets and portfolio views provide writes for round deposits, credit claims, LONG/SHORT buys and sells, round collapse after its trading window, and redemptions after settlement. The vault shows live NAV, allocation, oracle/v4 prices, and on-chain decision history. User vault deposit/withdraw buttons are intentionally disabled until the queued-share contract release; the live UI notes: “Vault deposits open in the next contract release.” This is separate from QuantumLP market liquidity.
+In live mode, connect a wallet to Arc Testnet to read the current round, proposals, market spot prices, wallet positions, oracle-marked vault NAV/allocation, WAVE balances, queued vault flows, and executed-round history. The markets and portfolio views provide writes for round deposits, credit claims, LONG/SHORT buys and sells, round collapse after its trading window, and redemptions after settlement. The vault supports queued USDC deposits and WAVE-share withdrawals, processed at the next `executeTrade` decision boundary using the same oracle-marked NAV/share supply. This is separate from QuantumLP market liquidity.
+
+### Live-mode smoke checklist
+
+1. Open `/demo`, select **Use on-chain data**, choose **Connect wallet**, and approve MetaMask. If prompted, add or switch to Arc Testnet (chain ID `5042002`, RPC `https://rpc.testnet.arc.io`, USDC gas).
+2. Confirm the wallet address is displayed and the wallet balance reflects ERC-20 USDC at `0x3600000000000000000000000000000000000000`. Do not add this to MetaMask's native balance; both views represent the same funds.
+3. On `/demo/vault`, check NAV, USDC/tETH allocation, oracle and v4 prices, WAVE balance, share price, and queued-flow balances. The current share vault is `0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D`; oracle-marked NAV changes with its funded assets and current oracle price.
+4. Before a round opens, a connected and funded wallet can **Queue deposit** (approve USDC on first use) and cancel that pending deposit. A WAVE holder can **Queue withdrawal** or cancel it. Requests do not mint/burn shares or move withdrawal proceeds until the next vault `executeTrade` decision boundary.
+5. Before a round opens, round deposit/credit/trade, collapse, redeem, and keeper-only vault execution actions are unavailable. After a round opens, round deposit, claim, and trades become available during the trading window; collapse appears after the window closes, and redemption appears after settlement.
+
+For a funded test round, `npm run demo:round` runs the scripted two-wallet flow and appends confirmed transaction hashes to `contracts/deployments/demo-round.md`. It uses deployer and keeper keys from the ignored `.env`; never commit that file.
 
 ---
 
