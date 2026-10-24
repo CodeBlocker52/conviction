@@ -64,11 +64,12 @@ Each proposal uses a constant-product market (x*y=k) where:
 - x = credit reserve (USDC units)
 - y = LONG reserve (token units)
 - The deployed contract's raw `spotPrice` is `creditReserve / longReserve`, scaled by `1e18`; it is credits per LONG token, starts at `1.0` with equal reserves, and is unbounded.
-- The UI maps that reserve ratio to a bounded implied LONG probability: `creditReserve / (creditReserve + longReserve)`. This is `q / (1 + q)` for raw spot ratio `q`; it starts at `0.5` and rises when LONG is bought. The implied winning return is `(1 - p) / p`.
+- The UI maps that reserve ratio to a bounded LONG probability: `creditReserve / (creditReserve + longReserve)`. This is `q / (1 + q)` for raw spot ratio `q`; it starts at `0.5` and rises when LONG is bought. The scalar implied return is `rMin + p * (rMax - rMin)`, displayed as a percentage change from 1.0.
+- SHORT trades are fixed 1:1 in this Phase A contract, constrained by the market's credit reserve on buys and `shortIssued` on sells; they are not reserve-priced CPMM swaps.
 - Fee = 0.3% (30 bps)
 - TWAP accumulates: price * elapsed_seconds, updated on each trade
 
-For example, the recorded raw spot `1.673306965668276829` is `1.6733` credits per LONG token. The bounded UI probability is `1.6733 / (1 + 1.6733) = 0.6259`, with an implied winning return of about `59.76%`.
+For example, the recorded raw spot `1.673306965668276829` is `1.6733` credits per LONG token (not LONG per credit). The bounded UI probability is `1.6733 / (1 + 1.6733) = 0.6259`. With `rMin = 0.95` and `rMax = 1.05`, the scalar implied return is `0.95 + 0.6259 * (1.05 - 0.95) = 1.01259`, or `+1.26%`. At `p = 0.5`, it is exactly `0.00%`.
 
 This UI conversion does not cap the actual CPMM execution cost: a LONG share can cost more than its maximum one-credit settlement payout. The deployed market is immutable through the current QuantumRound, so correcting execution pricing requires a new bounded binary-market implementation and a coordinated deployment/migration; clamping `spotPrice` alone would only conceal the issue. A replacement market should use complementary LONG/SHORT collateral and a bounded pricing curve (for example LMSR).
 

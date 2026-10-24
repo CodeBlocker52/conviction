@@ -48,6 +48,7 @@ export default function LiveWorkspace({
   const [depositAmount, setDepositAmount] = useState("0.1");
   const [claimAmount, setClaimAmount] = useState("0.1");
   const [tradeAmount, setTradeAmount] = useState("0.1");
+  const [sellAmount, setSellAmount] = useState("");
   const [vaultDepositAmount, setVaultDepositAmount] = useState("1");
   const [vaultWithdrawAmount, setVaultWithdrawAmount] = useState("");
   const [side, setSide] = useState<"LONG" | "SHORT">("LONG");
@@ -219,7 +220,11 @@ export default function LiveWorkspace({
                 <div className="ticket-header"><div><span className="eyebrow">ON-CHAIN MARKET</span><h3>Proposal {proposal.id}</h3></div><span className="ticket-avatar avatar-violet">WF</span></div>
                 <p className="ticket-allocation">{proposal.tEthBps / 100}% tETH · {100 - proposal.tEthBps / 100}% USDC</p>
                 <p className="ticket-rationale">{proposal.rationale || "No proposal rationale was published."}</p>
-                <div className="ticket-prices"><div><span>LONG price · credits</span><strong>{proposal.longPrice.toFixed(4)}</strong></div><div><span>Implied LONG return</span><strong>{impliedReturn(proposal.impliedReturn)}</strong></div></div>
+                <div className="ticket-prices">
+                  <div><span>Bounded LONG probability</span><strong>{proposal.longPrice.toFixed(4)}</strong></div>
+                  <div><span>CPMM spot · credits/LONG</span><strong>{proposal.executionPrice.toFixed(4)}</strong></div>
+                  <div><span>Scalar implied return</span><strong>{impliedReturn(proposal.impliedReturn)}</strong></div>
+                </div>
                 {round.phase === "trading" ? (
                   <>
                     <div className="credit-claim-box">
@@ -232,11 +237,15 @@ export default function LiveWorkspace({
                       <button type="button" className={side === "LONG" ? "active long" : ""} onClick={() => setSide("LONG")}>LONG <span>↑</span></button>
                       <button type="button" className={side === "SHORT" ? "active short" : ""} onClick={() => setSide("SHORT")}>SHORT <span>↓</span></button>
                     </div>
-                    <label className="ticket-label" htmlFor="live-trade-size"><span>Trade amount</span><span>{amount(proposal.creditBalance)} credits available</span></label>
+                    <label className="ticket-label" htmlFor="live-trade-size"><span>Buy amount</span><span>{amount(proposal.creditBalance)} credits available</span></label>
                     <div className="inline-money-input trade-size-input"><input id="live-trade-size" type="number" min="0.000001" step="0.1" value={tradeAmount} onChange={(event) => setTradeAmount(event.target.value)} /><span>USDC units</span></div>
                     <button className="button button-primary ticket-trade-button" type="button" disabled={!canTransact || proposal.creditBalance === 0n} onClick={() => perform(`Buy ${side}`, () => live.trade(round.id, proposal, side, tradeAmount, "buy"))}>Buy {side} shares <span>→</span></button>
                     {(side === "LONG" ? proposal.longBalance : proposal.shortBalance) > 0n && (
-                      <button className="button button-outline ticket-trade-button" type="button" disabled={!canTransact} onClick={() => perform(`Sell ${side}`, () => live.trade(round.id, proposal, side, tradeAmount, "sell"))}>Sell {side} position</button>
+                      <>
+                        <label className="ticket-label" htmlFor="live-sell-size"><span>Sell amount</span><span>{tokenAmount(side === "LONG" ? proposal.longBalance : proposal.shortBalance)} {side} available</span></label>
+                        <div className="inline-money-input trade-size-input"><input id="live-sell-size" type="number" min="0.000000000000000001" step="0.000000000000000001" value={sellAmount} onChange={(event) => setSellAmount(event.target.value)} /><span>{side} shares</span></div>
+                        <button className="button button-outline ticket-trade-button" type="button" disabled={!canTransact || !sellAmount} onClick={() => perform(`Sell ${side}`, () => live.trade(round.id, proposal, side, sellAmount, "sell"))}>Sell {side} position</button>
+                      </>
                     )}
                   </>
                 ) : (
@@ -274,7 +283,8 @@ function LiveProposalCard({
         {proposal.id === 0 && <span className="status-quo">STATUS QUO</span>}
       </div>
       <div className="demo-proposal-bottom">
-        <span>LONG price · credits <strong>{longPrice.toFixed(4)}</strong></span>
+        <span>Bounded LONG probability <strong>{longPrice.toFixed(4)}</strong></span>
+        <span>CPMM spot · credits/LONG <strong>{proposal.executionPrice.toFixed(4)}</strong></span>
         <span>SHORT mint rate <strong>1:1</strong></span>
         <span>Your credits <strong>{amount(proposal.claimedCredits)}</strong></span>
         <span>Your LONG <strong>{tokenAmount(proposal.longBalance)}</strong></span>

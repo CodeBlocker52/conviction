@@ -27,6 +27,7 @@ export type LiveProposal = {
   rationale: string;
   tEthBps: number;
   longPrice: number;
+  executionPrice: number;
   impliedReturn: number | null;
   creditReserve: bigint;
   longReserve: bigint;
@@ -40,6 +41,8 @@ export type LiveRound = {
   id: bigint;
   tradingEnd: bigint;
   evaluationEnd: bigint;
+  rMin: bigint;
+  rMax: bigint;
   proposalCount: number;
   winnerProposalId: number | null;
   collapsed: boolean;
@@ -83,9 +86,9 @@ export type LiveSnapshot = {
 
 const asMessage = (error: unknown) => error instanceof Error ? error.message : "On-chain request failed.";
 
-function decimalUnits(value: string) {
+function decimalUnits(value: string, decimals = 6) {
   if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error("Enter a valid positive amount.");
-  const amount = parseUnits(value, 6);
+  const amount = parseUnits(value, decimals);
   if (amount <= 0n) throw new Error("Amount must be greater than zero.");
   return amount;
 }
@@ -151,6 +154,8 @@ export function useQuantumRound(enabled: boolean) {
         id: baseValues[0],
         tradingEnd: baseValues[1],
         evaluationEnd: baseValues[2],
+        rMin: baseValues[3],
+        rMax: baseValues[4],
         proposalCount: baseValues[7],
         winnerProposalId: baseValues[8],
         collapsed: baseValues[9],
@@ -224,10 +229,14 @@ export function useQuantumRound(enabled: boolean) {
               abi: proposerRegistryAbi,
               functionName: "agents",
               args: [proposal[1]],
-            }))[0];
-          if (!proposerName) throw new Error(`No registered proposer name found for ${proposal[1]}.`);
+            }))[0] || `${proposal[1].slice(0, 6)}…${proposal[1].slice(-4)}`;
           const reserveTotal = market[0] + market[1];
           const longPrice = reserveTotal === 0n ? 0 : Number((market[0] * 10n ** 18n) / reserveTotal) / 1e18;
+          const executionPrice = market[1] === 0n
+            ? 0
+            : Number((market[0] * 10n ** 18n) / market[1]) / 1e18;
+          const expectedReturn = Number(base.rMin) / 1e18
+            + longPrice * Number(base.rMax - base.rMin) / 1e18;
           const [creditBalance, longBalance, shortBalance] = address
             ? await Promise.all([
               publicClient.readContract({ address: creditToken, abi: erc20Abi, functionName: "balanceOf", args: [address] }),
@@ -242,7 +251,8 @@ export function useQuantumRound(enabled: boolean) {
             rationale: proposal[3],
             tEthBps: Number(proposal[2]),
             longPrice,
-            impliedReturn: longPrice === 0 ? null : ((1 - longPrice) / longPrice) * 100,
+            executionPrice,
+            impliedReturn: (expectedReturn - 1) * 100,
             creditReserve: market[0],
             longReserve: market[1],
             claimedCredits,
@@ -262,6 +272,8 @@ export function useQuantumRound(enabled: boolean) {
         id: base.id,
         tradingEnd: base.tradingEnd,
         evaluationEnd: base.evaluationEnd,
+        rMin: base.rMin,
+        rMax: base.rMax,
         proposalCount: Number(base.proposalCount),
         winnerProposalId: base.collapsed ? Number(base.winnerProposalId) : null,
         collapsed: base.collapsed,
@@ -433,7 +445,14 @@ export function useQuantumRound(enabled: boolean) {
     action: "buy" | "sell",
   ) => {
     const { address: account, walletClient: client } = ensureWallet();
-    const amountUnits = decimalUnits(amount);
+    const amountUnits = decimalUnits(amount, action === "sell" ? 18 : 6);
+    if (action === "buy" && amountUnits > proposal.creditBalance) {
+      throw new Error("Buy amount exceeds your available proposal credits.");
+    }
+    const heldTokens = side === "LONG" ? proposal.longBalance : proposal.shortBalance;
+    if (action === "sell" && amountUnits > heldTokens) {
+      throw new Error(`Sell amount exceeds your available ${side} balance.`);
+    }
     const marketState = await publicClient.readContract({
       address: addresses.market,
       abi: proposalMarketAbi,
@@ -460,13 +479,16 @@ export function useQuantumRound(enabled: boolean) {
       }));
     }
     if (action === "buy" && side === "SHORT") {
+      const estimate = amountUnits;
+      if (marketState[0] < amountUnits) throw new Error("Insufficient market credit reserve for this SHORT purchase.");
+      const minimum = (estimate * 9_950n) / 10_000n;
       return submit(() => client.writeContract({
         account,
         chain: arcTestnet,
         address: addresses.quantumRound,
         abi: quantumRoundAbi,
         functionName: "buyShort",
-        args: [roundId, BigInt(proposal.id), amountUnits, amountUnits],
+        args: [roundId, BigInt(proposal.id), amountUnits, minimum],
       }));
     }
     if (action === "sell" && side === "LONG") {
@@ -482,13 +504,16 @@ export function useQuantumRound(enabled: boolean) {
         args: [roundId, BigInt(proposal.id), amountUnits, minimum],
       }));
     }
+    const estimate = amountUnits;
+    if (marketState[2] < amountUnits) throw new Error("Insufficient issued SHORT supply for this sale.");
+    const minimum = (estimate * 9_950n) / 10_000n;
     return submit(() => client.writeContract({
       account,
       chain: arcTestnet,
       address: addresses.quantumRound,
       abi: quantumRoundAbi,
       functionName: "sellShort",
-      args: [roundId, BigInt(proposal.id), amountUnits, amountUnits],
+      args: [roundId, BigInt(proposal.id), amountUnits, minimum],
     }));
   }, [ensureWallet, submit]);
 
