@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "demo:round": "node --env-file=.env contracts/script/demo-round.mjs",
     "oracle:update": "node --env-file=.env contracts/script/update-oracle.mjs",
     "oracle:start": "node --env-file=.env contracts/script/update-oracle.mjs start",
     "oracle:stop": "node --env-file=.env contracts/script/update-oracle.mjs stop"
