@@ -86,6 +86,7 @@ const roundAbi = parseAbi([
   "function redeem(uint256 roundId)",
 ]);
 const vaultAbi = parseAbi([
+  "function balanceOf(address account) view returns (uint256)",
   "function totalVaultUsdc() view returns (uint256)",
   "function totalVaultTEth() view returns (uint256)",
   "function totalSupply() view returns (uint256)",
@@ -239,16 +240,12 @@ async function main() {
     publicClient.readContract({ address: usdcAddress, abi: usdcAbi, functionName: "balanceOf", args: [keeper.address] }),
     publicClient.readContract({ address: vaultAddress, abi: vaultAbi, functionName: "totalSupply" }),
   ]);
-  const initialVaultUsdc = await publicClient.readContract({
-    address: vaultAddress,
-    abi: vaultAbi,
-    functionName: "totalVaultUsdc",
-  });
-  const vaultTEth = await publicClient.readContract({
-    address: vaultAddress,
-    abi: vaultAbi,
-    functionName: "totalVaultTEth",
-  });
+  const [initialVaultUsdc, vaultTEth, deployerVaultShares, keeperVaultShares] = await Promise.all([
+    publicClient.readContract({ address: vaultAddress, abi: vaultAbi, functionName: "totalVaultUsdc" }),
+    publicClient.readContract({ address: vaultAddress, abi: vaultAbi, functionName: "totalVaultTEth" }),
+    publicClient.readContract({ address: vaultAddress, abi: vaultAbi, functionName: "balanceOf", args: [deployer.address] }),
+    publicClient.readContract({ address: vaultAddress, abi: vaultAbi, functionName: "balanceOf", args: [keeper.address] }),
+  ]);
   const [keeperAuthorized, vaultCode, oracleCode] = await Promise.all([
     publicClient.readContract({
       address: quantumRoundAddress,
@@ -263,8 +260,8 @@ async function main() {
   if (!vaultCode || vaultCode === "0x" || !oracleCode || oracleCode === "0x") {
     throw new Error("The current vault or oracle deployment has no code.");
   }
-  if (vaultSupply !== 0n || vaultTEth !== 0n) {
-    throw new Error("The vault has outstanding shares or tETH; refusing to reuse it for this demo.");
+  if (vaultTEth !== 0n || vaultSupply !== deployerVaultShares || keeperVaultShares !== 0n) {
+    throw new Error("The vault has tETH or shares outside the deployer; refusing to use investor funds for the demo.");
   }
   if (seed < perProposal * 4n) throw new Error("QuantumRound seed cannot fund the status quo and three proposals.");
   if (deployerBalance < 4_000_000n || keeperBalance < 2_500_000n) {
