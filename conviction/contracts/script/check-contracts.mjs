@@ -114,6 +114,28 @@ function checkAbi(label, abi, address) {
 }
 
 for (const [label, abi, address] of abiChecks) checkAbi(label, abi, address);
+
+for (const [contractAddress, abi, functionName, expectedAddress] of [
+  [deployment.contracts.quantumRound, abis.quantumRoundAbi, "market", deployment.contracts.market],
+  [deployment.contracts.quantumRound, abis.quantumRoundAbi, "proposalTokens", deployment.contracts.proposalTokens],
+  [deployment.contracts.quantumRound, abis.quantumRoundAbi, "proposerRegistry", deployment.contracts.proposerRegistry],
+  [deployment.contracts.quantumRound, abis.quantumRoundAbi, "resolver", deployment.contracts.resolver],
+  [deployment.contracts.vault, abis.wavefundVaultAbi, "quantumRound", deployment.contracts.quantumRound],
+  [deployment.contracts.vault, abis.wavefundVaultAbi, "resolver", deployment.contracts.resolver],
+  [deployment.contracts.vault, abis.wavefundVaultAbi, "priceOracle", deployment.contracts.priceOracle],
+  [deployment.contracts.vault, abis.wavefundVaultAbi, "poolManager", deployment.contracts.poolManager],
+  [deployment.contracts.vault, abis.wavefundVaultAbi, "tEth", deployment.contracts.testAsset],
+]) {
+  const linkedAddress = await client.readContract({
+    address: contractAddress,
+    abi,
+    functionName,
+  });
+  if (typeof linkedAddress !== "string" || linkedAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
+    throw new Error(`${functionName} wired into ${contractAddress} does not match current.json (${expectedAddress}).`);
+  }
+}
+
 for (const [label, address] of [
   ["tETH", deployment.contracts.testAsset],
   ["WavefundVault shares", deployment.contracts.vault],
