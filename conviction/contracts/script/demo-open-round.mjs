@@ -59,12 +59,38 @@ const poolKeyType = {
 };
 const args = process.argv.slice(2);
 const execute = args.includes("--execute");
+const testMode = args.includes("--test");
 const minutesIndex = args.indexOf("--minutes");
 const tradingMinutes = minutesIndex === -1
   ? Number(process.env.DEMO_TRADING_WINDOW_MINUTES ?? 15)
   : Number(args[minutesIndex + 1]);
 if (!Number.isInteger(tradingMinutes) || tradingMinutes < 3 || tradingMinutes > 1_440) {
   throw new Error("Trading window must be between 3 and 1440 whole minutes.");
+}
+
+function liquidityAmountsInRange(liquidity, sqrtPriceX96, sqrtLower, sqrtUpper) {
+  if (liquidity === 0n) return { usdcMax: 0n, tEthMax: 0n };
+  const amount0 = sqrtPriceX96 >= sqrtUpper
+    ? 0n
+    : ceilDiv(liquidity * (sqrtUpper - sqrtPriceX96) * q96, sqrtPriceX96 * sqrtUpper);
+  const amount1 = sqrtPriceX96 <= sqrtLower
+    ? 0n
+    : ceilDiv(liquidity * (sqrtPriceX96 - sqrtLower), q96);
+  return {
+    usdcMax: ceilMulDiv(amount0, 10_100n, 10_000n) + 1n,
+    tEthMax: ceilMulDiv(amount1, 10_100n, 10_000n) + 1n,
+  };
+}
+
+function concentratedRangeAtOracle(sqrtPriceX96) {
+  const lowerTarget = sqrt((sqrtPriceX96 * sqrtPriceX96 * 9_000n) / 10_000n);
+  const upperTarget = sqrt((sqrtPriceX96 * sqrtPriceX96 * 11_000n) / 10_000n);
+  const toTick = (sqrtValue) => (
+    2 * Math.log(Number(sqrtValue) / Number(q96)) / Math.log(1.0001)
+  );
+  const lowerTick = Math.max(minTick, Math.floor(toTick(lowerTarget) / tickSpacing) * tickSpacing);
+  const upperTick = Math.min(maxTick, Math.ceil(toTick(upperTarget) / tickSpacing) * tickSpacing);
+  return { sqrtLower: sqrtPriceAtTick(lowerTick), sqrtUpper: sqrtPriceAtTick(upperTick) };
 }
 
 function ceilDiv(numerator, denominator) {
@@ -227,7 +253,21 @@ async function sendCallback(label, walletClient, payload) {
   return hash;
 }
 
-function printPlan({ quote, oraclePrice, pool, liquidityToAdd, liquidityCaps, rebalance, seed, seedDeficit, perProposal, bond, balances }) {
+function printPlan({
+  quote,
+  oraclePrice,
+  pool,
+  liquidityToAdd,
+  liquidityCaps,
+  fullRangeCaps,
+  concentratedCaps,
+  rebalance,
+  seed,
+  seedDeficit,
+  perProposal,
+  bond,
+  balances,
+}) {
   const bondRequirement = bond * 2n;
   const keeperBondRequirement = bond;
   const usdcRequirement = liquidityCaps.usdcMax
@@ -239,9 +279,20 @@ function printPlan({ quote, oraclePrice, pool, liquidityToAdd, liquidityCaps, re
   console.log(`Current v4 spot: ${usdc(pool.spotPrice)} USDC/tETH`);
   console.log(`Oracle target: ${usdc(oraclePrice)} USDC/tETH`);
   console.log(`Current deviation: ${Number(rebalance.deviationBps) / 100}% (limit 0.50%)`);
-  console.log("Depth target: under 0.90% spot impact for a 1 USDC exact-input trade.");
-  console.log(`Liquidity to add: ${liquidityToAdd.toString()} units`);
-  console.log(`Maximum liquidity contribution: ${usdc(liquidityCaps.usdcMax)} USDC and ${usdc(liquidityCaps.tEthMax, 18)} tETH`);
+  if (testMode) {
+    console.log("TEST MODE: no deep-liquidity addition; only align the existing pool, then open a low-cost round.");
+    console.log("Real-demo depth target: under 0.90% spot impact for a 1 USDC exact-input trade.");
+    console.log(`Full-range depth contribution estimate: ${usdc(fullRangeCaps.usdcMax)} USDC and ${usdc(fullRangeCaps.tEthMax, 18)} tETH`);
+    console.log(`Concentrated ±10% contribution estimate: ${usdc(concentratedCaps.usdcMax)} USDC and ${usdc(concentratedCaps.tEthMax, 18)} tETH`);
+    const fullCost = fullRangeCaps.usdcMax + (fullRangeCaps.tEthMax * oraclePrice) / 10n ** 18n;
+    const concentratedCost = concentratedCaps.usdcMax + (concentratedCaps.tEthMax * oraclePrice) / 10n ** 18n;
+    const savingsBps = fullCost === 0n ? 0n : (fullCost - concentratedCost) * 10_000n / fullCost;
+    console.log(`Concentrated liquidity needs approximately ${Number(savingsBps) / 100}% less USDC-value capital than the full-range contribution for the same depth target.`);
+  } else {
+    console.log("Depth target: under 0.90% spot impact for a 1 USDC exact-input trade.");
+    console.log(`Liquidity to add: ${liquidityToAdd.toString()} units`);
+    console.log(`Maximum liquidity contribution: ${usdc(liquidityCaps.usdcMax)} USDC and ${usdc(liquidityCaps.tEthMax, 18)} tETH`);
+  }
   if (rebalance.direction) {
     console.log(`Rebalance input: ${usdc(rebalance.amountIn, rebalance.direction === "USDC" ? 6 : 18)} ${rebalance.direction}`);
     console.log(`Estimated output: ${usdc(rebalance.expectedOut, rebalance.direction === "USDC" ? 18 : 6)} ${rebalance.direction === "USDC" ? "tETH" : "USDC"}`);
@@ -317,9 +368,23 @@ const requiredLiquidity = [
   liquidityForImpact(pool.sqrtPriceX96, 90n),
   liquidityForImpact(sqrtAtOracle, 90n),
 ].reduce((maximum, candidate) => candidate > maximum ? candidate : maximum);
-const liquidityToAdd = requiredLiquidity > pool.liquidity ? requiredLiquidity - pool.liquidity : 0n;
+const depthLiquidityToAdd = requiredLiquidity > pool.liquidity ? requiredLiquidity - pool.liquidity : 0n;
+const liquidityToAdd = testMode ? 0n : depthLiquidityToAdd;
 const liquidityCaps = liquidityAmounts(liquidityToAdd, pool.sqrtPriceX96);
-const rebalance = rebalancePlan(pool.sqrtPriceX96, pool.spotPrice, coinbase.priceUsdc, requiredLiquidity);
+const fullRangeCaps = liquidityAmounts(depthLiquidityToAdd, sqrtAtOracle);
+const concentratedRange = concentratedRangeAtOracle(sqrtAtOracle);
+const concentratedCaps = liquidityAmountsInRange(
+  depthLiquidityToAdd,
+  sqrtAtOracle,
+  concentratedRange.sqrtLower,
+  concentratedRange.sqrtUpper,
+);
+const rebalance = rebalancePlan(
+  pool.sqrtPriceX96,
+  pool.spotPrice,
+  coinbase.priceUsdc,
+  testMode ? pool.liquidity : requiredLiquidity,
+);
 const seedDeficit = perProposal * 4n > seed ? perProposal * 4n - seed : 0n;
 const balances = { deployerUsdc, deployerTEth, keeperUsdc };
 
@@ -329,6 +394,8 @@ printPlan({
   pool,
   liquidityToAdd,
   liquidityCaps,
+  fullRangeCaps,
+  concentratedCaps,
   rebalance,
   seed,
   seedDeficit,
@@ -508,7 +575,7 @@ if (finalDeviation > 50n) {
   throw new Error(`Pool remains ${finalDeviation} bps from Coinbase after rebalancing; round not opened.`);
 }
 const finalLiquidityRequirement = liquidityForImpact(postLiquidityPool.sqrtPriceX96, 90n);
-if (postLiquidityPool.liquidity < finalLiquidityRequirement) {
+if (!testMode && postLiquidityPool.liquidity < finalLiquidityRequirement) {
   throw new Error("The pool's active liquidity does not meet the sub-1% 1-USDC trade-depth target; round not opened.");
 }
 
