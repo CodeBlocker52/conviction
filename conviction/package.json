@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run check:contracts && next build",
     "start": "next start",
+    "check:contracts": "node contracts/script/check-contracts.mjs",
     "demo:round": "node --env-file=.env contracts/script/demo-round.mjs",
     "oracle:update": "node --env-file=.env contracts/script/update-oracle.mjs",
     "oracle:start": "node --env-file=.env contracts/script/update-oracle.mjs start",

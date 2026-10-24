@@ -9,6 +9,7 @@
 - Native gas asset: USDC-denominated, 18 decimals. Do not combine its balance with ERC-20 USDC.
 - Arc's blocklist precompile makes Foundry simulation unreliable for USDC transfers. Use the project's viem scripts against the real RPC for token-moving actions; use Forge for build, tests, and deployments that do not move USDC.
 - Source configuration: Solidity `0.8.26`, Osaka EVM, `via_ir = true`; Uniswap v4 core `1.0.2`.
+- `current.json` is the canonical application and demo-script address config. `npm run check:contracts` rebuilds Forge artifacts, regenerates the app ABIs from those artifacts, and checks configured Arc addresses, ABI selectors, and this deployment record.
 
 ## Current deployment
 
