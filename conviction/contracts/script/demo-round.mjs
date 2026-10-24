@@ -400,7 +400,7 @@ async function main() {
   updateRecord("Running");
 
   await updateOracle();
-  await send("WavefundVault executes winner allocation", keeperClient, vaultAddress, vaultAbi, "executeTrade", [
+  await send(`WavefundVault executes ${targetTEthBps} bps tETH allocation`, keeperClient, vaultAddress, vaultAbi, "executeTrade", [
     roundId,
     targetTEthBps,
   ]);
@@ -423,12 +423,20 @@ async function main() {
     abi: vaultAbi,
     functionName: "totalVaultUsdc",
   });
+  const finalVaultTEth = await publicClient.readContract({
+    address: vaultAddress,
+    abi: vaultAbi,
+    functionName: "totalVaultTEth",
+  });
   const vaultShares = await publicClient.readContract({
     address: vaultAddress,
     abi: vaultAbi,
     functionName: "totalSupply",
   });
-  txRows.push({ label: `Final state: round ${roundId} settled=${finalRound[10]}, winner=${finalRound[8]}, vault USDC=${finalVaultUsdc}, WAVE supply=${vaultShares}`, hash: "" });
+  txRows.push({
+    label: `Final state: round ${roundId} settled=${finalRound[10]}, canceled=${finalRound[13]}, winner=${finalRound[8]}, return=${finalRound[11]}, vault USDC=${finalVaultUsdc}, tETH=${finalVaultTEth}, WAVE supply=${vaultShares}`,
+    hash: "",
+  });
   updateRecord("Complete");
 }
 
