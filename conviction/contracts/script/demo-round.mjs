@@ -6,7 +6,7 @@ import {
   parseAbi,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const rpcUrl = process.env.ARC_RPC_URL ?? "https://rpc.testnet.arc.io";
@@ -25,14 +25,20 @@ const demoPath = resolve("contracts/deployments/demo-round.md");
 const startedAt = new Date().toISOString();
 let recordCreated = false;
 
+const previousRecord = existsSync(demoPath) ? readFileSync(demoPath, "utf8").trimEnd() : "";
+const previousRuns = previousRecord
+  ? previousRecord.includes("\n## Attempt ")
+    ? previousRecord
+    : previousRecord.replace(/^# Arc Testnet Demo Round\s*/, "# Arc Testnet Demo Round\n\n## Attempt 1\n\n")
+  : "";
+const attemptNumber = (previousRuns.match(/^## Attempt \d+/gm) ?? []).length + 1;
+
 if (!deployerPrivateKey || !/^0x[0-9a-fA-F]{64}$/.test(deployerPrivateKey)) {
   throw new Error("Set DEPLOYER_PK in the private .env file.");
 }
 if (!keeperPrivateKey || !/^0x[0-9a-fA-F]{64}$/.test(keeperPrivateKey)) {
   throw new Error("Set KEEPER_PK in the private .env file.");
 }
-if (existsSync(demoPath)) throw new Error(`${demoPath} already exists; refusing to overwrite a demo record.`);
-
 const chain = defineChain({
   id: 5_042_002,
   name: "Arc Testnet",
@@ -64,6 +70,7 @@ const roundAbi = parseAbi([
   "function DEFAULT_BOND() view returns (uint256)",
   "function KEEPER_ROLE() view returns (bytes32)",
   "function roundCount() view returns (uint256)",
+  "function deposits(uint256 roundId,address user) view returns (uint256)",
   "function protocolLiquiditySeed() view returns (uint256)",
   "function initialLiquidityPerProposal() view returns (uint256)",
   "function hasRole(bytes32 role,address account) view returns (bool)",
@@ -95,24 +102,22 @@ function updateRecord(status) {
   const rows = txRows.map(({ label, hash }) => hash
     ? `| ${label} | [${hash}](${explorerUrl}/tx/${hash}) | Confirmed |`
     : `| ${label} | — | On-chain read |`);
-  writeFileSync(
-    demoPath,
-    [
-      "# Arc Testnet Demo Round",
+  const currentRun = [
+      `## Attempt ${attemptNumber}`,
       "",
       `Status: ${status}`,
       `Started: ${startedAt}`,
       `Deployer: \`${deployer.address}\``,
       `Keeper: \`${keeper.address}\``,
       "",
-      "This run uses the current QuantumRound and the replacement share-enabled WavefundVault. The admin vault bootstrap is 0.1 USDC so its 50% tETH rebalance swaps the previously smoke-tested 0.05 USDC amount.",
+      "This run uses the current QuantumRound and replacement share-enabled WavefundVault. The selected 7.5% tETH allocation is executed by WavefundVault against the v4 pool, not through the smoke-test callback.",
       "",
       "| Action | Transaction | Result |",
       "|---|---|---|",
       ...rows,
       "",
-    ].join("\n"),
-  );
+    ].join("\n");
+  writeFileSync(demoPath, `${previousRuns ? `${previousRuns}\n\n` : "# Arc Testnet Demo Round\n\n"}${currentRun}`);
 }
 
 async function send(label, client, address, abi, functionName, args) {
@@ -195,7 +200,35 @@ async function main() {
     abi: roundAbi,
     functionName: "roundCount",
   });
-  if (roundCount !== 0n) throw new Error(`Expected no prior rounds; found ${roundCount}.`);
+  let priorCancelledRoundId = 0n;
+  let priorDeployerDeposit = 0n;
+  let priorKeeperDeposit = 0n;
+  if (roundCount > 0n) {
+    const priorRound = await publicClient.readContract({
+      address: quantumRoundAddress,
+      abi: roundAbi,
+      functionName: "rounds",
+      args: [roundCount],
+    });
+    if (!priorRound[10] || !priorRound[13]) {
+      throw new Error(`Round ${roundCount} is not both settled and canceled; refusing to start another demo.`);
+    }
+    priorCancelledRoundId = roundCount;
+    [priorDeployerDeposit, priorKeeperDeposit] = await Promise.all([
+      publicClient.readContract({
+        address: quantumRoundAddress,
+        abi: roundAbi,
+        functionName: "deposits",
+        args: [roundCount, deployer.address],
+      }),
+      publicClient.readContract({
+        address: quantumRoundAddress,
+        abi: roundAbi,
+        functionName: "deposits",
+        args: [roundCount, keeper.address],
+      }),
+    ]);
+  }
 
   const [keeperRole, bond, seed, perProposal, deployerBalance, keeperBalance, vaultSupply] = await Promise.all([
     publicClient.readContract({ address: quantumRoundAddress, abi: roundAbi, functionName: "KEEPER_ROLE" }),
@@ -230,8 +263,8 @@ async function main() {
   if (!vaultCode || vaultCode === "0x" || !oracleCode || oracleCode === "0x") {
     throw new Error("The current vault or oracle deployment has no code.");
   }
-  if (vaultSupply !== 0n || initialVaultUsdc !== 0n || vaultTEth !== 0n) {
-    throw new Error("The new vault is not empty; refusing duplicate bootstrap funding.");
+  if (vaultSupply !== 0n || vaultTEth !== 0n) {
+    throw new Error("The vault has outstanding shares or tETH; refusing to reuse it for this demo.");
   }
   if (seed < perProposal * 4n) throw new Error("QuantumRound seed cannot fund the status quo and three proposals.");
   if (deployerBalance < 4_000_000n || keeperBalance < 2_500_000n) {
@@ -258,16 +291,27 @@ async function main() {
   const expectedPrice = (BigInt(quoteWhole) * 100_000_000n
     + BigInt(quoteFraction.slice(0, 8).padEnd(8, "0"))) / 100n;
   const priceDifference = spotPrice > expectedPrice ? spotPrice - expectedPrice : expectedPrice - spotPrice;
-  if (expectedPrice === 0n || priceDifference * 10_000n / expectedPrice > 4_500n) {
-    throw new Error("The v4 pool spot is more than 450 bps from Coinbase; refusing to open a round that cannot safely execute.");
+  if (expectedPrice === 0n || priceDifference * 10_000n / expectedPrice > 3_500n) {
+    throw new Error("The v4 pool spot is more than 350 bps from Coinbase; refusing to open a round without enough slippage headroom.");
   }
 
-  writeFileSync(demoPath, "# Arc Testnet Demo Round\n\nStatus: Starting\n\n| Action | Transaction | Result |\n|---|---|---|\n");
   recordCreated = true;
+  updateRecord("Starting");
 
-  const vaultBootstrap = 100_000n;
-  await ensureAllowance(deployerClient, deployer.address, vaultAddress, vaultBootstrap);
-  await send("Fund new vault with 0.1 USDC", deployerClient, vaultAddress, vaultAbi, "fundVault", [vaultBootstrap]);
+  if (priorCancelledRoundId > 0n) {
+    if (priorDeployerDeposit > 0n) {
+      await send(`Deployer redeems canceled round ${priorCancelledRoundId}`, deployerClient, quantumRoundAddress, roundAbi, "redeem", [priorCancelledRoundId]);
+    }
+    if (priorKeeperDeposit > 0n) {
+      await send(`Keeper redeems canceled round ${priorCancelledRoundId}`, keeperClient, quantumRoundAddress, roundAbi, "redeem", [priorCancelledRoundId]);
+    }
+  }
+
+  const vaultBootstrap = initialVaultUsdc < 100_000n ? 100_000n - initialVaultUsdc : 0n;
+  if (vaultBootstrap > 0n) {
+    await ensureAllowance(deployerClient, deployer.address, vaultAddress, vaultBootstrap);
+    await send(`Fund new vault with ${vaultBootstrap} USDC base units`, deployerClient, vaultAddress, vaultAbi, "fundVault", [vaultBootstrap]);
+  }
 
   await registerIfNeeded(deployerClient, deployer.address, "Wavefund Deployer");
   await registerIfNeeded(keeperClient, keeper.address, "Wavefund Keeper");
@@ -289,8 +333,8 @@ async function main() {
 
   await send("Proposal 1 (deployer)", deployerClient, quantumRoundAddress, roundAbi, "propose", [
     roundId,
-    { tEthBps: 5_000 },
-    "demo-round: balance 50% tETH and 50% USDC",
+    { tEthBps: 750 },
+    "demo-round: measured 7.5% tETH allocation through WavefundVault",
   ]);
   await send("Proposal 2 (keeper)", keeperClient, quantumRoundAddress, roundAbi, "propose", [
     roundId,
@@ -299,8 +343,8 @@ async function main() {
   ]);
   await send("Proposal 3 (deployer)", deployerClient, quantumRoundAddress, roundAbi, "propose", [
     roundId,
-    { tEthBps: 7_500 },
-    "demo-round: growth 75% tETH and 25% USDC",
+    { tEthBps: 5_000 },
+    "demo-round: growth 50% tETH and 50% USDC",
   ]);
 
   const userDeposit = 1_500_000n;
