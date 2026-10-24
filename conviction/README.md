@@ -550,6 +550,26 @@ In live mode, connect a wallet to Arc Testnet to read the current round, proposa
 
 For a funded test round, `npm run demo:round` runs the scripted two-wallet flow and appends confirmed transaction hashes to `contracts/deployments/demo-round.md`. It uses deployer and keeper keys from the ignored `.env`; never commit that file.
 
+### Manual live demo
+
+`npm run demo:open-round` is a read-only preflight by default. It prints the fresh Coinbase quote, current USDC/tETH v4 spot, exact rebalance input estimate, maximum full-range liquidity amounts for a sub-1% 1-USDC impact target, current balances, proposal bond, and protocol-seed deficit. If the keeper has enough USDC, execution tops up the protocol seed before opening. Do not execute until the displayed pool amounts and both USDC balances are funded. The script refuses to open if the pool, seed, proposer registration, or balances fail preflight.
+
+When the printed plan is funded and reviewed, use `npm run demo:open-round -- --execute` to add the required liquidity, rebalance to within 0.5% of the quote, open a 15-minute round, create three proposals from the registered deployer/keeper wallets, and start the oracle watcher. Set `DEMO_TRADING_WINDOW_MINUTES` or pass `--minutes <n>` to change the window. The script requires interactive typed confirmations before transactions. It uses `current.json` for addresses and `.env` for signer keys.
+
+Before closing, you can queue a vault deposit in `/demo/vault`; it is applied at the next decision boundary. `npm run demo:close-round` prints a read-only status and NAV estimate. `npm run demo:close-round -- --execute` waits for the trading window, collapses, prints the winning allocation and estimated vault swap, asks for confirmation before the vault trade, waits through evaluation, reports NAV to settle, and stops the watcher. Canceled rounds are safely reported as redeemable at par.
+
+### Manual live-mode test checklist
+
+1. Open `/demo`, select **Use on-chain data**, and connect MetaMask. Confirm the active network is Arc Testnet, chain `5042002`, RPC `https://rpc.testnet.arc.io`. The header should show the connected address and its ERC-20 USDC balance (6 decimals); do not add the native USDC view to that balance.
+2. Before opening a new round, the latest recorded state is round 2 settled. The vault last recorded `0.0925 USDC`, `0.000003062520335899 tETH`, and `0.1 WAVE` total supply. NAV and the share price use the current oracle quote and may move; the historical round return was `-0.34%` from a `0.99655` return ratio.
+3. On `/demo/vault`, verify the live NAV, USDC/tETH holdings, allocation, WAVE balance, and queue controls. Queue a `1 USDC` vault deposit before closing the next round; the request should appear as queued and should not mint WAVE shares yet.
+4. Run `npm run demo:open-round` first and review its complete pool/deployer/keeper funding plan. Once fully funded, rerun with `--execute` and type the requested confirmation. The new round defaults to a 15-minute trading window and has proposal 0 (Protocol) plus three registered proposer proposals. Equal seeded reserves begin at a LONG price near `0.5000` credits; the UI's displayed price stays between 0 and 1.
+5. In `/demo/markets`, deposit `2 USDC`. The round deposit should increase by `2.0000 USDC`, and the UI should show up to `2.0000` unclaimed credits. Claim `1.0000` credit for proposal 1 and `1.0000` for proposal 2; the aggregate claimed amount must not exceed the deposit.
+6. Buy LONG with the proposal 1 credit balance and SHORT with the proposal 2 credit balance. The 18-decimal outcome-token balances should be nonzero; the LONG price remains bounded between 0 and 1 and moves with the market. Sell a portion if desired while trading remains open. Exact token output and post-trade quote depend on the current reserves and are shown on-chain.
+7. Once the trading window ends, **Collapse round** becomes available. Or run `npm run demo:close-round -- --execute`; after collapse it prints the winning proposal and asks before allowing the real `WavefundVault` v4 rebalance. A slippage breach cancels safely and leaves deposits redeemable at par.
+8. The close script waits until the evaluation end, refreshes the oracle, reports NAV, settles, and stops the watcher. The round status should become settled; click **Redeem** to receive the contract-calculated payout (unclaimed deposit is returned, while LONG/SHORT payout depends on the realized return).
+9. Return to `/demo/vault`. The queued `1 USDC` deposit should have been processed at the decision boundary; queued USDC should return to zero and the WAVE balance should increase at the pre-flow NAV/share price.
+
 ---
 
 ## Repository structure

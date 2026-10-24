@@ -139,20 +139,23 @@ function getManagedProcess() {
 const mode = process.argv[2];
 if (mode === "start") {
   const existingPid = getManagedProcess();
-  if (existingPid) throw new Error(`Oracle watcher already running (PID ${existingPid}).`);
-  if (existsSync(pidFile)) unlinkSync(pidFile);
+  if (existingPid) {
+    console.log(`Oracle watcher already running (PID ${existingPid}).`);
+  } else {
+    if (existsSync(pidFile)) unlinkSync(pidFile);
 
-  const output = openSync(logFile, "a");
-  const child = spawn(process.execPath, [scriptPath, "--run-open-round-watch"], {
-    detached: true,
-    stdio: ["ignore", output, output],
-    env: process.env,
-  });
-  await once(child, "spawn");
-  child.unref();
-  writeFileSync(pidFile, `${child.pid}\n`, { flag: "wx" });
-  console.log(`Oracle watcher started (PID ${child.pid}).`);
-  console.log(`Log: ${logFile}`);
+    const output = openSync(logFile, "a");
+    const child = spawn(process.execPath, [scriptPath, "--run-open-round-watch"], {
+      detached: true,
+      stdio: ["ignore", output, output],
+      env: process.env,
+    });
+    await once(child, "spawn");
+    child.unref();
+    writeFileSync(pidFile, `${child.pid}\n`, { flag: "wx" });
+    console.log(`Oracle watcher started (PID ${child.pid}).`);
+    console.log(`Log: ${logFile}`);
+  }
 } else if (mode === "stop") {
   const pid = getManagedProcess();
   if (!pid) {
