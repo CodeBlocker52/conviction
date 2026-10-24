@@ -63,9 +63,14 @@ Admin may rescue only `protocolLiquiditySeed`, which is reduced when a proposal 
 Each proposal uses a constant-product market (x*y=k) where:
 - x = credit reserve (USDC units)
 - y = LONG reserve (token units)
-- Initial price = 0.5 (equal split at seeding)
+- The deployed contract's raw `spotPrice` is `creditReserve / longReserve`, scaled by `1e18`; it is credits per LONG token, starts at `1.0` with equal reserves, and is unbounded.
+- The UI maps that reserve ratio to a bounded implied LONG probability: `creditReserve / (creditReserve + longReserve)`. This is `q / (1 + q)` for raw spot ratio `q`; it starts at `0.5` and rises when LONG is bought. The implied winning return is `(1 - p) / p`.
 - Fee = 0.3% (30 bps)
 - TWAP accumulates: price * elapsed_seconds, updated on each trade
+
+For example, the recorded raw spot `1.673306965668276829` is `1.6733` credits per LONG token. The bounded UI probability is `1.6733 / (1 + 1.6733) = 0.6259`, with an implied winning return of about `59.76%`.
+
+This UI conversion does not cap the actual CPMM execution cost: a LONG share can cost more than its maximum one-credit settlement payout. The deployed market is immutable through the current QuantumRound, so correcting execution pricing requires a new bounded binary-market implementation and a coordinated deployment/migration; clamping `spotPrice` alone would only conceal the issue. A replacement market should use complementary LONG/SHORT collateral and a bounded pricing curve (for example LMSR), with regression tests that reject out-of-range prices and confirm that buying LONG increases its probability while `LONG price + SHORT price = 1`.
 
 Phase B replaces this with Uniswap v4 hook pools (WaveHook.sol).
 

@@ -29,7 +29,8 @@ export default function LiveOverview() {
           <span className="eyebrow">TOP ON-CHAIN MARKET</span>
           <h2>{topProposal ? (topProposal.id === 0 ? "Hold current allocation" : `Proposal ${topProposal.id}`) : "No active proposal"}</h2>
           <p>{topProposal ? `${topProposal.tEthBps / 100}% tETH allocation` : "The keeper has not opened a round."}</p>
-          <strong>{topProposal ? `${topProposal.longPrice.toFixed(4)}×` : "—"}<small> LONG / credit</small></strong>
+          <strong>{topProposal ? topProposal.longPrice.toFixed(4) : "—"}<small> LONG price · credits</small></strong>
+          {topProposal && <p>Implied return if LONG wins: {topProposal.impliedReturn === null ? "—" : `${topProposal.impliedReturn.toFixed(2)}%`}</p>}
           <Link href="/demo/markets">Open market <span aria-hidden="true">→</span></Link>
         </article>
       </section>

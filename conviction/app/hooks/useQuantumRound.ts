@@ -12,6 +12,7 @@ import {
   arcTestnet,
   erc20Abi,
   proposalMarketAbi,
+  proposerRegistryAbi,
   proposalTokensAbi,
   publicClient,
   quantumRoundAbi,
@@ -22,9 +23,11 @@ import { useWallet } from "./useWallet";
 export type LiveProposal = {
   id: number;
   proposer: Address;
+  proposerName: string;
   rationale: string;
   tEthBps: number;
   longPrice: number;
+  impliedReturn: number | null;
   creditReserve: bigint;
   longReserve: bigint;
   claimedCredits: bigint;
@@ -136,17 +139,6 @@ export function useQuantumRound(enabled: boolean) {
     const navUsdc = vaultUsdc + (vaultTEth * oraclePrice) / 10n ** 18n;
     const tEthValue = (vaultTEth * oraclePrice) / 10n ** 18n;
     const tEthAllocationBps = navUsdc === 0n ? 0 : Number((tEthValue * 10_000n) / navUsdc);
-    const marketAddress = await publicClient.readContract({
-      address: addresses.quantumRound,
-      abi: quantumRoundAbi,
-      functionName: "market",
-    });
-    const proposalTokensAddress = await publicClient.readContract({
-      address: addresses.quantumRound,
-      abi: quantumRoundAbi,
-      functionName: "proposalTokens",
-    });
-
     let round: LiveRound | null = null;
     if (roundCount > 0n) {
       const baseValues = await publicClient.readContract({
@@ -185,7 +177,7 @@ export function useQuantumRound(enabled: boolean) {
           })
           : Promise.resolve(0n),
         Promise.all(Array.from({ length: Number(base.proposalCount) }, async (_, id) => {
-          const [proposal, market, longPrice, creditToken, longToken, shortToken, claimedCredits] = await Promise.all([
+          const [proposal, market, creditToken, longToken, shortToken, claimedCredits] = await Promise.all([
             publicClient.readContract({
               address: addresses.quantumRound,
               abi: quantumRoundAbi,
@@ -193,31 +185,25 @@ export function useQuantumRound(enabled: boolean) {
               args: [roundCount, BigInt(id)],
             }),
             publicClient.readContract({
-              address: marketAddress,
+              address: addresses.market,
               abi: proposalMarketAbi,
               functionName: "markets",
               args: [roundCount, BigInt(id)],
             }),
             publicClient.readContract({
-              address: marketAddress,
-              abi: proposalMarketAbi,
-              functionName: "spotPrice",
-              args: [roundCount, BigInt(id)],
-            }),
-            publicClient.readContract({
-              address: proposalTokensAddress,
+              address: addresses.proposalTokens,
               abi: proposalTokensAbi,
               functionName: "creditToken",
               args: [roundCount, BigInt(id)],
             }),
             publicClient.readContract({
-              address: proposalTokensAddress,
+              address: addresses.proposalTokens,
               abi: proposalTokensAbi,
               functionName: "longToken",
               args: [roundCount, BigInt(id)],
             }),
             publicClient.readContract({
-              address: proposalTokensAddress,
+              address: addresses.proposalTokens,
               abi: proposalTokensAbi,
               functionName: "shortToken",
               args: [roundCount, BigInt(id)],
@@ -231,6 +217,17 @@ export function useQuantumRound(enabled: boolean) {
               })
               : Promise.resolve(0n),
           ]);
+          const proposerName = id === 0
+            ? "Protocol"
+            : (await publicClient.readContract({
+              address: addresses.proposerRegistry,
+              abi: proposerRegistryAbi,
+              functionName: "agents",
+              args: [proposal[1]],
+            }))[0];
+          if (!proposerName) throw new Error(`No registered proposer name found for ${proposal[1]}.`);
+          const reserveTotal = market[0] + market[1];
+          const longPrice = reserveTotal === 0n ? 0 : Number((market[0] * 10n ** 18n) / reserveTotal) / 1e18;
           const [creditBalance, longBalance, shortBalance] = address
             ? await Promise.all([
               publicClient.readContract({ address: creditToken, abi: erc20Abi, functionName: "balanceOf", args: [address] }),
@@ -241,9 +238,11 @@ export function useQuantumRound(enabled: boolean) {
           return {
             id,
             proposer: proposal[1],
+            proposerName,
             rationale: proposal[3],
             tEthBps: Number(proposal[2]),
-            longPrice: Number(longPrice) / 1e18,
+            longPrice,
+            impliedReturn: longPrice === 0 ? null : ((1 - longPrice) / longPrice) * 100,
             creditReserve: market[0],
             longReserve: market[1],
             claimedCredits,
@@ -602,7 +601,7 @@ export function toUsdc(value: bigint) {
 }
 
 export function toTokenAmount(value: bigint) {
-  return Number(formatUnits(value, 6));
+  return Number(formatUnits(value, 18));
 }
 
 export function toShareAmount(value: bigint) {

@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { formatUnits } from "viem";
 import type { DemoWorkspaceView } from "./demo-workspace";
 import { addresses, arcTestnet } from "./lib/contracts";
-import { toShareAmount, toTokenAmount, toUsdc, useQuantumRound, type LiveProposal } from "./hooks/useQuantumRound";
+import { toShareAmount, toUsdc, useQuantumRound, type LiveProposal } from "./hooks/useQuantumRound";
 import { useWallet } from "./hooks/useWallet";
 
 function money(value: number) {
@@ -12,6 +13,20 @@ function money(value: number) {
 
 function amount(value: bigint) {
   return toUsdc(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function tokenAmount(value: bigint) {
+  return formatUnits(value, 18).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+}
+
+function impliedReturn(value: number | null) {
+  if (value === null) return "—";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function returnChange(value: bigint) {
+  const change = Number(value) / 1e16 - 100;
+  return `${change > 0 ? "+" : ""}${change.toFixed(2)}%`;
 }
 
 function txError(error: unknown) {
@@ -79,7 +94,7 @@ export default function LiveWorkspace({
             </div>
             <div className="vault-bottom-stats">
               <div><span>USDC held</span><strong>{money(toUsdc(snapshot.vault.usdcBalance))}</strong></div>
-              <div><span>tETH held</span><strong>{toTokenAmount(snapshot.vault.tEthBalance).toLocaleString(undefined, { maximumFractionDigits: 6 })}</strong></div>
+              <div><span>tETH held</span><strong>{formatUnits(snapshot.vault.tEthBalance, 18)}</strong></div>
               <div><span>Oracle price</span><strong>{money(toUsdc(snapshot.vault.oraclePriceUsdc))} / tETH</strong></div>
               <div><span>v4 spot price</span><strong>{money(toUsdc(snapshot.vault.spotPriceUsdc))} / tETH</strong></div>
             </div>
@@ -117,11 +132,11 @@ export default function LiveWorkspace({
         <section className="positions-panel">
           <div className="positions-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h3>Vault decision history</h3></div></div>
           {history.length === 0 ? <p>No on-chain vault decisions have been recorded yet.</p> : history.map((item) => (
-            <div className="position-row" key={item.roundId.toString()}>
+            <div className="vault-history-row" key={item.roundId.toString()}>
               <strong>Round #{item.roundId.toString()}</strong>
               <span>Starting NAV {money(toUsdc(item.navUsdc))}</span>
               <span>{item.allocationBps === null ? "Allocation pending" : `${item.allocationBps / 100}% tETH allocation`}</span>
-              <span>{item.realisedReturn === null ? item.status : `Return ${(Number(item.realisedReturn) / 1e16).toFixed(2)}% · ${item.status}`}</span>
+              <span>{item.realisedReturn === null ? item.status : `Return ${returnChange(item.realisedReturn)} · ${item.status}`}</span>
             </div>
           ))}
         </section>
@@ -145,7 +160,7 @@ export default function LiveWorkspace({
               <strong>Proposal {item.id}</strong>
               <span>Claimed {amount(item.claimedCredits)} credits</span>
               <span>Credit balance {amount(item.creditBalance)}</span>
-              <span>LONG {amount(item.longBalance)} · SHORT {amount(item.shortBalance)}</span>
+              <span>LONG {tokenAmount(item.longBalance)} · SHORT {tokenAmount(item.shortBalance)}</span>
             </div>
           ))}
         </section>
@@ -204,7 +219,7 @@ export default function LiveWorkspace({
                 <div className="ticket-header"><div><span className="eyebrow">ON-CHAIN MARKET</span><h3>Proposal {proposal.id}</h3></div><span className="ticket-avatar avatar-violet">WF</span></div>
                 <p className="ticket-allocation">{proposal.tEthBps / 100}% tETH · {100 - proposal.tEthBps / 100}% USDC</p>
                 <p className="ticket-rationale">{proposal.rationale || "No proposal rationale was published."}</p>
-                <div className="ticket-prices"><div><span>LONG / credit ratio</span><strong>{proposal.longPrice.toFixed(4)}×</strong></div><div><span>SHORT mint rate</span><strong>1:1</strong></div></div>
+                <div className="ticket-prices"><div><span>LONG price · credits</span><strong>{proposal.longPrice.toFixed(4)}</strong></div><div><span>Implied LONG return</span><strong>{impliedReturn(proposal.impliedReturn)}</strong></div></div>
                 {round.phase === "trading" ? (
                   <>
                     <div className="credit-claim-box">
@@ -225,7 +240,7 @@ export default function LiveWorkspace({
                     )}
                   </>
                 ) : (
-                  <div className="ticket-closed"><strong>{round.phase === "evaluation" ? "Market closed · awaiting oracle result" : "This round has settled"}</strong><span>On-chain positions: LONG {amount(proposal.longBalance)} · SHORT {amount(proposal.shortBalance)}</span></div>
+                  <div className="ticket-closed"><strong>{round.phase === "evaluation" ? "Market closed · awaiting oracle result" : "This round has settled"}</strong><span>On-chain positions: LONG {tokenAmount(proposal.longBalance)} · SHORT {tokenAmount(proposal.shortBalance)}</span></div>
                 )}
               </aside>
             )}
@@ -251,14 +266,18 @@ function LiveProposalCard({
     <button className={`demo-proposal-card ${selected ? "selected" : ""}`} type="button" onClick={onSelect} aria-pressed={selected}>
       <div className="demo-proposal-top">
         <span className="proposal-avatar avatar-violet">{proposal.id === 0 ? "WF" : `P${proposal.id}`}</span>
-        <span className="demo-proposal-name"><strong>{proposal.id === 0 ? "Hold current allocation" : `Proposal ${proposal.id}`}</strong><small>{proposal.tEthBps / 100}% tETH · proposer {proposal.proposer.slice(0, 6)}…{proposal.proposer.slice(-4)}</small></span>
+        <span className="demo-proposal-name">
+          <strong>{proposal.id === 0 ? "Hold current allocation" : `Proposal ${proposal.id}`}</strong>
+          <small>{proposal.tEthBps / 100}% tETH · {proposal.proposerName}</small>
+          {proposal.id !== 0 && <small className="proposal-address">{proposal.proposer}</small>}
+        </span>
         {proposal.id === 0 && <span className="status-quo">STATUS QUO</span>}
       </div>
       <div className="demo-proposal-bottom">
-        <span>LONG / credit <strong>{longPrice.toFixed(4)}×</strong></span>
+        <span>LONG price · credits <strong>{longPrice.toFixed(4)}</strong></span>
         <span>SHORT mint rate <strong>1:1</strong></span>
         <span>Your credits <strong>{amount(proposal.claimedCredits)}</strong></span>
-        <span>Your LONG <strong>{amount(proposal.longBalance)}</strong></span>
+        <span>Your LONG <strong>{tokenAmount(proposal.longBalance)}</strong></span>
         <span>Market credit reserve <strong>{amount(proposal.creditReserve)}</strong></span>
       </div>
       <span className="demo-selection-mark">{selected ? "✓" : ""}</span>

@@ -430,6 +430,9 @@ button { color: inherit; }
 .positions-table-head { min-height: 33px; padding: 0 10px; border-bottom: 1px solid #e9eeeb; color: #98a39c; background: #fafbfa; font: 8px var(--mono); letter-spacing: .35px; }
 .positions-row { min-height: 43px; padding: 0 10px; border-bottom: 1px solid #f0f2f0; color: #4c5a51; font: 9px var(--mono); }
 .positions-row > span small { color: #a0aaa4; font: 7px var(--sans); }
+.vault-history-row { display: grid; grid-template-columns: .7fr 1.2fr 1.2fr 1.2fr; align-items: center; gap: 12px; padding: 12px 8px; border-bottom: 1px solid #f0f2f0; color: #4c5a51; font: 9px/1.45 var(--mono); }
+.vault-history-row strong { color: #39473e; }
+.proposal-address { overflow-wrap: anywhere; font-family: var(--mono); }
 .position-proposal { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .position-proposal strong { overflow: hidden; color: #39473e; font: 600 9px var(--sans); text-overflow: ellipsis; white-space: nowrap; }
 .side-pill { display: inline-block; padding: 4px 6px; border-radius: 4px; font: 8px var(--mono); }
@@ -546,6 +549,7 @@ button { color: inherit; }
   .demo-proposal-bottom { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 9px; }
   .demo-proposal-card { padding-right: 31px; }
   .positions-panel { padding: 15px 11px 0; }
+  .vault-history-row { grid-template-columns: 1fr 1fr; gap: 8px; }
   .positions-footnote { align-items: flex-start; flex-direction: column; }
   .vault-flow-panel { grid-template-columns: 1fr 1fr; gap: 13px; padding: 15px; }
   .vault-flow-copy { grid-column: 1 / -1; }
@@ -1239,7 +1243,9 @@ html[data-theme="dark"] .trade-direction button.direction-active.short { backgro
 html[data-theme="dark"] .positions-table-head,
 html[data-theme="dark"] .agents-table-head { color: #afbeb4; background: #202c24; }
 html[data-theme="dark"] .positions-row,
+html[data-theme="dark"] .vault-history-row,
 html[data-theme="dark"] .agent-row { color: #d9e4dc; border-color: #34443b; }
+html[data-theme="dark"] .vault-history-row strong { color: #d9e4dc; }
 html[data-theme="dark"] .positions-row small,
 html[data-theme="dark"] .positions-footnote,
 html[data-theme="dark"] .vault-bottom-stats > div span,
