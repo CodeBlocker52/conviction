@@ -139,3 +139,19 @@ WavefundVault
 2. IProposalMarket interface unchanged — QuantumRound only calls tradeBuyLong/tradeSellLong/etc.
 3. WaveHook encodes permissions in address low bits (requires CREATE2 salt mining)
 4. Keeper becomes a full onchain agent with gas-abstracted execution
+
+### Phase B compatibility spike
+
+The minimal `WaveHook` compatibility spike uses the existing Arc testnet PoolManager and v4-core 1.0.2 interfaces. Its required address flags are `beforeAddLiquidity`, `beforeRemoveLiquidity`, `beforeSwap`, and `afterSwap`; `HookMiner` must find a CREATE2 address whose low 14 bits match those flags. The hook allows those operations only from its configured adapter and during the round's trading window. Liquidity positions must stay within ticks `[-45900, 45900]`, corresponding to the intended probability range near 0.01–0.99 at tick spacing 60. `afterSwap` records the price-time integral for the configured final TWAP window.
+
+For a LONG/SHORT pool, let `q` be the pool's marginal quote of SHORT tokens per LONG token. If LONG is currency0, `q = sqrtPriceX96² / 2¹⁹²`; if LONG is currency1, invert that ratio. The displayed probability is `pLong = q / (1 + q)`, and `pShort = 1 - pLong`. Therefore the probability boundaries 0.01 and 0.99 correspond to `q = 1/99` and `q = 99`, respectively. The UI's scalar implied return is `rMin + pLong × (rMax − rMin)`; it must show this bounded value separately from the execution quote for the requested trade.
+
+Phase B buy/sell accounting uses explicit units: one credit is 1 USDC-denominated credit (`1e6` raw units), while one LONG or SHORT is `1e18` raw token units. The existing clone implementation reports 18 decimals for all three token types even though credits are accounted in USDC base units; Phase B must either expose 6 decimals for CREDIT clones or consistently normalize the credit scale at every contract and frontend boundary. Buying LONG burns one credit to mint a complete set (one LONG plus one SHORT), then swaps the SHORT side for additional LONG through the v4 pool, with the adapter enforcing the bounded price limit. Selling LONG swaps it into SHORT, redeems matched LONG/SHORT complete sets for credits, and returns any unmatched outcome-token remainder to the seller. SHORT trades use the symmetric path. Any implementation must preserve the same minimum-output/slippage guarantees.
+
+The Phase B market adapter must preserve the current `IProposalMarket` entry points for QuantumRound and expose the same UI-facing price, quote, and TWAP reads through one market address/ABI. The frontend must not read PoolManager storage or make hook-specific calls directly; switching implementations should be limited to the deployment config and generated ABIs.
+
+Protocol seed or `QuantumLP` supplies complete sets as pool liquidity. Because liquidity removal is adapter-only and trading-window-only, the adapter must unwind LP positions before the trading window closes and escrow the resulting LONG/SHORT inventory for settlement. For the winning proposal, the escrowed outcome balances settle through the round's scalar payout; LP inventory in losing proposals has no payout and is recorded as a loss. LP-share accounting must distribute the post-settlement assets and fees without allowing one proposal's pool to claim another proposal's collateral.
+
+The initial compatibility test is deliberately not the production market adapter. It verifies a mined hook can initialize a LONG/SHORT pool, add liquidity only within the configured tick range, perform a bounded swap, and update the final-window accumulator against the deployed Arc PoolManager. Full market integration, complete-set mint/redeem, LP accounting, migration, and deployment remain separate steps.
+
+Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibility.t.sol --fork-url https://rpc.testnet.arc.io -vv`.
