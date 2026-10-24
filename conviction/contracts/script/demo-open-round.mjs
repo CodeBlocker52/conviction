@@ -430,10 +430,10 @@ if (!execute) {
   process.exit(0);
 }
 
-await confirm(
-  `The script will add the printed full-range liquidity, rebalance the pool, open a ${tradingMinutes}-minute round, and create three proposals.`,
-  "EXECUTE DEMO ROUND",
-);
+const executionPlan = testMode
+  ? `The script will rebalance the existing pool, open a ${tradingMinutes}-minute test round, and create three proposals without adding deep liquidity.`
+  : `The script will add the printed full-range liquidity, rebalance the pool, open a ${tradingMinutes}-minute round, and create three proposals.`;
+await confirm(executionPlan, "EXECUTE DEMO ROUND");
 
 const deployer = accountFor(process.env.DEPLOYER_PK, deployerAddress, "deployer");
 const keeper = accountFor(process.env.KEEPER_PK, keeperAddress, "keeper");
