@@ -131,3 +131,29 @@ No fresh, verifiable decentralized ETH/USD feed on Arc Testnet was confirmed dur
 The v4 smoke test and full on-chain demo are complete; all confirmed actions are linked in [`demo-round.md`](./demo-round.md). Attempt 1 selected a 50% tETH allocation, but its 0.05-USDC swap exceeded the vault's 5% slippage limit and canceled safely; both user deposits were redeemed at par. Attempt 2 selected a 7.5% tETH allocation and completed the real `WavefundVault`/Uniswap v4 swap, NAV report, settlement, and both redemptions. Round 2 is settled, not canceled, and reported a `0.99655` return ratio. Its final vault state is `0.0925 USDC` plus `0.000003062520335899 tETH`; all `0.1 WAVE` shares remain with the deployer.
 
 The demo runner's planned principal is 3.6 USDC from the deployer (0.1-USDC initial vault bootstrap, two 1-USDC proposal bonds, and a 1.5-USDC round deposit) and 2.5 USDC from the keeper (one 1-USDC bond and a 1.5-USDC round deposit), plus Arc transaction fees. Fees are paid in USDC. Final balances after both attempts were 59.455213 USDC for the deployer and 39.687255 USDC for the keeper. The runner now permits a retry only when the preceding round is canceled and settled; it refunds any outstanding deposits, requires all vault shares to belong to the deployer, and checks the seed, roles, balances, and pool/oracle deviation before opening another round.
+
+## Phase B compatibility test (throwaway)
+
+This isolated Arc Testnet test exercised `WaveHook` against the deployed Uniswap v4 PoolManager. It is not part of `current.json`, the frontend configuration, the Phase A market, the vault, or Round 3. It used only test tokens for pool operations; no USDC token transfer or existing Wavefund contract was involved. Arc-native USDC paid the transaction fees listed below.
+
+| Component | Address |
+|---|---|
+| Uniswap v4 PoolManager | `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` |
+| Compatibility adapter | [`0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78`](https://explorer.testnet.arc.io/address/0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78) |
+| Test LONG token (`tLONG`) | [`0xBae016c485053291E4759f2d43bC81e91581A30E`](https://explorer.testnet.arc.io/address/0xBae016c485053291E4759f2d43bC81e91581A30E) |
+| Test SHORT token (`tSHORT`) | [`0x4feA188D57035F6A1CA0425bD7c65Bd21aC59Ad6`](https://explorer.testnet.arc.io/address/0x4feA188D57035F6A1CA0425bD7c65Bd21aC59Ad6) |
+| `WaveHook` | [`0x41cef812b6FF61419284E56f4380D4890cD28ac0`](https://explorer.testnet.arc.io/address/0x41cef812b6FF61419284E56f4380D4890cD28ac0) |
+
+The hook was mined with permission flags `2752` (`beforeAddLiquidity`, `beforeRemoveLiquidity`, `beforeSwap`, `afterSwap`) and verified on Sourcify with status `match`. [Sourcify verification job](https://sourcify.dev/server/verify-ui/jobs/5e791e6a-db78-4b5f-8dff-e46bcdb62ad9).
+
+The test pool used fee `3000`, tick spacing `60`, and an initial price of `1:1`. The adapter minted `10` test tokens per side, added `1e18` liquidity across ticks `-45,900` to `45,900`, and executed one exact-input swap of `0.01` test tokens. `pLong` moved from `0.500000000000000000` to `0.504960150997815123`; `pShort` was `0.495039849002184877`, so the two remained complementary. The hook's trading window was Unix timestamps `1792884131`–`1792887731`.
+
+The simulation estimated `0.1613021 USDC` at a `25 gwei` max fee, below the authorized `0.25 USDC` ceiling. The five successful transactions cost `0.100670493 USDC` in total at the actual `21 gwei` effective gas price:
+
+| Action | Transaction | Contract or target |
+|---|---|---|
+| Deploy adapter and its two test tokens | [0xd245087faec87d4f4f0e9fbe3098f8d78aa568e731e7bfc7a260c29d2c6d84e3](https://explorer.testnet.arc.io/tx/0xd245087faec87d4f4f0e9fbe3098f8d78aa568e731e7bfc7a260c29d2c6d84e3) | Adapter `0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78`; tokens `0xBae016c485053291E4759f2d43bC81e91581A30E`, `0x4feA188D57035F6A1CA0425bD7c65Bd21aC59Ad6` |
+| Deploy mined hook | [0xc636e48c6dd73c65868fcd0b4aed4e4280bf68325eeab290bf7e06c8fc8d0247](https://explorer.testnet.arc.io/tx/0xc636e48c6dd73c65868fcd0b4aed4e4280bf68325eeab290bf7e06c8fc8d0247) | `WaveHook` `0x41cef812b6FF61419284E56f4380D4890cD28ac0` |
+| Configure adapter and pool key | [0x170a2d6ae826650997c6365b976156753c537e80336fc57c0c0bfddb42a06258](https://explorer.testnet.arc.io/tx/0x170a2d6ae826650997c6365b976156753c537e80336fc57c0c0bfddb42a06258) | Adapter `0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78` |
+| Initialize pool and add bounded liquidity | [0x0e31cd9bae037ea82cb951d6ea0acb0d3c9434aff16034bf8989a178a9af7cbe](https://explorer.testnet.arc.io/tx/0x0e31cd9bae037ea82cb951d6ea0acb0d3c9434aff16034bf8989a178a9af7cbe) | Adapter `0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78`; PoolManager `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` |
+| Execute compatibility swap | [0x4acb36973a7785d2e27a9218a3b124776419890cb9d861b48875650ea390ebc5](https://explorer.testnet.arc.io/tx/0x4acb36973a7785d2e27a9218a3b124776419890cb9d861b48875650ea390ebc5) | Adapter `0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78`; PoolManager `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` |
