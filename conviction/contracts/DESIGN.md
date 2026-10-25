@@ -127,8 +127,8 @@ WavefundVault
 |---|---|---|
 | DEFAULT_BOND | 1 USDC | Proposer bond |
 | initialLiquidityPerProposal | 5 USDC (testnet) / 500 USDC (prod) | Per-proposal market seed |
-| SPAM_THRESHOLD_PRICE | 0.2e18 | TWAP below this = bond slashed |
-| EPSILON | 0.005e18 | Winner margin above status quo |
+| SPAM_THRESHOLD_PROBABILITY | 0.1e18 | LONG probability TWAP below this = bond slashed |
+| EPSILON | 0.005e18 | Winner margin above status quo, in LONG probability (0.5 percentage points) |
 | MAX_PROPOSALS_PER_ROUND | 10 | Includes status quo proposal 0 |
 | EMERGENCY_SETTLE_DELAY | 2 days | Permissionless settle fallback |
 | MAX_ORACLE_AGE | 5 minutes | Maximum age accepted at trade execution/reporting |
@@ -180,3 +180,41 @@ The protocol reserve supplies complete sets as pool liquidity. User liabilities 
 `WaveV4ProposalMarket.sol` locally creates one bounded LONG/SHORT pool per proposal using the shared hook, routes complete-set buys/sells, unwinds positions after close, and returns outcome inventory to QuantumRound. Foundry tests cover multiple proposals and rounds sharing one hook, isolated per-pool TWAPs and trading windows, unregistered-pool rejection, the market lifecycle, and liability coverage. The deploy script mines the one shared hook address before broadcasting. Arc end-to-end integration, expanded solvency fuzzing, migration, deployment-config update, and production deployment remain separate gates.
 
 Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibility.t.sol --fork-url https://rpc.testnet.arc.io -vv`.
+
+### Complete-set sell math (fixed)
+
+**Bug.** The first adapter swapped the whole `longIn` into the pool and then counted `min(longConsumed, shortOut)` as matched complete sets. The consumed LONG is inside the pool, so it cannot be paired with the SHORT received; only LONG still held by the market can. Credits were therefore computed from tokens that could not legitimately be burned, and the accounting burned only the SHORT leg. The first buy path also forwarded only the swap output, not the LONG leg of the minted complete set, so buyers received about half of what they paid for.
+
+**Fix.**
+- Buy: `c` credits mint `c` complete sets to the market; the SHORT leg is swapped for LONG; the user receives `c * 1e12` LONG (the set's LONG leg) plus the swap output. SHORT buys are symmetric.
+- Sell: only part of the input `x` is swapped. The adapter finds the smallest `x` whose output `s(x)` satisfies `s(x) >= amountIn - consumed(x)` by bisection on the exact single-range swap simulation (stops when the bracket is 1e6 raw units wide, so at most ~40 iterations). The leftover input then pairs with the received output. `QuantumRound` burns `floor(min(left, received) / 1e12)` credits' worth of both legs, mints those credits, and returns only the remainder (under 1e12 raw units of each token plus the solver's rounding) as dust.
+- At p = 0.5, selling N LONG returns about N/2 credits (in credit units) less 0.3% fee and price impact. Buy-then-sell-all can never return more than was spent.
+
+**Tests.** `WaveV4ProposalMarket.t.sol`: `test_SellLongAtHalfReturnsAboutHalfInCredits`, `test_SellShortAtHalfReturnsAboutHalfInCredits`, `test_BuyLongThenSellAllReturnsAtMostSpentAndNoLeftovers`, `test_BuyShortThenSellAllReturnsAtMostSpentAndNoLeftovers`, `testFuzz_RoundTripsNeverExtractValueAndStayBacked` (buy, partial sell, collapse, settle with random returns, solvency and full redemption), and `testFuzz_QuotesMatchExecution`. `QuantumRoundCompleteSet.t.sol` keeps the mock-market solvency fuzz with the new settlement semantics.
+
+### Exact quotes
+
+`quoteBuyLong`, `quoteBuyShort`, `quoteSellLong`, `quoteSellShort` are views on the adapter. They load `slot0`, liquidity and fee from the PoolManager and replay `Pool.swap` (`SwapMath.computeSwapStep`, per-word tick stepping, protocol-fee-adjusted swap fee) for the single position, so they equal execution to the unit. Buy quotes return total tokens received (including the complete-set leg). Sell quotes return `(creditsOut, longDust, shortDust)`. Frontends must use these quotes, with a slippage tolerance (for example 0.5%), as `minOut`; they must not use the constant-product formula for Phase B markets.
+
+### Selection scale
+
+`IProposalMarket.probabilityTwap` returns the final-window LONG probability TWAP in `[0, 1e18]`. `QuantumRound.collapse` selects the winner on it: a proposal must beat the status quo's TWAP by `EPSILON = 0.005` (0.5 percentage points); otherwise the status quo wins. A proposal whose probability TWAP is below `SPAM_THRESHOLD_PROBABILITY = 0.1` (and that did not win) has its bond slashed. 0.1 is above the 0.01 pool floor, so a deliberate dump is distinguishable from an idle market (0.5), and it is not so high that a legitimately unpopular proposal at 0.2-0.3 is punished. `ConstantProductMarket` derives probability as `price / (1 + price)` from its price TWAP. `Collapsed` now emits probabilities.
+
+### Phase B deployment plan (not executed; awaiting approval)
+
+**New:** `ProposalTokens` (the live one has clones, so its credit decimals are locked at 18, and Phase B needs 6 via `setCreditDecimals(6)` before the first clone), `WaveV4ProposalMarket`, `WaveHook` (one shared), `QuantumRound`, `Resolver` (immutable round), `WavefundVault` (immutable round and resolver).
+
+**Reused:** `TestAsset` (tETH), `ProposerRegistry` (re-granted roles), `MockPriceOracle`, `QuantumLP` (re-granted role), PoolManager, USDC, the USDC/tETH pool.
+
+**Order:**
+1. `DeployPhaseB` forge script (to be written after approval; no USDC moves, so simulation works): `ProposalTokens`, `setCreditDecimals(6)`, market, round, resolver, vault.
+2. `DeployWaveHook.s.sol`: mines the salt off-chain, deploys the hook through the CREATE2 factory and calls `market.setWaveHook`. The market owner is still the deployer.
+3. `market.setQuantumRound(round)`, then `market.transferOwnership(round)`; `round.setResolver`.
+4. Roles: `QUANTUM_ROUND_ROLE` for the new round on `ProposalTokens`, `ProposerRegistry` and `QuantumLP`, revoked on `ProposerRegistry` and `QuantumLP` for the old round; `KEEPER_ROLE` on round and vault; `VAULT_ROLE` for the vault on the round; `RESOLVER_ROLE` for the vault on the resolver; `QUANTUM_ROUND_ROLE` for the round on the vault. Revoke the old vault's `VAULT_ROLE` on the old round.
+5. viem script (USDC moves): `setInitialLiquidityPerProposal`, approve and `addProtocolLiquiditySeed`, vault funding.
+6. Verify all new contracts on Sourcify; update `SOURCES.md`.
+7. Cutover: regenerate ABIs, update `current.json` and frontend config, switch keeper and demo scripts, then `npm run check:contracts`.
+
+**USDC:** seed `initialLiquidityPerProposal` x 4 proposals (recommended 5 USDC each, 20 USDC, with most returning to the reserve after collapse), bonds 1 USDC per proposer x 3 (refunded unless slashed), vault test deposit about 5 USDC, gas under 1 USDC. About 27 USDC in total; the deployer holds about 57 USDC.
+
+**Keeper and scripts:** `collapse` already calls `finalizeProposal` for every proposal, so no extra keeper transaction is needed, but the demo close script must call `collapse` after `tradingEnd` and before `settle`, check the market is finalised (pool liquidity zero), and read probabilities, not prices. `openRound` and `propose` cost about 1.5M gas each.
