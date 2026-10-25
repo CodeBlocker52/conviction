@@ -13,6 +13,8 @@ import { WaveV4ProposalMarket } from "../src/WaveV4ProposalMarket.sol";
 address constant WIRE_REGISTRY = 0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346;
 address constant WIRE_QUANTUM_LP = 0x885512902D1f5d05f81A678FdFFE0e339623c415;
 address constant WIRE_OLD_ROUND = 0x82a666Fc211c6A9a2509F941eA974AB0a7dDDb41;
+address constant WIRE_OLD_VAULT = 0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D;
+address constant WIRE_OLD_RESOLVER = 0xeA89585fb62e6eB63D101409093D88A94A936A4C;
 uint256 constant WIRE_SEED_PER_PROPOSAL = 5_000_000;
 
 /// @notice Step 3 of the Phase B cutover: hands the market to the round and wires every role. No USDC moves.
@@ -54,6 +56,8 @@ contract WirePhaseB is Script {
         vault.grantRole(keeperRole, keeper);
         registry.revokeRole(qrRole, WIRE_OLD_ROUND);
         lp.revokeRole(qrRole, WIRE_OLD_ROUND);
+        QuantumRound(WIRE_OLD_ROUND).revokeRole(vaultRole, WIRE_OLD_VAULT);
+        Resolver(WIRE_OLD_RESOLVER).revokeRole(resolverRole, WIRE_OLD_VAULT);
         vm.stopBroadcast();
 
         if (market.owner() != address(round)) revert RoleMissing("market owner");
@@ -67,6 +71,12 @@ contract WirePhaseB is Script {
         if (!vault.hasRole(keeperRole, keeper)) revert RoleMissing("vault keeper");
         if (registry.hasRole(qrRole, WIRE_OLD_ROUND)) revert RoleStillGranted("registry old round");
         if (lp.hasRole(qrRole, WIRE_OLD_ROUND)) revert RoleStillGranted("lp old round");
+        if (QuantumRound(WIRE_OLD_ROUND).hasRole(vaultRole, WIRE_OLD_VAULT)) {
+            revert RoleStillGranted("old round vault");
+        }
+        if (Resolver(WIRE_OLD_RESOLVER).hasRole(resolverRole, WIRE_OLD_VAULT)) {
+            revert RoleStillGranted("old resolver vault");
+        }
         if (tokens.creditDecimals() != 6) revert RoleMissing("credit decimals");
 
         console2.log("Phase B wiring complete and verified.");
