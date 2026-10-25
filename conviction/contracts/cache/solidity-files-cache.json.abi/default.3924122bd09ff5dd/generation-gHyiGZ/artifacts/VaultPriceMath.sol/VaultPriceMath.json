@@ -1,0 +1,1 @@
+{"abi":[{"type":"error","name":"InvalidOraclePrice","inputs":[]},{"type":"error","name":"InvalidPoolPrice","inputs":[]},{"type":"error","name":"InvalidSlippageCap","inputs":[]},{"type":"error","name":"UnsupportedOracleDecimals","inputs":[]}],"id":11}

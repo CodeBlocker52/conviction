@@ -1,0 +1,1 @@
+{"abi":[{"type":"function","name":"latestPrice","inputs":[],"outputs":[{"name":"price","type":"int256","internalType":"int256"},{"name":"priceDecimals","type":"uint8","internalType":"uint8"},{"name":"updatedAt","type":"uint64","internalType":"uint64"}],"stateMutability":"view"}],"id":1}

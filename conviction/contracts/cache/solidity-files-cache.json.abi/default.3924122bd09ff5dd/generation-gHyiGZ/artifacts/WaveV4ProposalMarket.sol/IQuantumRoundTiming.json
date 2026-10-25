@@ -1,0 +1,1 @@
+{"abi":[{"type":"function","name":"marketTiming","inputs":[{"name":"roundId","type":"uint256","internalType":"uint256"}],"outputs":[{"name":"tradingEnd","type":"uint64","internalType":"uint64"},{"name":"twapWindow","type":"uint32","internalType":"uint32"}],"stateMutability":"view"}],"id":7}
