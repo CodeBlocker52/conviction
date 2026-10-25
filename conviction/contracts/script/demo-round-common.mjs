@@ -163,6 +163,10 @@ export async function waitUntil(timestamp) {
 }
 
 export async function confirm(prompt, expectedText) {
+  if (process.argv.includes("--yes")) {
+    console.log(`${prompt}\n--yes supplied: continuing without an interactive prompt.`);
+    return;
+  }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("Execution requires an interactive terminal so the transaction plan can be confirmed.");
   }
