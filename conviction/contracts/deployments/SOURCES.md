@@ -185,3 +185,28 @@ Gas: all three scripts cost about 0.37 USDC (priority fee 1 gwei, max fee 150 gw
 ## Phase A rescue check (correction)
 
 Earlier notes said the Phase A `QuantumRound` had no rescue path. That was wrong: `rescueProtocolSeed(uint256)` exists on `0x82a6…Db41`, but it is capped by `protocolLiquiditySeed`, which is 0 (every seed was allocated to rounds 1–3 markets). The contract holds 31.043040 USDC that is not rescuable. Superseded vault `0xe4CE…b84D` is also no longer authorised on the old round or resolver.
+
+## Blockscout (explorer) verification
+
+Checked through `https://explorer.testnet.arc.io/api/v2/smart-contracts/<address>`: every contract below returns `is_verified: true` with source code, not only a Sourcify job. Phase B contracts were submitted with `forge verify-contract --verifier blockscout` (compiler 0.8.26, optimizer 200 runs, via-IR). The explorer reports `evm_version` as `cancun` and flags the matches as partial (metadata hash differs), which is how it records Sourcify/Blockscout mirrors.
+
+| Contract | Explorer (verified source) |
+|---|---|
+| ProposalTokens (Phase B) | [`0xA3998Bb07BD324C886bf87965e66f32e4ABcCa4E`](https://explorer.testnet.arc.io/address/0xA3998Bb07BD324C886bf87965e66f32e4ABcCa4E#code) |
+| WaveV4ProposalMarket | [`0x5A2DA260d3C7A7abd1Ae851D234022bd6699fa7A`](https://explorer.testnet.arc.io/address/0x5A2DA260d3C7A7abd1Ae851D234022bd6699fa7A#code) |
+| QuantumRound (Phase B) | [`0x74b798AcB0fD0Bfd219F4f6C770166e32648B0c5`](https://explorer.testnet.arc.io/address/0x74b798AcB0fD0Bfd219F4f6C770166e32648B0c5#code) |
+| Resolver (Phase B) | [`0x74Fdf9F04589A9FE558D6F9D39D996b4FB4E9a48`](https://explorer.testnet.arc.io/address/0x74Fdf9F04589A9FE558D6F9D39D996b4FB4E9a48#code) |
+| WavefundVault (Phase B) | [`0xA1E37Becb47A3566d98EF55d0A3c14FA54E69865`](https://explorer.testnet.arc.io/address/0xA1E37Becb47A3566d98EF55d0A3c14FA54E69865#code) |
+| WaveHook (Phase B) | [`0xA2FD9c9E3f7515868DE9d84394A5237901D98Ac0`](https://explorer.testnet.arc.io/address/0xA2FD9c9E3f7515868DE9d84394A5237901D98Ac0#code) |
+| ProposalTokens (Phase A) | [`0x328C5d7a02C4B29162e2F80520C89Ec9AfE5bD51`](https://explorer.testnet.arc.io/address/0x328C5d7a02C4B29162e2F80520C89Ec9AfE5bD51#code) |
+| QuantumRound (Phase A) | [`0x82a666Fc211c6A9a2509F941eA974AB0a7dDDb41`](https://explorer.testnet.arc.io/address/0x82a666Fc211c6A9a2509F941eA974AB0a7dDDb41#code) |
+| Resolver (Phase A) | [`0xeA89585fb62e6eB63D101409093D88A94A936A4C`](https://explorer.testnet.arc.io/address/0xeA89585fb62e6eB63D101409093D88A94A936A4C#code) |
+| WavefundVault (Phase A, superseded) | [`0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D`](https://explorer.testnet.arc.io/address/0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D#code) |
+| ConstantProductMarket | [`0xEC6d767c62029A2868E1475873D9C2aE172F72df`](https://explorer.testnet.arc.io/address/0xEC6d767c62029A2868E1475873D9C2aE172F72df#code) |
+| QuantumLP | [`0x885512902D1f5d05f81A678FdFFE0e339623c415`](https://explorer.testnet.arc.io/address/0x885512902D1f5d05f81A678FdFFE0e339623c415#code) |
+| MockPriceOracle | [`0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d`](https://explorer.testnet.arc.io/address/0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d#code) |
+| TestAsset (tETH) | [`0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d`](https://explorer.testnet.arc.io/address/0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d#code) |
+| ProposerRegistry | [`0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346`](https://explorer.testnet.arc.io/address/0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346#code) |
+| Throwaway compatibility WaveHook | [`0x41cef812b6FF61419284E56f4380D4890cD28ac0`](https://explorer.testnet.arc.io/address/0x41cef812b6FF61419284E56f4380D4890cD28ac0#code) |
+
+Not verified: the throwaway compatibility adapter `0xD9E2…1F78` (test scaffolding from the Arc hook spike; submissions are accepted but do not match the current history).
