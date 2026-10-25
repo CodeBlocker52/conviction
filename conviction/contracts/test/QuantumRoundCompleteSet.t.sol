@@ -63,6 +63,7 @@ contract CompleteSetMockMarket is IProposalMarket {
     {
         creditsOut = longIn / SCALE;
         require(creditsOut >= minCreditsOut && creditsOut > 0);
+        _pendingLong[roundId][proposalId] = longIn;
         _pendingShort[roundId][proposalId] = creditsOut * SCALE;
     }
 
@@ -73,6 +74,7 @@ contract CompleteSetMockMarket is IProposalMarket {
     {
         creditsOut = setsIn / SCALE;
         require(creditsOut >= minCreditsOut && creditsOut > 0);
+        _pendingShort[roundId][proposalId] = setsIn;
         _pendingLong[roundId][proposalId] = creditsOut * SCALE;
     }
 

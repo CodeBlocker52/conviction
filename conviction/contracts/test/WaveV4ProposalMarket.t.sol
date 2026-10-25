@@ -178,4 +178,153 @@ contract WaveV4ProposalMarketTest is Test {
         assertEq(untouchedSameRoundTwap, 1e18);
         assertEq(untouchedOtherRoundTwap, 1e18);
     }
+
+    uint256 private constant SCALE = 1e12;
+
+    function _openFundedRound() private returns (uint256 roundId, uint64 tradingEnd) {
+        tradingEnd = uint64(block.timestamp + 600);
+        vm.prank(admin);
+        round.openRound(tradingEnd, 120, 0.5e18, 2e18, 60);
+        roundId = round.roundCount();
+        usdc.mint(alice, 5_000_000);
+        vm.startPrank(alice);
+        usdc.approve(address(round), 5_000_000);
+        round.deposit(roundId, 5_000_000);
+        round.claimCredits(roundId, 0, 5_000_000);
+        vm.stopPrank();
+    }
+
+    function _credit(uint256 roundId) private view returns (ProposalTokenImpl) {
+        return ProposalTokenImpl(tokenFactory.creditToken(roundId, 0));
+    }
+
+    function _long(uint256 roundId) private view returns (ProposalTokenImpl) {
+        return ProposalTokenImpl(tokenFactory.longToken(roundId, 0));
+    }
+
+    function _short(uint256 roundId) private view returns (ProposalTokenImpl) {
+        return ProposalTokenImpl(tokenFactory.shortToken(roundId, 0));
+    }
+
+    function test_SellLongAtHalfReturnsAboutHalfInCredits() public {
+        (uint256 roundId,) = _openFundedRound();
+        vm.startPrank(alice);
+        round.buyLong(roundId, 0, 1_000, 1);
+        uint256 held = _long(roundId).balanceOf(alice);
+        // 1,000 credits at p ~ 0.5 buy ~2,000 LONG; selling them at p ~ 0.5 returns about half the token count
+        assertApproxEqRel(held, 2_000 * SCALE, 0.01e18);
+        uint256 creditsBefore = _credit(roundId).balanceOf(alice);
+        round.sellLong(roundId, 0, held, 1);
+        uint256 creditsOut = _credit(roundId).balanceOf(alice) - creditsBefore;
+        assertApproxEqRel(creditsOut, held / 2 / SCALE, 0.01e18);
+        vm.stopPrank();
+    }
+
+    function test_BuyLongThenSellAllReturnsAtMostSpentAndNoLeftovers() public {
+        (uint256 roundId,) = _openFundedRound();
+        vm.startPrank(alice);
+        uint256 start = _credit(roundId).balanceOf(alice);
+        round.buyLong(roundId, 0, 50_000, 1);
+        round.sellLong(roundId, 0, _long(roundId).balanceOf(alice), 1);
+        vm.stopPrank();
+        uint256 end = _credit(roundId).balanceOf(alice);
+        assertLe(end, start);
+        assertGt(end, start - 1_000);
+        assertLt(_long(roundId).balanceOf(alice), 2 * SCALE);
+        assertLt(_short(roundId).balanceOf(alice), 2 * SCALE);
+    }
+
+    function test_BuyShortThenSellAllReturnsAtMostSpentAndNoLeftovers() public {
+        (uint256 roundId,) = _openFundedRound();
+        vm.startPrank(alice);
+        uint256 start = _credit(roundId).balanceOf(alice);
+        round.buyShort(roundId, 0, 50_000, 1);
+        round.sellShort(roundId, 0, _short(roundId).balanceOf(alice), 1);
+        vm.stopPrank();
+        uint256 end = _credit(roundId).balanceOf(alice);
+        assertLe(end, start);
+        assertGt(end, start - 1_000);
+        assertLt(_long(roundId).balanceOf(alice), 2 * SCALE);
+        assertLt(_short(roundId).balanceOf(alice), 2 * SCALE);
+    }
+
+    function test_SellShortAtHalfReturnsAboutHalfInCredits() public {
+        (uint256 roundId,) = _openFundedRound();
+        vm.startPrank(alice);
+        round.buyShort(roundId, 0, 1_000, 1);
+        uint256 held = _short(roundId).balanceOf(alice);
+        assertApproxEqRel(held, 2_000 * SCALE, 0.01e18);
+        uint256 creditsBefore = _credit(roundId).balanceOf(alice);
+        round.sellShort(roundId, 0, held, 1);
+        assertApproxEqRel(_credit(roundId).balanceOf(alice) - creditsBefore, held / 2 / SCALE, 0.01e18);
+        vm.stopPrank();
+    }
+
+    function testFuzz_RoundTripsNeverExtractValueAndStayBacked(uint32 rawBuy, uint8 rawSellPct, bool useLong) public {
+        (uint256 roundId, uint64 tradingEnd) = _openFundedRound();
+        uint256 buyAmount = bound(rawBuy, 10, 400_000);
+        uint256 sellPct = bound(rawSellPct, 1, 100);
+        vm.startPrank(alice);
+        uint256 start = _credit(roundId).balanceOf(alice);
+        if (useLong) {
+            round.buyLong(roundId, 0, buyAmount, 1);
+            uint256 sellAmount = _long(roundId).balanceOf(alice) * sellPct / 100;
+            if (sellAmount > 2 * SCALE) round.sellLong(roundId, 0, sellAmount, 0);
+        } else {
+            round.buyShort(roundId, 0, buyAmount, 1);
+            uint256 sellAmount = _short(roundId).balanceOf(alice) * sellPct / 100;
+            if (sellAmount > 2 * SCALE) round.sellShort(roundId, 0, sellAmount, 0);
+        }
+        vm.stopPrank();
+
+        // Whatever was sold back plus whatever is still held is worth at most what was spent at p <= 1.
+        uint256 credits = _credit(roundId).balanceOf(alice);
+        assertLe(credits, start);
+        uint256 heldLong = _long(roundId).balanceOf(alice);
+        uint256 heldShort = _short(roundId).balanceOf(alice);
+        // Held LONG + SHORT pair into sets worth one credit per 1e12; any held tokens are a scalar claim.
+        assertLe(credits + (heldLong > heldShort ? heldLong : heldShort) / SCALE, start + buyAmount * 99);
+
+        vm.warp(tradingEnd);
+        round.collapse(roundId);
+        vm.warp(tradingEnd + 121);
+        vm.prank(admin);
+        round.settle(roundId, int256(uint256(rawBuy % 3) * 1e18) - 0.5e18);
+        assertLe(round.roundUserLiability(roundId), round.roundRemainingCollateral(roundId));
+        vm.prank(alice);
+        round.redeem(roundId);
+        assertEq(round.roundUserLiability(roundId), 0);
+    }
+
+    function testFuzz_QuotesMatchExecution(uint32 rawBuy, uint8 rawSellPct, bool useLong) public {
+        (uint256 roundId,) = _openFundedRound();
+        uint256 buyAmount = bound(rawBuy, 1, 900_000);
+        uint256 sellPct = bound(rawSellPct, 1, 100);
+        ProposalTokenImpl bought = useLong ? _long(roundId) : _short(roundId);
+
+        uint256 quoted =
+            useLong ? market.quoteBuyLong(roundId, 0, buyAmount) : market.quoteBuyShort(roundId, 0, buyAmount);
+        vm.startPrank(alice);
+        if (useLong) round.buyLong(roundId, 0, buyAmount, quoted);
+        else round.buyShort(roundId, 0, buyAmount, quoted);
+        assertEq(bought.balanceOf(alice), quoted);
+
+        uint256 sellAmount = quoted * sellPct / 100;
+        if (sellAmount < 2 * SCALE) {
+            vm.stopPrank();
+            return;
+        }
+        (uint256 qCredits, uint256 qLongDust, uint256 qShortDust) =
+            useLong ? market.quoteSellLong(roundId, 0, sellAmount) : market.quoteSellShort(roundId, 0, sellAmount);
+        uint256 creditsBefore = _credit(roundId).balanceOf(alice);
+        uint256 longBefore = _long(roundId).balanceOf(alice);
+        uint256 shortBefore = _short(roundId).balanceOf(alice);
+        if (useLong) round.sellLong(roundId, 0, sellAmount, qCredits);
+        else round.sellShort(roundId, 0, sellAmount, qCredits);
+        vm.stopPrank();
+
+        assertEq(_credit(roundId).balanceOf(alice) - creditsBefore, qCredits);
+        assertEq(_long(roundId).balanceOf(alice) + (useLong ? sellAmount : 0) - longBefore, qLongDust);
+        assertEq(_short(roundId).balanceOf(alice) + (useLong ? 0 : sellAmount) - shortBefore, qShortDust);
+    }
 }

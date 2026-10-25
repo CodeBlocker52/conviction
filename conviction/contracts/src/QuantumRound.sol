@@ -623,7 +623,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
         if (setScale != 0) {
             _requireSixDecimalCredits(credit);
-            _settleCompleteSetSale(roundId, proposalId, creditsOut, msg.sender, true);
+            _settleCompleteSetSale(roundId, proposalId, creditsOut, msg.sender);
         }
         ProposalTokenImpl(credit).mint(msg.sender, creditsOut);
 
@@ -656,7 +656,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
         if (setScale != 0) {
             _requireSixDecimalCredits(credit);
-            _settleCompleteSetSale(roundId, proposalId, creditsOut, msg.sender, false);
+            _settleCompleteSetSale(roundId, proposalId, creditsOut, msg.sender);
         }
         ProposalTokenImpl(credit).mint(msg.sender, creditsOut);
 
@@ -883,26 +883,20 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         ProposalTokenImpl(proposalTokens.shortToken(roundId, proposalId)).mint(recipient, amount);
     }
 
-    function _settleCompleteSetSale(
-        uint256 roundId,
-        uint256 proposalId,
-        uint256 creditsOut,
-        address recipient,
-        bool soldLong
-    ) internal {
+    function _settleCompleteSetSale(uint256 roundId, uint256 proposalId, uint256 creditsOut, address recipient)
+        internal
+    {
         (uint256 longRemainder, uint256 shortRemainder) = market.consumeSellSettlement(roundId, proposalId);
         uint256 matched = creditsOut * market.completeSetScale();
         address longTokenAddr = proposalTokens.longToken(roundId, proposalId);
         address shortTokenAddr = proposalTokens.shortToken(roundId, proposalId);
-        if (soldLong) {
-            if (shortRemainder < matched) revert InsufficientSolvencyReserve();
-            if (matched > 0) ProposalTokenImpl(shortTokenAddr).burn(address(this), matched);
-            shortRemainder -= matched;
-        } else {
-            if (longRemainder < matched) revert InsufficientSolvencyReserve();
-            if (matched > 0) ProposalTokenImpl(longTokenAddr).burn(address(this), matched);
-            longRemainder -= matched;
+        if (longRemainder < matched || shortRemainder < matched) revert InsufficientSolvencyReserve();
+        if (matched > 0) {
+            ProposalTokenImpl(longTokenAddr).burn(address(this), matched);
+            ProposalTokenImpl(shortTokenAddr).burn(address(this), matched);
         }
+        longRemainder -= matched;
+        shortRemainder -= matched;
         if (longRemainder > 0) IERC20(longTokenAddr).safeTransfer(recipient, longRemainder);
         if (shortRemainder > 0) IERC20(shortTokenAddr).safeTransfer(recipient, shortRemainder);
     }

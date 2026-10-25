@@ -4,12 +4,16 @@ pragma solidity ^0.8.26;
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { TickMath } from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import { SwapMath } from "@uniswap/v4-core/src/libraries/SwapMath.sol";
+import { StateLibrary } from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import { ProtocolFeeLibrary } from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
 import { IHooks } from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import { IPoolManager } from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import { IUnlockCallback } from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import { BalanceDelta } from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import { Currency, CurrencyLibrary } from "@uniswap/v4-core/src/types/Currency.sol";
 import { PoolKey } from "@uniswap/v4-core/src/types/PoolKey.sol";
+import { PoolId, PoolIdLibrary } from "@uniswap/v4-core/src/types/PoolId.sol";
 import { ModifyLiquidityParams, SwapParams } from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import { IProposalMarket } from "./IProposalMarket.sol";
 import { ProposalTokens } from "./ProposalTokens.sol";
@@ -24,6 +28,10 @@ interface IQuantumRoundTiming {
 contract WaveV4ProposalMarket is IProposalMarket, IUnlockCallback {
     using CurrencyLibrary for Currency;
     using SafeERC20 for IERC20;
+    using StateLibrary for IPoolManager;
+    using ProtocolFeeLibrary for uint24;
+    using ProtocolFeeLibrary for uint16;
+    using PoolIdLibrary for PoolKey;
 
     uint256 public constant COMPLETE_SET_SCALE = 1e12;
     uint160 private constant INITIAL_SQRT_PRICE_X96 = 1 << 96;
@@ -31,6 +39,11 @@ contract WaveV4ProposalMarket is IProposalMarket, IUnlockCallback {
     int24 private constant UPPER_TICK = 45_900;
     int24 private constant TICK_SPACING = 60;
     uint24 private constant POOL_FEE = 3_000;
+    /// @dev Initialised ticks of the single position, in compressed (tick / spacing) units.
+    int256 private constant LOWER_COMPRESSED = -765;
+    int256 private constant UPPER_COMPRESSED = 765;
+    /// @dev Sell solver stops once the bracket is this many raw token units wide (1e-12 of a token).
+    uint256 private constant SELL_SOLVER_TOLERANCE = 1e6;
 
     enum Action {
         ADD_LIQUIDITY,
@@ -46,6 +59,13 @@ contract WaveV4ProposalMarket is IProposalMarket, IUnlockCallback {
         uint256 pendingShortRemainder;
         bool seeded;
         bool finalized;
+    }
+
+    struct SwapSim {
+        uint160 sqrtPriceX96;
+        int24 tick;
+        uint128 liquidity;
+        uint24 swapFee;
     }
 
     struct Operation {
@@ -146,7 +166,8 @@ contract WaveV4ProposalMarket is IProposalMarket, IUnlockCallback {
         );
         int128 longDelta = _currencyDelta(market_.key, proposalTokens.longToken(roundId, proposalId), delta);
         if (longDelta <= 0) revert InvalidOutput();
-        longOut = uint256(uint128(longDelta));
+        // The user receives the minted LONG leg of the complete set plus the LONG bought with the SHORT leg.
+        longOut = uint256(uint128(longDelta)) + creditsIn * COMPLETE_SET_SCALE;
         if (longOut < minLongOut || longOut == 0) revert InvalidOutput();
         IERC20(proposalTokens.longToken(roundId, proposalId)).safeTransfer(msg.sender, longOut);
     }
@@ -168,7 +189,7 @@ contract WaveV4ProposalMarket is IProposalMarket, IUnlockCallback {
         );
         int128 shortDelta = _currencyDelta(market_.key, proposalTokens.shortToken(roundId, proposalId), delta);
         if (shortDelta <= 0) revert InvalidOutput();
-        setsOut = uint256(uint128(shortDelta));
+        setsOut = uint256(uint128(shortDelta)) + creditsIn * COMPLETE_SET_SCALE;
         if (setsOut < minSetsOut || setsOut == 0) revert InvalidOutput();
         IERC20(proposalTokens.shortToken(roundId, proposalId)).safeTransfer(msg.sender, setsOut);
     }
@@ -178,27 +199,7 @@ contract WaveV4ProposalMarket is IProposalMarket, IUnlockCallback {
         onlyRound
         returns (uint256 creditsOut)
     {
-        Market storage market_ = _getMarket(roundId, proposalId);
-        if (market_.pendingLongRemainder != 0 || market_.pendingShortRemainder != 0) revert PendingRemainder();
-
-        BalanceDelta delta = _swap(
-            roundId,
-            proposalId,
-            _isCurrency0(market_.key, proposalTokens.longToken(roundId, proposalId)),
-            -int256(longIn)
-        );
-        int128 longDelta = _currencyDelta(market_.key, proposalTokens.longToken(roundId, proposalId), delta);
-        if (longDelta >= 0) revert InvalidOutput();
-        uint256 longConsumed = uint256(-int256(longDelta));
-        int128 shortDelta = _currencyDelta(market_.key, proposalTokens.shortToken(roundId, proposalId), delta);
-        if (shortDelta <= 0) revert InvalidOutput();
-        uint256 shortOut = uint256(uint128(shortDelta));
-        uint256 matched = longConsumed < shortOut ? longConsumed : shortOut;
-        creditsOut = matched / COMPLETE_SET_SCALE;
-        if (creditsOut < minCreditsOut || creditsOut == 0) revert InvalidOutput();
-
-        market_.pendingLongRemainder = longIn - longConsumed;
-        market_.pendingShortRemainder = shortOut;
+        creditsOut = _tradeSell(roundId, proposalId, longIn, minCreditsOut, true);
     }
 
     function tradeSellShort(uint256 roundId, uint256 proposalId, uint256 setsIn, uint256 minCreditsOut)
@@ -206,27 +207,207 @@ contract WaveV4ProposalMarket is IProposalMarket, IUnlockCallback {
         onlyRound
         returns (uint256 creditsOut)
     {
+        creditsOut = _tradeSell(roundId, proposalId, setsIn, minCreditsOut, false);
+    }
+
+    /// @notice Exact LONG received for `creditsIn` credits, including the complete-set LONG leg.
+    function quoteBuyLong(uint256 roundId, uint256 proposalId, uint256 creditsIn)
+        external
+        view
+        returns (uint256 longOut)
+    {
+        return _quoteBuy(roundId, proposalId, creditsIn, true);
+    }
+
+    /// @notice Exact SHORT received for `creditsIn` credits, including the complete-set SHORT leg.
+    function quoteBuyShort(uint256 roundId, uint256 proposalId, uint256 creditsIn)
+        external
+        view
+        returns (uint256 shortOut)
+    {
+        return _quoteBuy(roundId, proposalId, creditsIn, false);
+    }
+
+    /// @notice Exact credits (and returned dust) for selling `longIn` LONG.
+    function quoteSellLong(uint256 roundId, uint256 proposalId, uint256 longIn)
+        external
+        view
+        returns (uint256 creditsOut, uint256 longDust, uint256 shortDust)
+    {
+        (creditsOut, longDust, shortDust,,) = _quoteSell(roundId, proposalId, longIn, true);
+    }
+
+    /// @notice Exact credits (and returned dust) for selling `shortIn` SHORT.
+    function quoteSellShort(uint256 roundId, uint256 proposalId, uint256 shortIn)
+        external
+        view
+        returns (uint256 creditsOut, uint256 longDust, uint256 shortDust)
+    {
+        (creditsOut, longDust, shortDust,,) = _quoteSell(roundId, proposalId, shortIn, false);
+    }
+
+    function _tradeSell(uint256 roundId, uint256 proposalId, uint256 amountIn, uint256 minCreditsOut, bool soldLong)
+        private
+        returns (uint256 creditsOut)
+    {
         Market storage market_ = _getMarket(roundId, proposalId);
         if (market_.pendingLongRemainder != 0 || market_.pendingShortRemainder != 0) revert PendingRemainder();
 
-        BalanceDelta delta = _swap(
-            roundId,
-            proposalId,
-            _isCurrency0(market_.key, proposalTokens.shortToken(roundId, proposalId)),
-            -int256(setsIn)
-        );
-        int128 shortDelta = _currencyDelta(market_.key, proposalTokens.shortToken(roundId, proposalId), delta);
-        if (shortDelta >= 0) revert InvalidOutput();
-        uint256 shortConsumed = uint256(-int256(shortDelta));
-        int128 longDelta = _currencyDelta(market_.key, proposalTokens.longToken(roundId, proposalId), delta);
-        if (longDelta <= 0) revert InvalidOutput();
-        uint256 longOut = uint256(uint128(longDelta));
-        uint256 matched = shortConsumed < longOut ? shortConsumed : longOut;
+        (,,, uint256 swapIn,) = _quoteSell(roundId, proposalId, amountIn, soldLong);
+        address inToken =
+            soldLong ? proposalTokens.longToken(roundId, proposalId) : proposalTokens.shortToken(roundId, proposalId);
+        address outToken =
+            soldLong ? proposalTokens.shortToken(roundId, proposalId) : proposalTokens.longToken(roundId, proposalId);
+
+        BalanceDelta delta = _swap(roundId, proposalId, _isCurrency0(market_.key, inToken), -int256(swapIn));
+        int128 inDelta = _currencyDelta(market_.key, inToken, delta);
+        int128 outDelta = _currencyDelta(market_.key, outToken, delta);
+        if (inDelta >= 0 || outDelta <= 0) revert InvalidOutput();
+
+        uint256 remainingIn = amountIn - uint256(-int256(inDelta));
+        uint256 received = uint256(uint128(outDelta));
+        uint256 matched = remainingIn < received ? remainingIn : received;
         creditsOut = matched / COMPLETE_SET_SCALE;
         if (creditsOut < minCreditsOut || creditsOut == 0) revert InvalidOutput();
 
-        market_.pendingLongRemainder = longOut;
-        market_.pendingShortRemainder = setsIn - shortConsumed;
+        // The market now holds `remainingIn` of the sold side and `received` of the other side. The round burns
+        // matched complete sets for credits and returns only the unmatched dust to the seller.
+        (market_.pendingLongRemainder, market_.pendingShortRemainder) =
+            soldLong ? (remainingIn, received) : (received, remainingIn);
+    }
+
+    function _quoteBuy(uint256 roundId, uint256 proposalId, uint256 creditsIn, bool buyLong)
+        private
+        view
+        returns (uint256 out)
+    {
+        Market storage market_ = _getMarket(roundId, proposalId);
+        // Buying LONG swaps the SHORT leg in, so SHORT is the input currency.
+        bool zeroForOne = _isCurrency0(
+            market_.key,
+            buyLong ? proposalTokens.shortToken(roundId, proposalId) : proposalTokens.longToken(roundId, proposalId)
+        );
+        SwapSim memory sim = _loadSim(market_.key, zeroForOne);
+        uint256 amountIn = creditsIn * COMPLETE_SET_SCALE;
+        (uint256 consumed, uint256 swapOut) = _simulate(sim, zeroForOne, amountIn);
+        if (consumed != amountIn || swapOut == 0) revert InvalidOutput();
+        out = swapOut + amountIn;
+    }
+
+    function _quoteSell(uint256 roundId, uint256 proposalId, uint256 amountIn, bool soldLong)
+        private
+        view
+        returns (uint256 creditsOut, uint256 longDust, uint256 shortDust, uint256 swapIn, uint256 received)
+    {
+        Market storage market_ = _getMarket(roundId, proposalId);
+        bool zeroForOne = _isCurrency0(
+            market_.key,
+            soldLong ? proposalTokens.longToken(roundId, proposalId) : proposalTokens.shortToken(roundId, proposalId)
+        );
+        SwapSim memory sim = _loadSim(market_.key, zeroForOne);
+
+        // Find the smallest swap whose output covers the input left over, so leftover input pairs with output.
+        uint256 lo;
+        uint256 hi = amountIn;
+        while (hi - lo > SELL_SOLVER_TOLERANCE) {
+            uint256 mid = (lo + hi) / 2;
+            (uint256 consumedMid, uint256 outMid) = _simulate(sim, zeroForOne, mid);
+            if (outMid >= amountIn - consumedMid) hi = mid;
+            else lo = mid;
+        }
+        swapIn = hi;
+        uint256 consumed;
+        (consumed, received) = _simulate(sim, zeroForOne, swapIn);
+        uint256 remainingIn = amountIn - consumed;
+        if (received == 0 || received < remainingIn) revert InvalidOutput();
+
+        uint256 matched = remainingIn;
+        creditsOut = matched / COMPLETE_SET_SCALE;
+        uint256 leftoverIn = remainingIn - creditsOut * COMPLETE_SET_SCALE;
+        uint256 leftoverOut = received - creditsOut * COMPLETE_SET_SCALE;
+        (longDust, shortDust) = soldLong ? (leftoverIn, leftoverOut) : (leftoverOut, leftoverIn);
+    }
+
+    function _loadSim(PoolKey storage key, bool zeroForOne) private view returns (SwapSim memory sim) {
+        PoolId id = key.toId();
+        (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee) = poolManager.getSlot0(id);
+        uint16 directional = zeroForOne ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
+        sim = SwapSim({
+            sqrtPriceX96: sqrtPriceX96,
+            tick: tick,
+            liquidity: poolManager.getLiquidity(id),
+            swapFee: directional == 0 ? lpFee : directional.calculateSwapFee(lpFee)
+        });
+    }
+
+    /// @dev Mirrors Pool.swap for an exact-input swap through the single position's tick bitmap.
+    function _simulate(SwapSim memory sim, bool zeroForOne, uint256 amountIn)
+        private
+        pure
+        returns (uint256 consumed, uint256 amountOut)
+    {
+        if (amountIn == 0) return (0, 0);
+        int256 remaining = -int256(amountIn);
+        uint160 sqrtPrice = sim.sqrtPriceX96;
+        int24 tick = sim.tick;
+        uint128 liquidity = sim.liquidity;
+        uint160 limit =
+            zeroForOne ? TickMath.getSqrtPriceAtTick(LOWER_TICK) + 1 : TickMath.getSqrtPriceAtTick(UPPER_TICK) - 1;
+        if (zeroForOne ? limit >= sqrtPrice : limit <= sqrtPrice) revert InvalidOutput();
+
+        while (remaining != 0 && sqrtPrice != limit) {
+            uint160 start = sqrtPrice;
+            (int24 tickNext, bool initialized) = _nextTick(tick, zeroForOne);
+            if (tickNext <= TickMath.MIN_TICK) tickNext = TickMath.MIN_TICK;
+            if (tickNext >= TickMath.MAX_TICK) tickNext = TickMath.MAX_TICK;
+            uint160 sqrtNext = TickMath.getSqrtPriceAtTick(tickNext);
+
+            uint256 stepIn;
+            uint256 stepOut;
+            uint256 stepFee;
+            (sqrtPrice, stepIn, stepOut, stepFee) = SwapMath.computeSwapStep(
+                sqrtPrice, SwapMath.getSqrtPriceTarget(zeroForOne, sqrtNext, limit), liquidity, remaining, sim.swapFee
+            );
+            remaining += int256(stepIn + stepFee);
+            amountOut += stepOut;
+
+            if (sqrtPrice == sqrtNext) {
+                // Both initialised ticks are the edges of the only position, so crossing leaves zero liquidity.
+                if (initialized) liquidity = 0;
+                tick = zeroForOne ? tickNext - 1 : tickNext;
+            } else if (sqrtPrice != start) {
+                tick = TickMath.getTickAtSqrtPrice(sqrtPrice);
+            }
+        }
+        consumed = amountIn - uint256(-remaining);
+    }
+
+    /// @dev TickBitmap.nextInitializedTickWithinOneWord for a bitmap holding only the two position edges.
+    function _nextTick(int24 tick, bool lte) private pure returns (int24 next, bool initialized) {
+        int256 compressed = int256(tick) / int256(TICK_SPACING);
+        if (tick < 0 && int256(tick) % int256(TICK_SPACING) != 0) compressed--;
+        if (lte) {
+            int256 word = compressed >> 8;
+            int256 bitPos = compressed - (word << 8);
+            int256 hit = type(int256).min;
+            if (LOWER_COMPRESSED <= compressed && (LOWER_COMPRESSED >> 8) == word) hit = LOWER_COMPRESSED;
+            if (UPPER_COMPRESSED <= compressed && (UPPER_COMPRESSED >> 8) == word && UPPER_COMPRESSED > hit) {
+                hit = UPPER_COMPRESSED;
+            }
+            initialized = hit != type(int256).min;
+            next = int24((initialized ? hit : compressed - bitPos) * int256(TICK_SPACING));
+        } else {
+            int256 from = compressed + 1;
+            int256 word = from >> 8;
+            int256 bitPos = from - (word << 8);
+            int256 hit = type(int256).max;
+            if (LOWER_COMPRESSED >= from && (LOWER_COMPRESSED >> 8) == word) hit = LOWER_COMPRESSED;
+            if (UPPER_COMPRESSED >= from && (UPPER_COMPRESSED >> 8) == word && UPPER_COMPRESSED < hit) {
+                hit = UPPER_COMPRESSED;
+            }
+            initialized = hit != type(int256).max;
+            next = int24((initialized ? hit : from + (255 - bitPos)) * int256(TICK_SPACING));
+        }
     }
 
     function spotPrice(uint256 roundId, uint256 proposalId) external view returns (uint256) {
