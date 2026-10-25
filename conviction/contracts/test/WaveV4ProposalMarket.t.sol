@@ -349,7 +349,7 @@ contract WaveV4ProposalMarketTest is Test {
         }
     }
 
-    function test_CollapseSelectsOnProbabilityTwapAndSlashesSpam() public {
+    function test_CollapseSelectsOnProbabilityTwapAndRefundsAllBonds() public {
         (uint256 roundId, uint64 tradingEnd) = _openFundedRound();
         address proposerA = makeAddr("v4-proposer-a");
         address proposerB = makeAddr("v4-proposer-b");
@@ -369,11 +369,13 @@ contract WaveV4ProposalMarketTest is Test {
         assertEq(twaps[0], 0.5e18);
         assertGt(twaps[1], 0.5e18 + round.EPSILON());
         assertLt(twaps[1], 1e18);
-        assertLt(twaps[2], round.SPAM_THRESHOLD_PROBABILITY());
-        assertGt(twaps[2], 0.01e18 - 1);
-        assertEq(usdc.balanceOf(treasury), 1_000_000);
+        assertLt(twaps[2], 0.1e18);
+        // The dumped loser still gets its bond back; no bond goes to the treasury.
+        assertEq(usdc.balanceOf(treasury), 0);
         assertEq(registry.bonds(proposerA), 0);
+        assertEq(registry.bonds(proposerB), 0);
         assertEq(usdc.balanceOf(proposerA), 1_000_000);
+        assertEq(usdc.balanceOf(proposerB), 1_000_000);
     }
 
     function test_CollapseKeepsStatusQuoWithinMargin() public {

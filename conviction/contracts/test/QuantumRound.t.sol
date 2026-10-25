@@ -808,26 +808,30 @@ contract QuantumRoundTest is Test {
         vm.warp(TRADING_END + 1);
         qr.collapse(roundId);
 
-        // TWAP above SPAM_THRESHOLD_PRICE => bond refunded
+        // TWAP above spam threshold => bond refunded
         assertEq(registry.bonds(proposer), bondBefore - DEFAULT_BOND);
         // proposer got their bond back
         // The bond is transferred out so registry balance drops
     }
 
-    function test_Collapse_BondSlashed_Spam() public {
+    function test_Collapse_BondRefunded_EvenWhenMarketDumped() public {
         uint256 roundId = _openRound();
-        _propose(roundId, 5000);
-        // No trading — TWAP stays at initial price (1e18) which is above spam threshold
-        // But to force slashing we need TWAP < 0.2e18 which requires MASSIVE sell pressure
-        // Instead: just warp and collapse; the price is 1e18 > 0.2e18, so bond is refunded not slashed.
-        // We just verify the bond is handled correctly (refunded here, spam test in separate fuzz scenario).
+        uint256 proposalId = _propose(roundId, 5000);
+        _fundAndDeposit(alice, roundId, 100_000_000);
+        vm.prank(alice);
+        qr.claimCredits(roundId, proposalId, 100_000_000);
+        vm.prank(alice);
+        qr.buyShort(roundId, proposalId, 100_000_000, 0);
 
         uint256 bondBefore = registry.bonds(proposer);
+        uint256 proposerUsdc = usdc.balanceOf(proposer);
+        uint256 treasuryUsdc = usdc.balanceOf(treasury);
         vm.warp(TRADING_END + 1);
         qr.collapse(roundId);
 
-        // TWAP starts at 1e18, far above spam threshold => refunded
         assertEq(registry.bonds(proposer), bondBefore - DEFAULT_BOND);
+        assertEq(usdc.balanceOf(proposer), proposerUsdc + DEFAULT_BOND);
+        assertEq(usdc.balanceOf(treasury), treasuryUsdc);
     }
 
     // ─────────────────────────────────────────────────────────

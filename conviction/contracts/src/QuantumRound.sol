@@ -34,9 +34,6 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
     /// @notice Maximum number of proposals allowed in one round (including status quo).
     uint256 public constant MAX_PROPOSALS_PER_ROUND = 10;
 
-    /// @notice LONG probability TWAP below which a proposal is considered spam and its bond is slashed.
-    uint256 public constant SPAM_THRESHOLD_PROBABILITY = 0.1e18;
-
     /// @notice Winner margin above status quo, in LONG probability (0.005 = 0.5 percentage points).
     uint256 public constant EPSILON = 0.005e18;
 
@@ -238,11 +235,6 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
     /// @notice Emitted when a proposal bond is refunded during round collapse.
     event BondRefunded(uint256 indexed roundId, uint256 indexed proposalId, address indexed proposer, uint256 amount);
-
-    /// @notice Emitted when a proposal bond is slashed during round collapse.
-    event BondSlashed(
-        uint256 indexed roundId, uint256 indexed proposalId, address indexed proposer, address treasury, uint256 amount
-    );
 
     /// @notice Emitted when positive performance generates proposer-fee entitlement.
     event ProposerFeeEarned(
@@ -714,7 +706,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
                 protocolLiquiditySeed += seedPerProposal;
             }
 
-            if (i > 0) _finalizeProposalBond(roundId, i, bestProposal, twaps[i]);
+            if (i > 0) _finalizeProposalBond(roundId, i);
         }
 
         emit Collapsed(roundId, bestProposal, twaps);
@@ -905,26 +897,16 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (credit == address(0) || ProposalTokenImpl(credit).decimals() != 6) revert InvalidCreditPrecision();
     }
 
-    /// @notice Finalizes one proposal bond after winner determination.
-    /// @param roundId Round identifier.
-    /// @param proposalId Proposal identifier to finalize.
-    /// @param winnerProposalId Winner proposal identifier for this round.
-    /// @param finalTwap Final TWAP used for slash/refund branch.
-    function _finalizeProposalBond(uint256 roundId, uint256 proposalId, uint256 winnerProposalId, uint256 finalTwap)
-        internal
-    {
+    /// @notice Refunds one proposal bond at collapse.
+    /// @dev Bonds are refunded whether or not the proposal won. Price-based slashing is griefable because a rival can
+    /// cheaply push a thin market down in the final window; it needs a manipulation-resistant signal (roadmap).
+    function _finalizeProposalBond(uint256 roundId, uint256 proposalId) internal {
         Proposal storage proposal = proposals[roundId][proposalId];
         if (proposal.bondRefunded) return;
 
         proposal.bondRefunded = true;
-
-        if (proposalId == winnerProposalId || finalTwap >= SPAM_THRESHOLD_PROBABILITY) {
-            proposerRegistry.refundBond(proposal.proposer, proposal.bondAmount);
-            emit BondRefunded(roundId, proposalId, proposal.proposer, proposal.bondAmount);
-        } else {
-            proposerRegistry.slashBond(proposal.proposer, proposal.bondAmount, treasury);
-            emit BondSlashed(roundId, proposalId, proposal.proposer, treasury, proposal.bondAmount);
-        }
+        proposerRegistry.refundBond(proposal.proposer, proposal.bondAmount);
+        emit BondRefunded(roundId, proposalId, proposal.proposer, proposal.bondAmount);
     }
 
     /// @notice Validates round/proposal exist and trading is still open.

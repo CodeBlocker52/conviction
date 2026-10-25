@@ -42,7 +42,7 @@ buyLong / sellLong / buyShort / sellShort   [during trading window]
 collapse()              [anyone, after tradingEnd]
     → closeTwapWindow for all proposals
     → winner = proposal with highest TWAP > statusQuo + epsilon
-    → bonds refunded (non-spam) or slashed (spam = TWAP < 20% of initial)
+    → all bonds refunded at collapse (no price-based slashing)
 
 settle(roundId, return) [Keeper/Resolver, after evaluationEnd; or anyone after +2d]
     → realisedReturn recorded
@@ -127,7 +127,6 @@ WavefundVault
 |---|---|---|
 | DEFAULT_BOND | 1 USDC | Proposer bond |
 | initialLiquidityPerProposal | 5 USDC (testnet) / 500 USDC (prod) | Per-proposal market seed |
-| SPAM_THRESHOLD_PROBABILITY | 0.1e18 | LONG probability TWAP below this = bond slashed |
 | EPSILON | 0.005e18 | Winner margin above status quo, in LONG probability (0.5 percentage points) |
 | MAX_PROPOSALS_PER_ROUND | 10 | Includes status quo proposal 0 |
 | EMERGENCY_SETTLE_DELAY | 2 days | Permissionless settle fallback |
@@ -198,7 +197,7 @@ Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibi
 
 ### Selection scale
 
-`IProposalMarket.probabilityTwap` returns the final-window LONG probability TWAP in `[0, 1e18]`. `QuantumRound.collapse` selects the winner on it: a proposal must beat the status quo's TWAP by `EPSILON = 0.005` (0.5 percentage points); otherwise the status quo wins. A proposal whose probability TWAP is below `SPAM_THRESHOLD_PROBABILITY = 0.1` (and that did not win) has its bond slashed. 0.1 is above the 0.01 pool floor, so a deliberate dump is distinguishable from an idle market (0.5), and it is not so high that a legitimately unpopular proposal at 0.2-0.3 is punished. `ConstantProductMarket` derives probability as `price / (1 + price)` from its price TWAP. `Collapsed` now emits probabilities.
+`IProposalMarket.probabilityTwap` returns the final-window LONG probability TWAP in `[0, 1e18]`. `QuantumRound.collapse` selects the winner on it: a proposal must beat the status quo's TWAP by `EPSILON = 0.005` (0.5 percentage points); otherwise the status quo wins. All bonds are refunded at collapse, whether or not the proposal won. `ConstantProductMarket` derives probability as `price / (1 + price)` from its price TWAP. `Collapsed` now emits probabilities.
 
 ### Phase B deployment plan (not executed; awaiting approval)
 
@@ -215,6 +214,10 @@ Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibi
 6. Verify all new contracts on Sourcify; update `SOURCES.md`.
 7. Cutover: regenerate ABIs, update `current.json` and frontend config, switch keeper and demo scripts, then `npm run check:contracts`.
 
-**USDC:** seed `initialLiquidityPerProposal` x 4 proposals (recommended 5 USDC each, 20 USDC, with most returning to the reserve after collapse), bonds 1 USDC per proposer x 3 (refunded unless slashed), vault test deposit about 5 USDC, gas under 1 USDC. About 27 USDC in total; the deployer holds about 57 USDC.
+**USDC:** seed `initialLiquidityPerProposal` x 4 proposals (recommended 5 USDC each, 20 USDC, with most returning to the reserve after collapse), bonds 1 USDC per proposer x 3 (always refunded at collapse), vault test deposit about 5 USDC, gas under 1 USDC. About 27 USDC in total; the deployer holds about 57 USDC.
 
 **Keeper and scripts:** `collapse` already calls `finalizeProposal` for every proposal, so no extra keeper transaction is needed, but the demo close script must call `collapse` after `tradingEnd` and before `settle`, check the market is finalised (pool liquidity zero), and read probabilities, not prices. `openRound` and `propose` cost about 1.5M gas each.
+
+### Bond policy (v1) and roadmap
+
+Price-based slashing is griefable: a rival can push a thin proposal market below any probability threshold in the final window for a few USDC, and because losing markets are erased the attack costs nothing if the rival's position was never going to be redeemed. v1 therefore refunds every bond at collapse. Spam is limited by the 10-proposal cap and the bond lock-up until collapse. Slashing may return only with a manipulation-resistant signal (for example a TWAP over a longer window combined with minimum volume, or governance review of invalid proposals). `ProposerRegistry.slashBond` and the round's treasury remain available for that future work.
