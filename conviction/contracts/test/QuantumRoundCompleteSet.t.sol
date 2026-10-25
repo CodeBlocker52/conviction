@@ -86,6 +86,10 @@ contract CompleteSetMockMarket is IProposalMarket {
         return 0.5e18;
     }
 
+    function probabilityTwap(uint256, uint256, uint256, uint256) external pure returns (uint256) {
+        return 0.5e18;
+    }
+
     function seedLiquidity(uint256, uint256, uint256 creditAmount, uint256 longAmount) external view onlyOwner {
         require(creditAmount > 0 && longAmount > 0);
     }

@@ -1,27 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test} from "forge-std/Test.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {ProposerRegistry} from "../src/ProposerRegistry.sol";
-import {MockUSDC} from "../test-helpers/MockUSDC.sol";
+import { Test } from "forge-std/Test.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { ProposerRegistry } from "../src/ProposerRegistry.sol";
+import { MockUSDC } from "../test-helpers/MockUSDC.sol";
 
 contract ProposerRegistryTest is Test {
     ProposerRegistry internal registry;
     MockUSDC internal usdc;
 
-    address internal admin     = makeAddr("admin");
-    address internal alice     = makeAddr("alice");
-    address internal bob       = makeAddr("bob");
-    address internal treasury  = makeAddr("treasury");
-    address internal qrole     = makeAddr("qrole"); // holds QUANTUM_ROUND_ROLE
+    address internal admin = makeAddr("admin");
+    address internal alice = makeAddr("alice");
+    address internal bob = makeAddr("bob");
+    address internal treasury = makeAddr("treasury");
+    address internal qrole = makeAddr("qrole"); // holds QUANTUM_ROUND_ROLE
 
     bytes32 internal constant QUANTUM_ROUND_ROLE = keccak256("QUANTUM_ROUND_ROLE");
 
     uint256 internal constant BOND = 1_000_000; // 1 USDC (6 dec)
 
     function setUp() public {
-        usdc     = new MockUSDC();
+        usdc = new MockUSDC();
         registry = new ProposerRegistry(address(usdc), admin);
 
         // grant QUANTUM_ROUND_ROLE to a separate caller so we can test role enforcement
@@ -56,8 +56,7 @@ contract ProposerRegistryTest is Test {
         vm.prank(alice);
         registry.registerAgent("Alice Agent");
 
-        (string memory name, address wallet, bool active, uint256 propCount, uint256 winCount,) =
-            registry.agents(alice);
+        (string memory name, address wallet, bool active, uint256 propCount, uint256 winCount,) = registry.agents(alice);
         assertEq(name, "Alice Agent");
         assertEq(wallet, alice);
         assertTrue(active);
@@ -92,7 +91,7 @@ contract ProposerRegistryTest is Test {
         vm.prank(admin);
         registry.deactivateAgent(alice);
 
-        (, , bool active,,,) = registry.agents(alice);
+        (,, bool active,,,) = registry.agents(alice);
         assertFalse(active);
     }
 
@@ -113,11 +112,7 @@ contract ProposerRegistryTest is Test {
         bytes32 adminRole = registry.DEFAULT_ADMIN_ROLE(); // capture before prank
         vm.prank(bob);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                adminRole
-            )
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bob, adminRole)
         );
         registry.deactivateAgent(alice);
     }
@@ -155,7 +150,7 @@ contract ProposerRegistryTest is Test {
         assertEq(registry.bonds(alice), BOND);
         assertEq(usdc.balanceOf(address(registry)), BOND);
         // proposalCount incremented
-        (,,,uint256 pc,,) = registry.agents(alice);
+        (,,, uint256 pc,,) = registry.agents(alice);
         assertEq(pc, 1);
     }
 
@@ -173,11 +168,7 @@ contract ProposerRegistryTest is Test {
 
         vm.prank(bob);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                QUANTUM_ROUND_ROLE
-            )
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bob, QUANTUM_ROUND_ROLE)
         );
         registry.lockBond(alice, BOND);
     }
@@ -242,11 +233,7 @@ contract ProposerRegistryTest is Test {
     function test_RefundBond_NotRole_Reverts() public {
         vm.prank(bob);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                QUANTUM_ROUND_ROLE
-            )
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bob, QUANTUM_ROUND_ROLE)
         );
         registry.refundBond(alice, BOND);
     }
@@ -291,11 +278,7 @@ contract ProposerRegistryTest is Test {
     function test_SlashBond_NotRole_Reverts() public {
         vm.prank(bob);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                QUANTUM_ROUND_ROLE
-            )
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bob, QUANTUM_ROUND_ROLE)
         );
         registry.slashBond(alice, BOND, treasury);
     }
@@ -368,11 +351,7 @@ contract ProposerRegistryTest is Test {
 
         vm.prank(bob);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                QUANTUM_ROUND_ROLE
-            )
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bob, QUANTUM_ROUND_ROLE)
         );
         registry.recordWin(alice, 500);
     }

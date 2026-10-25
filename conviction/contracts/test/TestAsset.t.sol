@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test} from "forge-std/Test.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {TestAsset} from "../src/TestAsset.sol";
+import { Test } from "forge-std/Test.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { TestAsset } from "../src/TestAsset.sol";
 
 contract TestAssetTest is Test {
     TestAsset internal asset;
     address internal admin = makeAddr("admin");
     address internal alice = makeAddr("alice");
-    address internal bob   = makeAddr("bob");
+    address internal bob = makeAddr("bob");
 
     bytes32 internal constant PEG_KEEPER_ROLE = keccak256("PEG_KEEPER_ROLE");
 
@@ -61,11 +61,7 @@ contract TestAssetTest is Test {
     function test_Mint_NotKeeper_Reverts() public {
         vm.prank(alice);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                alice,
-                PEG_KEEPER_ROLE
-            )
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, alice, PEG_KEEPER_ROLE)
         );
         asset.mint(alice, 1e18);
     }
@@ -115,11 +111,7 @@ contract TestAssetTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                alice,
-                PEG_KEEPER_ROLE
-            )
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, alice, PEG_KEEPER_ROLE)
         );
         asset.burn(alice, 1e18);
     }

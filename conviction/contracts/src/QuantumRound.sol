@@ -34,10 +34,10 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
     /// @notice Maximum number of proposals allowed in one round (including status quo).
     uint256 public constant MAX_PROPOSALS_PER_ROUND = 10;
 
-    /// @notice Price threshold below which proposal is considered spam for slashing logic.
-    uint256 public constant SPAM_THRESHOLD_PRICE = 0.2e18;
+    /// @notice LONG probability TWAP below which a proposal is considered spam and its bond is slashed.
+    uint256 public constant SPAM_THRESHOLD_PROBABILITY = 0.1e18;
 
-    /// @notice Winner margin above status quo in 1e18 fixed-point.
+    /// @notice Winner margin above status quo, in LONG probability (0.005 = 0.5 percentage points).
     uint256 public constant EPSILON = 0.005e18;
 
     /// @notice Performance fee charged on positive performance in basis points.
@@ -680,7 +680,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
         for (uint256 i = 0; i < count; i++) {
             market.closeTwapWindow(roundId, i, round.tradingEnd);
-            twaps[i] = market.twap(roundId, i, windowStart, round.tradingEnd);
+            twaps[i] = market.probabilityTwap(roundId, i, windowStart, round.tradingEnd);
         }
 
         uint256 statusQuoTwap = twaps[0];
@@ -918,7 +918,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
         proposal.bondRefunded = true;
 
-        if (proposalId == winnerProposalId || finalTwap >= SPAM_THRESHOLD_PRICE) {
+        if (proposalId == winnerProposalId || finalTwap >= SPAM_THRESHOLD_PROBABILITY) {
             proposerRegistry.refundBond(proposal.proposer, proposal.bondAmount);
             emit BondRefunded(roundId, proposalId, proposal.proposer, proposal.bondAmount);
         } else {

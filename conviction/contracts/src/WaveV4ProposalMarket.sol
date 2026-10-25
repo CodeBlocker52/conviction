@@ -430,6 +430,14 @@ contract WaveV4ProposalMarket is IProposalMarket, IUnlockCallback {
         return waveHook.finalWindowPriceTwap(_getMarket(roundId, proposalId).key);
     }
 
+    function probabilityTwap(uint256 roundId, uint256 proposalId, uint256, uint256)
+        external
+        view
+        returns (uint256 probability)
+    {
+        return waveHook.finalWindowTwap(_getMarket(roundId, proposalId).key);
+    }
+
     function seedLiquidity(uint256 roundId, uint256 proposalId, uint256 creditAmount, uint256) external onlyRound {
         Market storage market_ = _markets[roundId][proposalId];
         if (market_.seeded) revert AlreadySeeded();

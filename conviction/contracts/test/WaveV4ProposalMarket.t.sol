@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
+import { Test, Vm } from "forge-std/Test.sol";
 import { Hooks } from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import { PoolManager } from "@uniswap/v4-core/src/PoolManager.sol";
 import { IPoolManager } from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -186,11 +186,11 @@ contract WaveV4ProposalMarketTest is Test {
         vm.prank(admin);
         round.openRound(tradingEnd, 120, 0.5e18, 2e18, 60);
         roundId = round.roundCount();
-        usdc.mint(alice, 5_000_000);
+        usdc.mint(alice, 8_000_000);
         vm.startPrank(alice);
-        usdc.approve(address(round), 5_000_000);
-        round.deposit(roundId, 5_000_000);
-        round.claimCredits(roundId, 0, 5_000_000);
+        usdc.approve(address(round), 8_000_000);
+        round.deposit(roundId, 8_000_000);
+        round.claimCredits(roundId, 0, 3_000_000);
         vm.stopPrank();
     }
 
@@ -326,5 +326,68 @@ contract WaveV4ProposalMarketTest is Test {
         assertEq(_credit(roundId).balanceOf(alice) - creditsBefore, qCredits);
         assertEq(_long(roundId).balanceOf(alice) + (useLong ? sellAmount : 0) - longBefore, qLongDust);
         assertEq(_short(roundId).balanceOf(alice) + (useLong ? 0 : sellAmount) - shortBefore, qShortDust);
+    }
+
+    function _proposeAs(address proposer, uint256 roundId, string memory name) private {
+        usdc.mint(proposer, 1_000_000);
+        vm.startPrank(proposer);
+        registry.registerAgent(name);
+        usdc.approve(address(registry), 1_000_000);
+        round.propose(roundId, QuantumRound.Allocation({ tEthBps: 5000 }), "ipfs://p");
+        vm.stopPrank();
+    }
+
+    function _collapseResult(uint256 roundId) private returns (uint256 winner, uint256[] memory twaps) {
+        vm.recordLogs();
+        round.collapse(roundId);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 topic = keccak256("Collapsed(uint256,uint256,uint256[])");
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter == address(round) && logs[i].topics[0] == topic) {
+                (winner, twaps) = abi.decode(logs[i].data, (uint256, uint256[]));
+            }
+        }
+    }
+
+    function test_CollapseSelectsOnProbabilityTwapAndSlashesSpam() public {
+        (uint256 roundId, uint64 tradingEnd) = _openFundedRound();
+        address proposerA = makeAddr("v4-proposer-a");
+        address proposerB = makeAddr("v4-proposer-b");
+        _proposeAs(proposerA, roundId, "A");
+        _proposeAs(proposerB, roundId, "B");
+
+        vm.startPrank(alice);
+        round.claimCredits(roundId, 1, 1_000_000);
+        round.claimCredits(roundId, 2, 4_000_000);
+        round.buyLong(roundId, 1, 200_000, 1);
+        round.buyShort(roundId, 2, 3_500_000, 1);
+        vm.stopPrank();
+
+        vm.warp(tradingEnd);
+        (uint256 winner, uint256[] memory twaps) = _collapseResult(roundId);
+        assertEq(winner, 1);
+        assertEq(twaps[0], 0.5e18);
+        assertGt(twaps[1], 0.5e18 + round.EPSILON());
+        assertLt(twaps[1], 1e18);
+        assertLt(twaps[2], round.SPAM_THRESHOLD_PROBABILITY());
+        assertGt(twaps[2], 0.01e18 - 1);
+        assertEq(usdc.balanceOf(treasury), 1_000_000);
+        assertEq(registry.bonds(proposerA), 0);
+        assertEq(usdc.balanceOf(proposerA), 1_000_000);
+    }
+
+    function test_CollapseKeepsStatusQuoWithinMargin() public {
+        (uint256 roundId, uint64 tradingEnd) = _openFundedRound();
+        _proposeAs(makeAddr("v4-proposer-c"), roundId, "C");
+        vm.startPrank(alice);
+        round.claimCredits(roundId, 1, 10_000);
+        round.buyLong(roundId, 1, 2_000, 1);
+        vm.stopPrank();
+
+        vm.warp(tradingEnd);
+        (uint256 winner, uint256[] memory twaps) = _collapseResult(roundId);
+        assertGt(twaps[1], twaps[0]);
+        assertLt(twaps[1], twaps[0] + round.EPSILON());
+        assertEq(winner, 0);
     }
 }

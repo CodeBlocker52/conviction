@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @title ProposerRegistry
 /// @notice Maintains proposer registration state and USDC proposal bond custody.
@@ -94,14 +94,8 @@ contract ProposerRegistry is AccessControl {
         Agent storage agent = agents[msg.sender];
         if (agent.wallet != address(0)) revert AgentAlreadyRegistered();
 
-        agents[msg.sender] = Agent({
-            name: name,
-            wallet: msg.sender,
-            active: true,
-            proposalCount: 0,
-            winCount: 0,
-            cumulativeReturn: 0
-        });
+        agents[msg.sender] =
+            Agent({ name: name, wallet: msg.sender, active: true, proposalCount: 0, winCount: 0, cumulativeReturn: 0 });
 
         emit AgentRegistered(msg.sender, name);
     }

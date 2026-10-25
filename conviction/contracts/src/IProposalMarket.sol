@@ -62,6 +62,13 @@ interface IProposalMarket {
         view
         returns (uint256 priceTwap);
 
+    /// @notice Returns the time-weighted LONG probability over a window, bounded to [0, 1e18].
+    /// @dev QuantumRound selects winners on this value so the margin and spam threshold are probabilities.
+    function probabilityTwap(uint256 roundId, uint256 proposalId, uint256 windowStart, uint256 windowEnd)
+        external
+        view
+        returns (uint256 probability);
+
     /// @notice Seeds initial liquidity for a proposal market.
     /// @param roundId Round identifier.
     /// @param proposalId Proposal identifier.

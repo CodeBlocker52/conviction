@@ -191,6 +191,18 @@ contract ConstantProductMarket is IProposalMarket, Ownable {
     }
 
     /// @inheritdoc IProposalMarket
+    /// @dev Phase A markets quote an unbounded price; probability is derived as price / (1 + price).
+    function probabilityTwap(uint256 roundId, uint256 proposalId, uint256 windowStart, uint256 windowEnd)
+        external
+        view
+        override
+        returns (uint256 probability)
+    {
+        uint256 priceTwap = this.twap(roundId, proposalId, windowStart, windowEnd);
+        return (priceTwap * 1e18) / (priceTwap + 1e18);
+    }
+
+    /// @inheritdoc IProposalMarket
     function twap(uint256 roundId, uint256 proposalId, uint256 windowStart, uint256 windowEnd)
         external
         view

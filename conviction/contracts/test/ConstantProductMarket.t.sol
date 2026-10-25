@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test} from "forge-std/Test.sol";
-import {StdInvariant} from "forge-std/StdInvariant.sol";
-import {ConstantProductMarket} from "../src/ConstantProductMarket.sol";
+import { Test } from "forge-std/Test.sol";
+import { StdInvariant } from "forge-std/StdInvariant.sol";
+import { ConstantProductMarket } from "../src/ConstantProductMarket.sol";
 
 contract ConstantProductMarketTest is Test {
     ConstantProductMarket internal cpm;
     address internal owner = makeAddr("owner");
     address internal alice = makeAddr("alice");
 
-    uint256 internal constant ROUND_ID    = 1;
+    uint256 internal constant ROUND_ID = 1;
     uint256 internal constant PROPOSAL_ID = 0;
-    uint256 internal constant SEED        = 500_000_000; // 500 USDC (6 dec)
-    uint16  internal constant FEE_BPS     = 30;          // 0.3 %
+    uint256 internal constant SEED = 500_000_000; // 500 USDC (6 dec)
+    uint16 internal constant FEE_BPS = 30; // 0.3 %
 
     function setUp() public {
         cpm = new ConstantProductMarket(FEE_BPS, owner);
