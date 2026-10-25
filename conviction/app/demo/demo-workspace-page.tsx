@@ -17,7 +17,7 @@ const pageCopy: Record<DemoWorkspaceView, { eyebrow: string; title: string; desc
   vault: {
     eyebrow: "SHARED USDC FUND",
     title: "The Wavefund vault.",
-    description: "Review the fund's allocation and manage simulated vault deposits, withdrawals, and shared market liquidity.",
+    description: "Review the fund's allocation and manage simulated vault deposits and withdrawals.",
   },
 };
 

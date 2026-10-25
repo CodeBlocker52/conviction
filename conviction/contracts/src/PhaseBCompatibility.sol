@@ -74,9 +74,14 @@ contract PhaseBCompatibilityAdapter is IUnlockCallback {
         _;
     }
 
-    function configure(WaveHook hook_) external onlyOwner {
+    function configure(WaveHook hook_, uint64 tradingStart, uint64 tradingEnd, uint64 finalWindowSeconds)
+        external
+        onlyOwner
+    {
         if (configured) revert AlreadyConfigured();
-        if (hook_.adapter() != address(this) || hook_.longToken() != address(longToken)) revert InvalidPoolKey();
+        if (hook_.adapter() != address(this) || address(hook_.poolManager()) != address(poolManager)) {
+            revert InvalidPoolKey();
+        }
 
         Currency longCurrency = Currency.wrap(address(longToken));
         Currency shortCurrency = Currency.wrap(address(shortToken));
@@ -90,6 +95,9 @@ contract PhaseBCompatibilityAdapter is IUnlockCallback {
         });
         hook = hook_;
         configured = true;
+        hook_.registerPool(
+            _poolKey, 0, 0, address(longToken), tradingStart, tradingEnd, finalWindowSeconds, uint256(0.5e18)
+        );
     }
 
     function initializeAndAddLiquidity() external onlyOwner {

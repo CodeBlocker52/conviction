@@ -31,23 +31,12 @@ contract DeployPhaseBCompatibility is Script {
         vm.startBroadcast(deployerPk);
         PhaseBCompatibilityAdapter adapter =
             new PhaseBCompatibilityAdapter(IPoolManager(ARC_TESTNET_POOL_MANAGER), deployer);
-        address longToken = address(adapter.longToken());
-        bytes memory constructorArgs = abi.encode(
-            IPoolManager(ARC_TESTNET_POOL_MANAGER),
-            address(adapter),
-            longToken,
-            tradingStart,
-            tradingEnd,
-            uint64(300),
-            uint256(0.5e18)
-        );
+        bytes memory constructorArgs = abi.encode(IPoolManager(ARC_TESTNET_POOL_MANAGER), address(adapter));
         (address expectedHook, bytes32 salt) =
             HookMiner.find(FOUNDRY_CREATE2_FACTORY, WAVE_HOOK_FLAGS, type(WaveHook).creationCode, constructorArgs);
-        WaveHook hook = new WaveHook{ salt: salt }(
-            IPoolManager(ARC_TESTNET_POOL_MANAGER), address(adapter), longToken, tradingStart, tradingEnd, 300, 0.5e18
-        );
+        WaveHook hook = new WaveHook{ salt: salt }(IPoolManager(ARC_TESTNET_POOL_MANAGER), address(adapter));
         require(address(hook) == expectedHook, "hook mining mismatch");
-        adapter.configure(hook);
+        adapter.configure(hook, tradingStart, tradingEnd, 300);
         adapter.initializeAndAddLiquidity();
         (uint256 probabilityBefore, uint256 probabilityAfter) = adapter.compatibilitySwap();
         require(probabilityBefore == 0.5e18, "unexpected initial probability");
@@ -56,7 +45,7 @@ contract DeployPhaseBCompatibility is Script {
         vm.stopBroadcast();
 
         console2.log("Compatibility adapter:", address(adapter));
-        console2.log("Test LONG token:", longToken);
+        console2.log("Test LONG token:", address(adapter.longToken()));
         console2.log("Test SHORT token:", address(adapter.shortToken()));
         console2.log("WaveHook:", address(hook));
         console2.log("Hook flags:", uint256(uint160(address(hook)) & Hooks.ALL_HOOK_MASK));

@@ -42,6 +42,7 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
 
     enum Action {
         ADD_LIQUIDITY,
+        REMOVE_LIQUIDITY,
         SWAP
     }
 
@@ -74,14 +75,10 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
         tradingStart = uint64(block.timestamp + 1);
         tradingEnd = tradingStart + 300;
 
-        bytes memory constructorArgs = abi.encode(
-            manager, address(this), address(longToken), tradingStart, tradingEnd, uint64(60), uint256(0.5e18)
-        );
+        bytes memory constructorArgs = abi.encode(manager, address(this));
         (address expectedHook, bytes32 salt) =
             HookMiner.find(address(this), WAVE_HOOK_FLAGS, type(WaveHook).creationCode, constructorArgs);
-        hook = new WaveHook{ salt: salt }(
-            manager, address(this), address(longToken), tradingStart, tradingEnd, 60, 0.5e18
-        );
+        hook = new WaveHook{ salt: salt }(manager, address(this));
         assertEq(address(hook), expectedHook);
         assertEq(uint160(address(hook)) & Hooks.ALL_HOOK_MASK, WAVE_HOOK_FLAGS);
 
@@ -96,6 +93,7 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
         });
 
         vm.warp(tradingStart);
+        hook.registerPool(key, 0, 0, address(longToken), tradingStart, tradingEnd, 60, 0.5e18);
         manager.initialize(key, Q96);
 
         longToken.mint(address(this), 2e18);
@@ -106,7 +104,8 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
     function test_LongProbabilityIsBoundedAndComplementary() public {
         assertEq(hook.pLong(key), 0.5e18);
         assertEq(hook.pShort(key), 0.5e18);
-        assertEq(hook.finalWindowTwap(), 0.5e18);
+        assertEq(hook.finalWindowTwap(key), 0.5e18);
+        assertEq(hook.finalWindowPriceTwap(key), 1e18);
 
         vm.warp(tradingEnd - 30);
         bool zeroForOne = Currency.unwrap(key.currency0) != address(longToken);
@@ -124,7 +123,9 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
 
         vm.warp(tradingEnd);
         uint256 expectedTwap = (0.5e18 * 30 + pLong * 30) / 60;
-        assertEq(hook.finalWindowTwap(), expectedTwap);
+        assertEq(hook.finalWindowTwap(key), expectedTwap);
+        uint256 expectedPriceTwap = (1e18 * 30 + (pLong * 1e18 / (1e18 - pLong)) * 30) / 60;
+        assertEq(hook.finalWindowPriceTwap(key), expectedPriceTwap);
     }
 
     function test_SwapsAreRejectedOutsideTradingWindow() public {
@@ -133,16 +134,67 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
         _swap(true, -int256(1e15), TickMath.getSqrtPriceAtTick(TEST_LOWER_TICK) + 1);
     }
 
+    function test_AdapterCanUnwindAfterTradingCloses() public {
+        uint256 longBefore = longToken.balanceOf(address(this));
+        uint256 shortBefore = shortToken.balanceOf(address(this));
+
+        vm.warp(tradingEnd);
+        _removeLiquidity(TEST_LOWER_TICK, TEST_UPPER_TICK, 1e18);
+
+        assertGt(longToken.balanceOf(address(this)), longBefore);
+        assertGt(shortToken.balanceOf(address(this)), shortBefore);
+    }
+
+    function test_SharedHookEnforcesEachPoolWindowAndRejectsUnregisteredPools() public {
+        WaveHookTestToken otherLong = new WaveHookTestToken("Other LONG", "OLONG");
+        WaveHookTestToken otherShort = new WaveHookTestToken("Other SHORT", "OSHORT");
+        PoolKey memory otherKey = _makePoolKey(address(otherLong), address(otherShort));
+        uint64 otherTradingEnd = tradingEnd + 60;
+        hook.registerPool(otherKey, 1, 1, address(otherLong), tradingStart, otherTradingEnd, 60, 0.5e18);
+        manager.initialize(otherKey, Q96);
+        otherLong.mint(address(this), 2e18);
+        otherShort.mint(address(this), 2e18);
+        _modifyLiquidityForKey(otherKey, Action.ADD_LIQUIDITY, TEST_LOWER_TICK, TEST_UPPER_TICK, 1e18);
+
+        WaveHookTestToken unregisteredLong = new WaveHookTestToken("Unregistered LONG", "ULONG");
+        WaveHookTestToken unregisteredShort = new WaveHookTestToken("Unregistered SHORT", "USHORT");
+        PoolKey memory unregisteredKey = _makePoolKey(address(unregisteredLong), address(unregisteredShort));
+        manager.initialize(unregisteredKey, Q96);
+        vm.expectRevert(WaveHook.UnregisteredPool.selector);
+        hook.pLong(unregisteredKey);
+        vm.expectRevert();
+        _swapForKey(unregisteredKey, true, -int256(1e15), TickMath.getSqrtPriceAtTick(TEST_LOWER_TICK) + 1);
+
+        vm.warp(tradingEnd);
+        vm.expectRevert();
+        _swapForKey(key, true, -int256(1e15), TickMath.getSqrtPriceAtTick(TEST_LOWER_TICK) + 1);
+
+        bool otherZeroForOne = Currency.unwrap(otherKey.currency0) != address(otherLong);
+        uint160 otherPriceLimit = otherZeroForOne
+            ? TickMath.getSqrtPriceAtTick(TEST_LOWER_TICK) + 1
+            : TickMath.getSqrtPriceAtTick(TEST_UPPER_TICK) - 1;
+        _swapForKey(otherKey, otherZeroForOne, -int256(1e15), otherPriceLimit);
+
+        vm.expectRevert();
+        _modifyLiquidityForKey(unregisteredKey, Action.ADD_LIQUIDITY, TEST_LOWER_TICK, TEST_UPPER_TICK, 1e18);
+
+        vm.warp(otherTradingEnd);
+        vm.expectRevert();
+        _swapForKey(otherKey, otherZeroForOne, -int256(1e15), otherPriceLimit);
+    }
+
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(manager), "only pool manager");
         Operation memory operation = abi.decode(data, (Operation));
-        if (operation.action == Action.ADD_LIQUIDITY) {
+        if (operation.action == Action.ADD_LIQUIDITY || operation.action == Action.REMOVE_LIQUIDITY) {
             (BalanceDelta liquidityDelta,) = manager.modifyLiquidity(
                 operation.key,
                 ModifyLiquidityParams({
                     tickLower: operation.tickLower,
                     tickUpper: operation.tickUpper,
-                    liquidityDelta: int256(uint256(operation.liquidity)),
+                    liquidityDelta: operation.action == Action.ADD_LIQUIDITY
+                        ? int256(uint256(operation.liquidity))
+                        : -int256(uint256(operation.liquidity)),
                     salt: bytes32(0)
                 }),
                 ""
@@ -167,11 +219,21 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
     }
 
     function _modifyLiquidity(int24 tickLower, int24 tickUpper, uint128 liquidity) private {
+        _modifyLiquidityForKey(key, Action.ADD_LIQUIDITY, tickLower, tickUpper, liquidity);
+    }
+
+    function _modifyLiquidityForKey(
+        PoolKey memory key_,
+        Action action,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity
+    ) private {
         manager.unlock(
             abi.encode(
                 Operation({
-                    action: Action.ADD_LIQUIDITY,
-                    key: key,
+                    action: action,
+                    key: key_,
                     tickLower: tickLower,
                     tickUpper: tickUpper,
                     liquidity: liquidity,
@@ -184,11 +246,17 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
     }
 
     function _swap(bool zeroForOne, int256 amountSpecified, uint160 sqrtPriceLimitX96) private {
+        _swapForKey(key, zeroForOne, amountSpecified, sqrtPriceLimitX96);
+    }
+
+    function _swapForKey(PoolKey memory key_, bool zeroForOne, int256 amountSpecified, uint160 sqrtPriceLimitX96)
+        private
+    {
         manager.unlock(
             abi.encode(
                 Operation({
                     action: Action.SWAP,
-                    key: key,
+                    key: key_,
                     tickLower: 0,
                     tickUpper: 0,
                     liquidity: 0,
@@ -198,6 +266,22 @@ contract WaveHookCompatibilityTest is Test, IUnlockCallback {
                 })
             )
         );
+    }
+
+    function _removeLiquidity(int24 tickLower, int24 tickUpper, uint128 liquidity) private {
+        _modifyLiquidityForKey(key, Action.REMOVE_LIQUIDITY, tickLower, tickUpper, liquidity);
+    }
+
+    function _makePoolKey(address longTokenAddress, address shortTokenAddress) private view returns (PoolKey memory) {
+        Currency longCurrency = Currency.wrap(longTokenAddress);
+        Currency shortCurrency = Currency.wrap(shortTokenAddress);
+        return PoolKey({
+            currency0: Currency.unwrap(longCurrency) < Currency.unwrap(shortCurrency) ? longCurrency : shortCurrency,
+            currency1: Currency.unwrap(longCurrency) < Currency.unwrap(shortCurrency) ? shortCurrency : longCurrency,
+            fee: 3_000,
+            tickSpacing: TEST_TICK_SPACING,
+            hooks: IHooks(address(hook))
+        });
     }
 
     function _settleOrTake(Currency currency, int128 delta) private {

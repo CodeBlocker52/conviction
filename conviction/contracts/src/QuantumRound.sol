@@ -5,6 +5,7 @@ import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol"
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { IProposalMarket } from "./IProposalMarket.sol";
 import { ProposalTokens, ProposalTokenImpl } from "./ProposalTokens.sol";
@@ -47,6 +48,9 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
     /// @notice Delay after evaluation end after which anyone can settle at par.
     uint256 public constant EMERGENCY_SETTLE_DELAY = 2 days;
+
+    /// @notice Converts six-decimal credits into eighteen-decimal outcome-token units.
+    uint256 public constant COMPLETE_SET_SCALE = 1e12;
 
     /// @notice Allocation representation for target portfolio mix.
     struct Allocation {
@@ -96,6 +100,18 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
     /// @notice Aggregate credits claimed by user across all proposals in a round.
     mapping(uint256 roundId => mapping(address user => uint256)) public totalCreditsClaimed;
+
+    /// @notice Round-level deposits not yet converted into claimed credits or redeemed.
+    mapping(uint256 roundId => uint256) public roundUnclaimedCollateral;
+
+    /// @notice Protocol seed allocated to each proposal when a round opens.
+    mapping(uint256 roundId => uint256) public roundSeedPerProposal;
+
+    /// @notice Winning proposal's seed held as settlement collateral.
+    mapping(uint256 roundId => uint256) public roundWinningSeed;
+
+    /// @notice Collateral remaining for a settled round's outstanding user liabilities.
+    mapping(uint256 roundId => uint256) public roundRemainingCollateral;
 
     /// @notice Number of rounds opened so far.
     uint256 public roundCount;
@@ -147,6 +163,12 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
     /// @notice Thrown when admin rescue exceeds unallocated protocol seed.
     error InsufficientProtocolLiquidity();
+
+    /// @notice Thrown when a complete-set market returns collateral below its promised liabilities.
+    error InsufficientSolvencyReserve();
+
+    /// @notice Thrown when a complete-set market is paired with credits that are not six-decimal.
+    error InvalidCreditPrecision();
 
     /// @notice Thrown when credits requested exceed tracked allowance.
     error InsufficientCredits();
@@ -286,6 +308,25 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (round.id == 0) revert InvalidProposal();
         if (round.settled) revert AlreadySettled();
 
+        uint256 seedPerProposal = roundSeedPerProposal[roundId];
+        if (round.collapsed) {
+            protocolLiquiditySeed += roundWinningSeed[roundId];
+            roundWinningSeed[roundId] = 0;
+        } else {
+            if (market.completeSetScale() != 0 && block.timestamp < round.tradingEnd) revert TradingNotClosed();
+            for (uint256 proposalId = 0; proposalId < round.proposalCount; proposalId++) {
+                market.closeTwapWindow(roundId, proposalId, round.tradingEnd);
+                (uint256 longReturned, uint256 shortReturned) = market.finalizeProposal(roundId, proposalId);
+                address longTokenAddr = proposalTokens.longToken(roundId, proposalId);
+                address shortTokenAddr = proposalTokens.shortToken(roundId, proposalId);
+                if (longReturned > 0) ProposalTokenImpl(longTokenAddr).burn(address(this), longReturned);
+                if (shortReturned > 0) ProposalTokenImpl(shortTokenAddr).burn(address(this), shortReturned);
+            }
+            protocolLiquiditySeed += seedPerProposal * round.proposalCount;
+        }
+
+        roundRemainingCollateral[roundId] = round.totalDeposited;
+        roundUnclaimedCollateral[roundId] = round.totalDeposited;
         round.cancelled = true;
         round.collapsed = true;
         round.settled = true;
@@ -307,6 +348,13 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
     /// @notice Returns the round's evaluation end timestamp, or zero for an unknown round.
     function roundEvaluationEnd(uint256 roundId) external view returns (uint64) {
         return rounds[roundId].evaluationEnd;
+    }
+
+    /// @notice Returns timing inputs required by the proposal-market adapter.
+    function marketTiming(uint256 roundId) external view returns (uint64 tradingEnd, uint32 twapWindow) {
+        Round storage round = rounds[roundId];
+        if (round.id == 0) revert InvalidProposal();
+        return (round.tradingEnd, round.twapWindow);
     }
 
     /// @notice Adds protocol-owned USDC seed liquidity for future proposal markets.
@@ -345,6 +393,9 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (rMin >= rMax) revert InvalidAllocation();
         if (rMin < 0.5e18 || rMax > 2e18) revert InvalidAllocation();
         if (twapWindow == 0) revert InvalidAllocation();
+        if (market.completeSetScale() != 0 && uint256(twapWindow) > uint256(tradingEnd) - block.timestamp) {
+            revert InvalidAllocation();
+        }
         if (protocolLiquiditySeed < initialLiquidityPerProposal) revert InsufficientDeposit();
 
         uint256 newRoundId = ++roundCount;
@@ -359,6 +410,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         round.twapWindow = twapWindow;
         round.epsilon = uint96(EPSILON);
         round.proposalCount = 1;
+        roundSeedPerProposal[newRoundId] = initialLiquidityPerProposal;
 
         proposals[newRoundId][0] = Proposal({
             id: 0,
@@ -376,7 +428,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
             newRoundId, 0, _creditSymbol(newRoundId, 0), _longSymbol(newRoundId, 0), _shortSymbol(newRoundId, 0)
         );
 
-        market.seedLiquidity(newRoundId, 0, initialLiquidityPerProposal, initialLiquidityPerProposal);
+        _seedProposalMarket(newRoundId, 0, initialLiquidityPerProposal);
 
         emit RoundOpened(newRoundId, tradingEnd, evaluationEnd, rMin, rMax, twapWindow);
     }
@@ -390,6 +442,9 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (round.id == 0) revert InvalidProposal();
         if (round.collapsed) revert TradingClosed();
         if (block.timestamp >= round.tradingEnd) revert TradingClosed();
+        if (market.completeSetScale() != 0 && block.timestamp >= uint256(round.tradingEnd) - round.twapWindow) {
+            revert TradingClosed();
+        }
         if (target.tEthBps > 10_000) revert InvalidAllocation();
         if (round.proposalCount >= MAX_PROPOSALS_PER_ROUND) revert InvalidAllocation();
 
@@ -411,8 +466,9 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
             isStatusQuo: false
         });
 
-        if (protocolLiquiditySeed < initialLiquidityPerProposal) revert InsufficientDeposit();
-        protocolLiquiditySeed -= initialLiquidityPerProposal;
+        uint256 proposalSeed = roundSeedPerProposal[roundId];
+        if (protocolLiquiditySeed < proposalSeed) revert InsufficientDeposit();
+        protocolLiquiditySeed -= proposalSeed;
 
         proposalTokens.deployForProposal(
             roundId,
@@ -422,7 +478,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
             _shortSymbol(roundId, proposalId)
         );
 
-        market.seedLiquidity(roundId, proposalId, initialLiquidityPerProposal, initialLiquidityPerProposal);
+        _seedProposalMarket(roundId, proposalId, proposalSeed);
 
         emit ProposalCreated(roundId, proposalId, msg.sender, target.tEthBps, rationaleURI);
     }
@@ -439,6 +495,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         usdc.safeTransferFrom(msg.sender, address(this), amount);
         deposits[roundId][msg.sender] += amount;
         round.totalDeposited += amount;
+        roundUnclaimedCollateral[roundId] += amount;
 
         emit Deposited(roundId, msg.sender, amount);
     }
@@ -465,6 +522,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
         creditsClaimed[roundId][proposalId][msg.sender] += amount;
         totalCreditsClaimed[roundId][msg.sender] = alreadyClaimedTotal + amount;
+        roundUnclaimedCollateral[roundId] -= amount;
         ProposalTokenImpl(credit).mint(msg.sender, amount);
 
         emit CreditsClaimed(roundId, proposalId, msg.sender, amount);
@@ -483,13 +541,22 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (credit == address(0)) revert InvalidProposal();
 
         ProposalTokenImpl(credit).burn(msg.sender, creditsIn);
+        uint256 setScale = market.completeSetScale();
+        if (setScale != 0) {
+            _requireSixDecimalCredits(credit);
+            _mintCompleteSet(roundId, proposalId, address(market), creditsIn * setScale);
+        }
 
         uint256 longOut = market.tradeBuyLong(roundId, proposalId, creditsIn, minLongOut);
 
         address longTokenAddr = proposalTokens.longToken(roundId, proposalId);
         if (longTokenAddr == address(0)) revert InvalidProposal();
 
-        ProposalTokenImpl(longTokenAddr).mint(msg.sender, longOut);
+        if (setScale == 0) {
+            ProposalTokenImpl(longTokenAddr).mint(msg.sender, longOut);
+        } else {
+            IERC20(longTokenAddr).safeTransfer(msg.sender, longOut);
+        }
 
         emit Trade(roundId, proposalId, msg.sender, "BUY_LONG", creditsIn, longOut);
     }
@@ -510,13 +577,22 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (credit == address(0)) revert InvalidProposal();
 
         ProposalTokenImpl(credit).burn(msg.sender, creditsIn);
+        uint256 setScale = market.completeSetScale();
+        if (setScale != 0) {
+            _requireSixDecimalCredits(credit);
+            _mintCompleteSet(roundId, proposalId, address(market), creditsIn * setScale);
+        }
 
         uint256 setsOut = market.tradeBuyShort(roundId, proposalId, creditsIn, minSetsOut);
 
         address shortTokenAddr = proposalTokens.shortToken(roundId, proposalId);
         if (shortTokenAddr == address(0)) revert InvalidProposal();
 
-        ProposalTokenImpl(shortTokenAddr).mint(msg.sender, setsOut);
+        if (setScale == 0) {
+            ProposalTokenImpl(shortTokenAddr).mint(msg.sender, setsOut);
+        } else {
+            IERC20(shortTokenAddr).safeTransfer(msg.sender, setsOut);
+        }
 
         emit Trade(roundId, proposalId, msg.sender, "BUY_SHORT", creditsIn, setsOut);
     }
@@ -537,12 +613,18 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (longTokenAddr == address(0)) revert InvalidProposal();
 
         ProposalTokenImpl(longTokenAddr).burn(msg.sender, longIn);
+        uint256 setScale = market.completeSetScale();
+        if (setScale != 0) ProposalTokenImpl(longTokenAddr).mint(address(market), longIn);
 
         uint256 creditsOut = market.tradeSellLong(roundId, proposalId, longIn, minCreditsOut);
 
         address credit = proposalTokens.creditToken(roundId, proposalId);
         if (credit == address(0)) revert InvalidProposal();
 
+        if (setScale != 0) {
+            _requireSixDecimalCredits(credit);
+            _settleCompleteSetSale(roundId, proposalId, creditsOut, msg.sender, true);
+        }
         ProposalTokenImpl(credit).mint(msg.sender, creditsOut);
 
         emit Trade(roundId, proposalId, msg.sender, "SELL_LONG", longIn, creditsOut);
@@ -564,12 +646,18 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (shortTokenAddr == address(0)) revert InvalidProposal();
 
         ProposalTokenImpl(shortTokenAddr).burn(msg.sender, setsIn);
+        uint256 setScale = market.completeSetScale();
+        if (setScale != 0) ProposalTokenImpl(shortTokenAddr).mint(address(market), setsIn);
 
         uint256 creditsOut = market.tradeSellShort(roundId, proposalId, setsIn, minCreditsOut);
 
         address credit = proposalTokens.creditToken(roundId, proposalId);
         if (credit == address(0)) revert InvalidProposal();
 
+        if (setScale != 0) {
+            _requireSixDecimalCredits(credit);
+            _settleCompleteSetSale(roundId, proposalId, creditsOut, msg.sender, false);
+        }
         ProposalTokenImpl(credit).mint(msg.sender, creditsOut);
 
         emit Trade(roundId, proposalId, msg.sender, "SELL_SHORT", setsIn, creditsOut);
@@ -611,9 +699,22 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         }
 
         round.winnerProposalId = bestProposal;
+        uint256 seedPerProposal = roundSeedPerProposal[roundId];
 
-        for (uint256 i = 1; i < count; i++) {
-            _finalizeProposalBond(roundId, i, bestProposal, twaps[i]);
+        for (uint256 i = 0; i < count; i++) {
+            (uint256 longReturned, uint256 shortReturned) = market.finalizeProposal(roundId, i);
+            address longTokenAddr = proposalTokens.longToken(roundId, i);
+            address shortTokenAddr = proposalTokens.shortToken(roundId, i);
+            if (longReturned > 0) ProposalTokenImpl(longTokenAddr).burn(address(this), longReturned);
+            if (shortReturned > 0) ProposalTokenImpl(shortTokenAddr).burn(address(this), shortReturned);
+
+            if (i == bestProposal) {
+                roundWinningSeed[roundId] = seedPerProposal;
+            } else {
+                protocolLiquiditySeed += seedPerProposal;
+            }
+
+            if (i > 0) _finalizeProposalBond(roundId, i, bestProposal, twaps[i]);
         }
 
         emit Collapsed(roundId, bestProposal, twaps);
@@ -640,6 +741,8 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
         round.realisedReturn = effectiveReturn;
         round.settled = true;
+        roundRemainingCollateral[roundId] = round.totalDeposited + roundWinningSeed[roundId];
+        if (roundUserLiability(roundId) > roundRemainingCollateral[roundId]) revert InsufficientSolvencyReserve();
 
         uint256 winnerProposalId = round.winnerProposalId;
         Proposal storage winner = proposals[roundId][winnerProposalId];
@@ -666,50 +769,146 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (!round.settled) revert RoundNotSettled();
 
         uint256 userDeposit = deposits[roundId][msg.sender];
-        if (userDeposit == 0) revert InsufficientDeposit();
 
         if (round.cancelled) {
+            if (userDeposit == 0) revert InsufficientDeposit();
             delete deposits[roundId][msg.sender];
+            roundRemainingCollateral[roundId] -= userDeposit;
+            roundUnclaimedCollateral[roundId] -= userDeposit;
             usdc.safeTransfer(msg.sender, userDeposit);
             emit Redeemed(roundId, msg.sender, userDeposit);
             return;
         }
 
-        uint256 winnerProposalId = round.winnerProposalId;
-        uint256 claimed = creditsClaimed[roundId][winnerProposalId][msg.sender];
+        uint256 claimed = totalCreditsClaimed[roundId][msg.sender];
         if (claimed > userDeposit) revert InsufficientCredits();
+        uint256 unclaimed = userDeposit - claimed;
+        if (unclaimed > roundUnclaimedCollateral[roundId]) revert InsufficientDeposit();
 
         uint256 clamped = _clampReturn(round.realisedReturn, round.rMin, round.rMax);
-        // Compute payout numerator and denominator separately to avoid divide-before-multiply.
         uint256 piNumer = clamped - uint256(round.rMin);
         uint256 piDenom = uint256(round.rMax) - uint256(round.rMin);
+        uint256 scale = market.completeSetScale();
+        uint256 payoutScale = scale == 0 ? 1 : scale;
+        uint256 creditPayout;
+        uint256 outcomePayout;
+        bool hasPosition = false;
 
+        for (uint256 proposalId = 0; proposalId < round.proposalCount; proposalId++) {
+            address credit = proposalTokens.creditToken(roundId, proposalId);
+            address longTokenAddr = proposalTokens.longToken(roundId, proposalId);
+            address shortTokenAddr = proposalTokens.shortToken(roundId, proposalId);
+            if (credit == address(0) || longTokenAddr == address(0) || shortTokenAddr == address(0)) {
+                revert InvalidProposal();
+            }
+
+            uint256 creditBal = IERC20(credit).balanceOf(msg.sender);
+            uint256 longBal = IERC20(longTokenAddr).balanceOf(msg.sender);
+            uint256 shortBal = IERC20(shortTokenAddr).balanceOf(msg.sender);
+            if (creditBal > 0) {
+                ProposalTokenImpl(credit).burn(msg.sender, creditBal);
+                creditPayout += creditBal;
+                hasPosition = true;
+            }
+            if (longBal > 0) {
+                ProposalTokenImpl(longTokenAddr).burn(msg.sender, longBal);
+                hasPosition = true;
+            }
+            if (shortBal > 0) {
+                ProposalTokenImpl(shortTokenAddr).burn(msg.sender, shortBal);
+                hasPosition = true;
+            }
+
+            if (proposalId == round.winnerProposalId) {
+                outcomePayout += Math.mulDiv(longBal, piNumer, piDenom * payoutScale);
+                outcomePayout += Math.mulDiv(shortBal, piDenom - piNumer, piDenom * payoutScale);
+            }
+        }
+
+        if (userDeposit == 0 && !hasPosition) revert InsufficientDeposit();
         delete deposits[roundId][msg.sender];
+        roundUnclaimedCollateral[roundId] -= unclaimed;
 
-        address longTokenAddr = proposalTokens.longToken(roundId, winnerProposalId);
-        address shortTokenAddr = proposalTokens.shortToken(roundId, winnerProposalId);
-        if (longTokenAddr == address(0) || shortTokenAddr == address(0)) revert InvalidProposal();
-
-        uint256 longBal = IERC20(longTokenAddr).balanceOf(msg.sender);
-        uint256 shortBal = IERC20(shortTokenAddr).balanceOf(msg.sender);
-
-        if (longBal > 0) {
-            ProposalTokenImpl(longTokenAddr).burn(msg.sender, longBal);
-        }
-
-        if (shortBal > 0) {
-            ProposalTokenImpl(shortTokenAddr).burn(msg.sender, shortBal);
-        }
-
-        // Multiply before divide to avoid precision loss and divide-before-multiply pattern.
-        uint256 longPayout = (longBal * piNumer) / piDenom;
-        uint256 shortPayout = (shortBal * (piDenom - piNumer)) / piDenom;
-        uint256 unclaimed = userDeposit - claimed;
-        uint256 payout = unclaimed + longPayout + shortPayout;
+        uint256 payout = unclaimed + creditPayout + outcomePayout;
+        if (payout > roundRemainingCollateral[roundId]) revert InsufficientSolvencyReserve();
+        roundRemainingCollateral[roundId] -= payout;
+        if (roundUserLiability(roundId) > roundRemainingCollateral[roundId]) revert InsufficientSolvencyReserve();
 
         usdc.safeTransfer(msg.sender, payout);
+        if (roundUserLiability(roundId) == 0) {
+            protocolLiquiditySeed += roundRemainingCollateral[roundId];
+            roundRemainingCollateral[roundId] = 0;
+            roundWinningSeed[roundId] = 0;
+        }
 
         emit Redeemed(roundId, msg.sender, payout);
+    }
+
+    /// @notice Returns remaining deposits, credits and winning outcome-token payouts owed for a settled round.
+    function roundUserLiability(uint256 roundId) public view returns (uint256 liability) {
+        Round storage round = rounds[roundId];
+        if (round.id == 0) return 0;
+        if (!round.settled) revert RoundNotSettled();
+        if (round.cancelled) return roundUnclaimedCollateral[roundId];
+
+        liability = roundUnclaimedCollateral[roundId];
+        for (uint256 proposalId = 0; proposalId < round.proposalCount; proposalId++) {
+            address credit = proposalTokens.creditToken(roundId, proposalId);
+            liability += IERC20(credit).totalSupply();
+        }
+
+        uint256 scale = market.completeSetScale();
+        uint256 payoutScale = scale == 0 ? 1 : scale;
+        uint256 clamped = _clampReturn(round.realisedReturn, round.rMin, round.rMax);
+        uint256 piNumer = clamped - uint256(round.rMin);
+        uint256 piDenom = uint256(round.rMax) - uint256(round.rMin);
+        address longTokenAddr = proposalTokens.longToken(roundId, round.winnerProposalId);
+        address shortTokenAddr = proposalTokens.shortToken(roundId, round.winnerProposalId);
+        liability += Math.mulDiv(IERC20(longTokenAddr).totalSupply(), piNumer, piDenom * payoutScale);
+        liability += Math.mulDiv(IERC20(shortTokenAddr).totalSupply(), piDenom - piNumer, piDenom * payoutScale);
+    }
+
+    function _seedProposalMarket(uint256 roundId, uint256 proposalId, uint256 seedAmount) internal {
+        uint256 setScale = market.completeSetScale();
+        if (setScale != 0) {
+            address credit = proposalTokens.creditToken(roundId, proposalId);
+            _requireSixDecimalCredits(credit);
+            _mintCompleteSet(roundId, proposalId, address(market), seedAmount * setScale);
+        }
+        market.seedLiquidity(roundId, proposalId, seedAmount, seedAmount);
+    }
+
+    function _mintCompleteSet(uint256 roundId, uint256 proposalId, address recipient, uint256 amount) internal {
+        ProposalTokenImpl(proposalTokens.longToken(roundId, proposalId)).mint(recipient, amount);
+        ProposalTokenImpl(proposalTokens.shortToken(roundId, proposalId)).mint(recipient, amount);
+    }
+
+    function _settleCompleteSetSale(
+        uint256 roundId,
+        uint256 proposalId,
+        uint256 creditsOut,
+        address recipient,
+        bool soldLong
+    ) internal {
+        (uint256 longRemainder, uint256 shortRemainder) = market.consumeSellSettlement(roundId, proposalId);
+        uint256 matched = creditsOut * market.completeSetScale();
+        address longTokenAddr = proposalTokens.longToken(roundId, proposalId);
+        address shortTokenAddr = proposalTokens.shortToken(roundId, proposalId);
+        if (soldLong) {
+            if (shortRemainder < matched) revert InsufficientSolvencyReserve();
+            if (matched > 0) ProposalTokenImpl(shortTokenAddr).burn(address(this), matched);
+            shortRemainder -= matched;
+        } else {
+            if (longRemainder < matched) revert InsufficientSolvencyReserve();
+            if (matched > 0) ProposalTokenImpl(longTokenAddr).burn(address(this), matched);
+            longRemainder -= matched;
+        }
+        if (longRemainder > 0) IERC20(longTokenAddr).safeTransfer(recipient, longRemainder);
+        if (shortRemainder > 0) IERC20(shortTokenAddr).safeTransfer(recipient, shortRemainder);
+    }
+
+    function _requireSixDecimalCredits(address credit) internal view {
+        if (credit == address(0) || ProposalTokenImpl(credit).decimals() != 6) revert InvalidCreditPrecision();
     }
 
     /// @notice Finalizes one proposal bond after winner determination.

@@ -7,7 +7,7 @@ AI agents propose trades for a shared USDC vault. Traders forecast how the vault
 > **Event:** ETHGlobal Mumbai
 > **Chain:** Arc testnet (Circle's stablecoin-native L1, USDC as gas)
 > **Target prizes (ETHGlobal allows up to 3):** Arc "Best DeFi / Onchain Finance App Built End to End in Arc Studio", Uniswap Foundation "Build with Uniswap", Chainlink "Best workflow with CRE"
-> **Status:** Frontend prototype in progress. Working name; check for name collisions before committing.
+> **Status:** Phase A is deployed on Arc Testnet. Phase B's market adapter and complete-set settlement are implemented and locally tested; they are not deployed or connected to the live frontend.
 > **Based on:** "Quantum Markets" by Alpin Yukseloglu and Sofiane Larbi (Paradigm, June 2025). Implemented from scratch; see [Relationship to the reference implementation](#relationship-to-the-reference-implementation).
 
 ---
@@ -83,7 +83,7 @@ Each round decides one thing: **what should the vault's allocation be for the ne
 1. **Round opens.** The protocol always creates proposal 0, "keep the current allocation" (the status quo).
 2. **Agents propose.** Each proposal is a target allocation, for example "30% tETH, 70% USDC", plus a short rationale. Proposers post a small USDC bond.
 3. **Forecasters deposit once.** A forecaster deposits, say, 1,000 USDC into the round and can claim up to 1,000 trading credits in *every* proposal's market.
-4. **Everyone trades.** Each proposal has its own Uniswap v4 pool where the price of a LONG token reflects the vault's predicted return if that proposal is executed.
+4. **Everyone trades.** Each proposal has its own market where the LONG price reflects the vault's predicted return if that proposal is executed. Phase A uses the deployed constant-product market; the bounded Uniswap v4 hook pools are the not-yet-deployed Phase B replacement.
 5. **Collapse.** At the decision time, the proposal with the highest time-weighted price wins, provided it beats the status quo by a margin. All other markets are voided: their trades never happened.
 6. **Execute.** The vault swaps to the winning allocation through Uniswap v4.
 7. **Evaluate.** After the evaluation period, the vault's return is measured using a fresh ETH/USD oracle update published at or after the evaluation end.
@@ -163,13 +163,13 @@ Trades in losing proposals have no effect on PnL.
 
 ### Price impact and manipulation cost
 
-Each proposal pool is a Uniswap v4 concentrated-liquidity pool, LONG against credits, with liquidity $L$ over the price range. Moving the LONG price from $p_a$ to $p_b$ costs:
+Each proposal pool is planned as a bounded Uniswap v4 LONG/SHORT pool, with protocol-owned liquidity $L$ over the price range. Moving the LONG price from $p_a$ to $p_b$ costs:
 
 $$
 \Delta y = L \left( \sqrt{p_b} - \sqrt{p_a} \right) \ \text{credits}
 $$
 
-So the cost of moving a proposal's price scales linearly with its liquidity $L$. That's why liquidity depth per proposal matters, and why we give liquidity providers credits too (see [Quantum liquidity](#3-quantum-liquidity-for-lps)).
+So the cost of moving a proposal's price scales linearly with its liquidity $L$. That's why liquidity depth per proposal matters. In v1, **one protocol-owned reserve gives depth to every proposal at once**: seed is allocated per market, losing-market inventory is unwound to the reserve, and only winning-market liabilities are settled. Seeded-market gains or losses belong to the protocol reserve, after forecaster liabilities are paid. External LP shares and claims are roadmap work, not part of the live protocol.
 
 ### Proposer incentives
 
@@ -213,9 +213,9 @@ The reference implementation records the **highest** price each proposal has eve
 
 The paper's examples use a token's own price as the metric, which a large trader can move. Wavefund's metric is the vault's return, **marked with external oracle prices** (Pyth, Chainlink or Stork on Arc). Forecasters can't move ETH's global price, so they can't game the outcome they're betting on.
 
-### 3. Quantum liquidity for LPs
+### 3. Protocol-owned quantum liquidity
 
-The reference seeds each proposal's pool from the proposer's deposit alone, so new proposals start with thin pools that are cheap to push around. In Wavefund, **liquidity providers also get credits in every proposal**: one USDC deposit into the liquidity reserve provides depth in every proposal pool at once. Only the winning market's LP position settles, so the reserve bears trading risk in one market per round, while every proposal gets full depth. This directly raises the manipulation cost $L(\sqrt{p_b} - \sqrt{p_a})$ for every proposal.
+The reference seeds each proposal's pool from the proposer's deposit alone, so new proposals start with thin pools that are cheap to push around. Wavefund v1 uses a **single protocol-owned reserve** to seed every proposal market: one reserve gives depth to every proposal at once without asking external LPs to deposit. Losing markets unwind at collapse and return residual inventory to the reserve. The winning market settles only after forecaster liabilities; the protocol reserve absorbs seeded-position gains and losses. External LP shares, deposits, and claims remain roadmap work.
 
 ### 4. A status-quo proposal and a margin
 
@@ -252,7 +252,7 @@ flowchart TB
     subgraph Users["People"]
         DEP["Vault depositor"]
         FC["Human forecaster"]
-        LP["Liquidity provider"]
+        RESERVE["Protocol-owned market reserve"]
     end
 
     subgraph Web["Next.js app (started in Arc Studio)"]
@@ -268,9 +268,8 @@ flowchart TB
     end
 
     subgraph Arc["Arc testnet"]
-        DM["DecisionMarket.sol<br/>rounds, deposits, credits, collapse, settlement"]
-        HOOK["WaveHook.sol<br/>Uniswap v4 hook: gating, TWAP"]
-        PM["Uniswap v4 PoolManager<br/>one pool per proposal"]
+        DM["QuantumRound.sol<br/>rounds, deposits, credits, collapse, settlement"]
+        PM["Proposal market<br/>Phase A CPMM; Phase B v4 adapter pending"]
         V["WavefundVault.sol<br/>USDC vault, executes allocations"]
         EX["Uniswap v4 tETH/USDC pool<br/>trade execution"]
         RES["Resolver.sol<br/>accepts CRE result, timelocked fallback"]
@@ -286,14 +285,12 @@ flowchart TB
 
     DEP --> UI2 --> V
     FC --> UI1 --> DM
-    LP --> DM
+    RESERVE --> DM
     PA --> CW
     FA --> CW
     CW -- "propose with bond" --> DM
     CW -- "deposit, claim credits, trade" --> PM
-    DM -- "creates pools" --> PM
-    PM <--> HOOK
-    HOOK -- "gate swaps, record TWAP" --> DM
+    DM -- "protocol seed and round accounting" --> PM
     CRE -- "collapse at T_d" --> DM
     DM -- "winning allocation" --> V
     V -- "swap" --> EX
@@ -352,10 +349,12 @@ All contracts are written from scratch for this project.
 
 | Contract | Responsibility |
 |---|---|
-| `DecisionMarket.sol` | Rounds, forecaster deposits, per-proposal credit accounting, proposal creation and bonds, collapse, settlement, redemption |
-| `ProposalTokens.sol` | Per-proposal credit token and LONG/SHORT outcome tokens, mintable only by `DecisionMarket` |
-| `WaveHook.sol` | Uniswap v4 hook on every proposal pool: blocks swaps and liquidity changes outside the trading window; records cumulative price for the final-window TWAP |
-| `LiquidityReserve.sol` | Takes LP deposits and provisions credit liquidity into every new proposal pool ("quantum liquidity") |
+| `QuantumRound.sol` | Rounds, forecaster deposits, per-proposal credit accounting, proposal creation and bonds, collapse, settlement, redemption, and protocol-seed solvency |
+| `ProposalTokens.sol` | Per-proposal CREDIT (6 decimals in Phase B) and LONG/SHORT (18 decimals) outcome tokens |
+| `ConstantProductMarket.sol` | Current Phase A proposal-market implementation; to be replaced by the Phase B adapter |
+| `WaveV4ProposalMarket.sol` | Local Phase B adapter: per-proposal bounded v4 pools using one shared hook, protocol-owned liquidity, and post-close unwind; not deployed |
+| `WaveHook.sol` | Shared bounded Uniswap v4 hook with per-pool registration, trading windows, probability and price TWAPs; production integration is not deployed |
+| `DeployWaveHook.s.sol` | Mines the shared hook salt off-chain with `HookMiner` and configures an adapter; run only as part of an approved Phase B deployment |
 | `WavefundVault.sol` | USDC vault with share accounting, queued deposits and withdrawals, oracle-marked NAV, and execution of allocations through Uniswap v4 |
 | `Resolver.sol` | Accepts the realised return from the CRE workflow, with a timelocked fallback resolver |
 | `TestAsset.sol` | Mock tETH token for the demo, minted and burned only by the peg keeper |
@@ -363,15 +362,17 @@ All contracts are written from scratch for this project.
 ### Key functions
 
 ```solidity
-// DecisionMarket
-function openRound(uint64 tradingEnd, uint64 horizon, int256 rMin, int256 rMax) external;
+// QuantumRound
+function openRound(uint64 tradingEnd, uint64 horizon, uint96 rMin, uint96 rMax, uint32 twapWindow) external;
 function propose(uint256 roundId, Allocation calldata target, string calldata rationaleURI) external;
 function deposit(uint256 roundId, uint256 amount) external;
-function claimCredits(uint256 proposalId, uint256 amount) external;   // up to deposit, per proposal
-function mintSet(uint256 proposalId, uint256 credits) external;       // credits -> LONG + SHORT
-function redeemSet(uint256 proposalId, uint256 sets) external;        // LONG + SHORT -> credits
+function claimCredits(uint256 roundId, uint256 proposalId, uint256 amount) external;
+function buyLong(uint256 roundId, uint256 proposalId, uint256 creditsIn, uint256 minLongOut) external;
+function sellLong(uint256 roundId, uint256 proposalId, uint256 longIn, uint256 minCreditsOut) external;
+function buyShort(uint256 roundId, uint256 proposalId, uint256 creditsIn, uint256 minShortOut) external;
+function sellShort(uint256 roundId, uint256 proposalId, uint256 shortIn, uint256 minCreditsOut) external;
 function collapse(uint256 roundId) external;                          // after tradingEnd
-function settle(uint256 roundId, int256 realisedReturn) external;     // Resolver only
+function settle(uint256 roundId, int256 realisedReturn) external;     // Keeper/Resolver or emergency fallback
 function redeem(uint256 roundId) external;                            // forecaster payout
 
 // WavefundVault
@@ -432,7 +433,7 @@ Uniswap v4 does three real jobs:
 
 1. **Every proposal market is a v4 pool,** governed by `WaveHook`, a new hook that gates trading to the round window and records the TWAP used for selection.
 2. **The winning trade executes through v4** on Arc.
-3. **Quantum liquidity:** one LP deposit provides depth in every proposal pool, a new liquidity pattern for v4.
+3. **Protocol-owned quantum liquidity:** one reserve gives depth to every proposal at once; external LP shares and claims are roadmap work.
 
 **Requirements:** public repo, a `FEEDBACK.md`, the Uniswap developer feedback form, and a README that points to the exact contracts and lines that integrate v4.
 
@@ -453,7 +454,7 @@ Wavefund is implemented from scratch, from the paper's description. We cite the 
 | Full deposit usable in every proposal | Scalar return markets on a fund's performance |
 | Collapse onto the best proposal; others revert | Final-window TWAP selection, replacing a running maximum |
 | Proposals can be added at any time | Oracle-marked metric that participants can't move |
-| AI agents as proposers | Quantum liquidity for LPs |
+| AI agents as proposers | Protocol-owned shared reserve; no external LP shares in v1 |
 | | Status-quo proposal with a margin |
 | | CRE-based resolution |
 | | Agent bonds, rewards and leaderboard |
@@ -467,14 +468,14 @@ If we want to reuse any reference code, we ask the authors for permission first 
 
 | Attack | Description | Mitigation |
 |---|---|---|
-| **Free suppression** | Trades in losing markets revert, so pushing a good proposal's price down costs nothing if it then loses | Final-window TWAP means the attacker must hold the price down to the deadline against all other traders, whose credits in that proposal are also free; quantum liquidity raises the cost of moving price |
+| **Free suppression** | Trades in losing markets revert, so pushing a good proposal's price down costs nothing if it then loses | Final-window TWAP means an attacker must hold a distorted price to the deadline; protocol-owned seeded depth raises the cost of moving price |
 | **Spike capture** | A short price spike locks in a "best" price | Selection on final-window TWAP, not a running maximum |
 | **Metric manipulation** | Moving the outcome you're betting on | Return is marked with external oracle prices |
 | **Proposal spam** | Flooding the round with junk proposals | Bonds, forfeited below the spam threshold |
 | **Front-running the vault** | Entering the vault knowing a big trade is coming | Deposits and withdrawals processed only at decision boundaries |
 | **Execution sandwiching** | MEV around the vault's swap | Slippage limit per execution; small demo sizes |
 | **Oracle failure** | Stale or missing price at evaluation | Staleness checks; timelocked fallback resolution |
-| **Insolvency** | Paying more than deposited | Complete-set accounting; solvency invariant fuzz-tested |
+| **Insolvency** | Paying more than forecaster deposits and protocol seed | Phase B must maintain explicit complete-set accounting, pay user liabilities before reserve remainder, and fuzz-test the solvency invariant |
 
 **Known limitation we state openly:** suppression is harder but not impossible when few traders are active. The defence is participation, which is why forecaster agents always trade every proposal.
 
@@ -484,7 +485,7 @@ If we want to reuse any reference code, we ask the authors for permission first 
 
 | Real on Arc testnet | Simulated or limited |
 |---|---|
-| Phase A decision rounds, proposal markets, positions and settlement are onchain | Phase B per-proposal Uniswap v4 hook markets are not implemented; tETH is a mock token |
+| Phase A decision rounds, constant-product proposal markets, positions and settlement are onchain; a throwaway WaveHook compatibility pool has been exercised on Arc | Phase B adapter and settlement are local-only and not deployed; tETH is a mock token |
 | Keeper-updated 8-decimal ETH/USD marks are stored onchain in MockPriceOracle | No live decentralized ETH/USD feed was confirmed on Arc Testnet; the keeper fetches Coinbase spot data and must update every 60 seconds and immediately before NAV marking and resolution |
 | Vault code uses Arc's Uniswap v4 PoolManager with a 500 bps oracle-relative slippage cap | The vault's no-hook USDC/tETH pool still requires a testnet smoke test and funded liquidity |
 | USDC deposits, payouts and gas | CRE workflow may run in simulation if Arc isn't supported |
@@ -513,7 +514,7 @@ The frontend has two separate routes:
 - `/` — public-facing Wavefund landing page with the product pitch, mechanism, participant roles, and protocol guardrails.
 - `/demo` — product overview and entry point to the protocol workspace.
 - `/demo/markets` — proposal markets, forecasting credits, LONG/SHORT trades, and round settlement.
-- `/demo/vault` — vault allocation, queued deposits and withdrawals, and shared liquidity.
+- `/demo/vault` — vault allocation and queued deposits and withdrawals.
 - `/demo/portfolio` — simulated account balances, forecast credits, and open or settled positions.
 - `/demo/agents` — proposer and forecaster directory with illustrative performance.
 - `/demo/how-it-works` — round lifecycle and protocol mechanism.
@@ -533,12 +534,12 @@ In mock mode, start with **Connect demo account**, then:
 2. Deposit collateral into the forecasting round. Claim credits separately in each proposal (up to the round deposit per proposal), then buy LONG or SHORT shares.
 3. Review positions and mark-to-market P&L on `/demo/portfolio`. Use **Collapse round now** on `/demo/markets` to select the leader by a simulated final-window TWAP, with proposal 0 as the status quo and a 0.5¢ decision margin.
 4. Enter a simulated realized vault return to settle. The scalar payout is clamped to `[0.95, 1.05]`; only the winning market affects forecasting P&L, while losing markets are voided.
-5. Add a demo contribution to the quantum liquidity reserve to increase depth across all proposals. After settlement, return the simulated LP principal.
+5. The mock workspace includes a clearly simulated external-liquidity panel for UI exploration; this is not the v1 protocol model and has no live on-chain counterpart.
 6. Queue vault deposits or share withdrawals; these process at the next decision boundary.
 
-Mock state persists in the browser's local storage and can be cleared with **Reset demo**. Mock balances, price impact, oracle results, and transactions are simulated in the frontend. LP fees and impermanent loss are not modeled.
+Mock state persists in the browser's local storage and can be cleared with **Reset demo**. Mock balances, price impact, oracle results, and transactions are simulated in the frontend. The simulated external-liquidity panel does not model LP fees or impermanent loss.
 
-In live mode, connect a wallet to Arc Testnet to read the current round, proposals, market spot prices, wallet positions, oracle-marked vault NAV/allocation, WAVE balances, queued vault flows, and executed-round history. The markets and portfolio views provide writes for round deposits, credit claims, LONG/SHORT buys and sells, round collapse after its trading window, and redemptions after settlement. The vault supports queued USDC deposits and WAVE-share withdrawals, processed at the next `executeTrade` decision boundary using the same oracle-marked NAV/share supply. This is separate from QuantumLP market liquidity.
+In live mode, connect a wallet to Arc Testnet to read the current round, proposals, market spot prices, wallet positions, oracle-marked vault NAV/allocation, WAVE balances, queued vault flows, and executed-round history. The markets and portfolio views provide writes for round deposits, credit claims, LONG/SHORT buys and sells, round collapse after its trading window, and redemptions after settlement. The vault supports queued USDC deposits and WAVE-share withdrawals, processed at the next `executeTrade` decision boundary using the same oracle-marked NAV/share supply. **No QuantumLP or external market-liquidity controls are rendered in live mode.** Phase B's protocol-owned reserve is distinct from the deployed Phase A `QuantumLP` custody stub.
 
 ### Live-mode smoke checklist
 
@@ -579,19 +580,10 @@ Before closing, you can queue a vault deposit in `/demo/vault`; it is applied at
 ```
 wavefund/
 ├── contracts/
-│   ├── src/
-│   │   ├── DecisionMarket.sol
-│   │   ├── ProposalTokens.sol
-│   │   ├── WaveHook.sol
-│   │   ├── LiquidityReserve.sol
-│   │   ├── WavefundVault.sol
-│   │   ├── Resolver.sol
-│   │   └── TestAsset.sol
-│   ├── test/
-│   │   ├── unit/
-│   │   ├── invariant/          # solvency and credit invariants
-│   │   └── fork/               # against Arc testnet
-│   └── script/                 # deploy, open round, seed pools
+│   ├── src/                    # QuantumRound, ProposalTokens, Phase A market,
+│   │                           # WaveHook compatibility spike, vault, resolver
+│   ├── test/                   # unit, invariant and Arc hook compatibility tests
+│   └── script/                 # deployment, demo and compatibility scripts
 ├── agents/
 │   ├── proposers/              # momentum, mean-reversion, news
 │   ├── forecasters/            # quant, LLM
@@ -611,7 +603,7 @@ wavefund/
 | Layer | What it proves | Tool |
 |---|---|---|
 | Unit | Credit claims, complete sets, payout formula, bond logic | `arc-forge test` |
-| Invariant fuzzing | Solvency (payouts ≤ deposits), per-proposal credit cap, losing markets pay nothing | Foundry invariant tests with random deposits, proposals and trades |
+| Invariant fuzzing | Phase A deposit coverage; Phase B target is user liabilities ≤ deposits + winning seed, per-proposal credit cap, losing markets pay nothing | Foundry invariant tests |
 | Hook tests | Swaps blocked outside the window; TWAP correct across many swaps | Foundry with a local v4 deployment |
 | Attack tests | Spike capture fails; suppression costs what the formula predicts | Scripted adversarial trades |
 | Arc fork tests | Real v4 contracts, USDC interface, decimals | `arc-anvil --network arc` |
@@ -647,10 +639,10 @@ Team of two: a **protocol engineer** (contracts, hook, tests) and an **agents an
 - CRE workflow (or simulation) for collapse and resolution
 - Peg keeper for tETH
 - Next.js app: live round view, vault, leaderboard
-- `LiquidityReserve` (quantum liquidity) if time allows; otherwise seed each pool from a protocol deposit
+- Protocol-owned quantum-liquidity accounting: one reserve funds proposal-market seeds; no external LP shares in v1
 - `FEEDBACK.md`, README with exact v4 integration lines, architecture diagram, demo video
 
-**Cut order if behind:** LiquidityReserve → news proposer → LLM forecaster → CRE (fall back to a keeper script).
+**Cut order if behind:** news proposer → LLM forecaster → CRE (fall back to a keeper script).
 **Never cut:** credits across proposals, hook, collapse, v4 execution, settlement.
 
 ---
@@ -673,7 +665,7 @@ Under four minutes.
 | Likely question | Answer |
 |---|---|
 | Isn't this just Paradigm's repo? | No code from it; it's not open-source licensed. We built the fund, and five mechanism changes, on top of the paper's idea. |
-| Can't someone push a good proposal down for free? | That's the mechanism's main weakness. We settle on a final-window TWAP, give every proposal deep liquidity through quantum liquidity, and our agents trade every market. Here's what moving a price actually costs. |
+| Can't someone push a good proposal down for free? | That's the mechanism's main weakness. We settle on a final-window TWAP and seed every market from one protocol-owned reserve; external LP shares are not part of v1. Here's what moving a price actually costs. |
 | Why not just let one strong agent trade? | One agent is a single point of failure. A market lets the best agent win each round and replaces agents automatically as they get better or worse. |
 | Where does forecasters' profit come from? | Other forecasters who were wrong about the winning proposal. It's zero-sum among forecasters; the vault's return is separate. |
 | Is the trading real? | Execution is through real Uniswap v4 contracts on Arc; the traded asset is a mock kept at the real ETH price, and NAV uses real oracle prices. |
@@ -687,7 +679,7 @@ Under four minutes.
 - **Uniswap v4 addresses on Arc testnet:** confirm from official sources on day 1.
 - **Oracle feed availability** for ETH/USD on Arc testnet.
 - **CRE support for Arc:** may need to run in simulation.
-- **Gas cost** of creating a pool per proposal; fine for the demo, but production needs batching.
+- **Pool-creation gas** must be measured on Arc before deployment; local Foundry gas is currently below 5M for both round opening and one proposal.
 - **Thin participation** weakens manipulation resistance; production needs many independent forecasters.
 - **Regulation:** a pooled fund with performance fees is regulated in most jurisdictions; this prototype is testnet only.
 

@@ -32,6 +32,9 @@
 - The prior WavefundVault `0x65648366C96Af7b3c2ECdC1B78A06d975A1505F3` is superseded. Its 2 USDC is unrecoverable because its deployed code has no withdrawal or arbitrary-call path.
 - QuantumRound admin rescue is capped by unallocated `protocolLiquiditySeed`; round-allocated seed and user deposits cannot be rescued
 - QuantumLP no longer has a global withdrawal toggle; providers can withdraw their own LP balance at any time
+- Phase B v1 uses protocol-owned proposal-market liquidity. Do not connect QuantumLP to the new market or offer external LP shares/claims; those remain roadmap work.
+- Phase B uses one shared `WaveHook` registered per PoolId; only the deployment script uses `HookMiner`. Never mine salts in `QuantumRound` or the market adapter. Keep the shared hook address out of `current.json` until Phase B deployment is explicitly approved.
+- The WaveHook Arc compatibility deployment is throwaway only. Do not change current deployment addresses, frontend configuration, or open rounds without explicit approval.
 - All proposal/market state keyed by (roundId, proposalId) to avoid cross-round collisions
 - SHORT positions are real ERC-20 tokens (minted by QuantumRound, not the market)
 - `via_ir = true` in foundry.toml required to avoid stack-too-deep in ProposalTokens
@@ -47,7 +50,9 @@
 ## Phase Progress
 - [x] Phase A: Current core contracts deployed and v4 USDC/tETH smoke-tested
 - [x] Phase A: Frontend wiring (plain viem + `window.ethereum` wallet, live reads/writes, retained mock mode)
-- [ ] Phase B: WaveHook (Uniswap v4 hook per proposal)
+- [x] Phase B: Arc compatibility spike for bounded WaveHook pool behavior (not production)
+- [x] Phase B: Local WaveV4ProposalMarket, complete-set accounting, shared per-PoolId hook, post-close unwind and multi-pool lifecycle tests
+- [ ] Phase B: Expanded solvency fuzzing, security review and coordinated deployment (no production addresses/config changed)
 - [ ] Phase B: Full keeper automation
 
 ## Operating commands
@@ -58,4 +63,4 @@
 - Proposal bond is `1 USDC` (`DEFAULT_BOND` is a constant, with no admin setter); do not change deployment state to lower it.
 - Keep USDC transfers and other write operations on the real Arc RPC, never Forge's local simulation.
 - Frontend uses plain viem and `window.ethereum`; do not add wagmi.
-- Live-mode WavefundVault deposits and withdrawals queue as WAVE shares and process at the next `executeTrade` decision boundary; QuantumLP is separate market liquidity custody.
+- Live-mode WavefundVault deposits and withdrawals queue as WAVE shares and process at the next `executeTrade` decision boundary. Live mode has no QuantumLP controls; the deployed QuantumLP is a Phase A custody stub, not Phase B market liquidity.

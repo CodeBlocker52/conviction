@@ -333,9 +333,9 @@ function MockDemoWorkspace({
       </section>
       <section className="quantum-liquidity-panel" aria-label="Quantum liquidity reserve">
         <div className="quantum-liquidity-copy">
-          <span className="eyebrow">QUANTUM LIQUIDITY RESERVE</span>
+          <span className="eyebrow">MOCK-ONLY FUTURE LP SIMULATION</span>
           <h3>One LP deposit. Depth in every market.</h3>
-          <p>Demo liquidity is shared across the proposal pools instead of being split between them. At collapse, only the winning market is selected for settlement.</p>
+          <p>This simulated external-LP concept is not part of the live protocol. V1 market depth is funded by one protocol-owned reserve; external LP shares and claims remain on the roadmap.</p>
         </div>
         <div className="quantum-liquidity-metrics">
           <div><span>Shared depth per proposal</span><strong>{money(BASE_QUANTUM_LIQUIDITY + demo.liquidityDeposit)}</strong><small>Sample reserve + your contribution</small></div>

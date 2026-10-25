@@ -9,7 +9,7 @@
 - Native gas asset: USDC-denominated, 18 decimals. Do not combine its balance with ERC-20 USDC.
 - Arc's blocklist precompile makes Foundry simulation unreliable for USDC transfers. Use the project's viem scripts against the real RPC for token-moving actions; use Forge for build, tests, and deployments that do not move USDC.
 - Source configuration: Solidity `0.8.26`, Osaka EVM, `via_ir = true`; Uniswap v4 core `1.0.2`.
-- `current.json` is the canonical application and demo-script address config. `npm run check:contracts` rebuilds Forge artifacts, regenerates the app ABIs from those artifacts, and checks configured Arc addresses, ABI selectors, and this deployment record.
+- `current.json` is the canonical application and demo-script address config. `npm run check:contracts` rebuilds Forge artifacts and checks configured Arc addresses, the checked-in app ABI selectors, and this deployment record. Keep the app ABIs aligned with the active deployment; regenerate them with `node contracts/script/generate-contract-abis.mjs` only when updating the frontend to a deployment that includes the corresponding contracts.
 
 ## Current deployment
 
@@ -135,6 +135,8 @@ The demo runner's planned principal is 3.6 USDC from the deployer (0.1-USDC init
 ## Phase B compatibility test (throwaway)
 
 This isolated Arc Testnet test exercised `WaveHook` against the deployed Uniswap v4 PoolManager. It is not part of `current.json`, the frontend configuration, the Phase A market, the vault, or Round 3. It used only test tokens for pool operations; no USDC token transfer or existing Wavefund contract was involved. Arc-native USDC paid the transaction fees listed below.
+
+The hook at the address below is the throwaway single-pool compatibility deployment, not the new shared Phase B hook. No shared Phase B hook is deployed or configured in `current.json`; add its address only during an approved Phase B deployment/cutover.
 
 | Component | Address |
 |---|---|

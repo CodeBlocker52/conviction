@@ -1,24 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test, Vm} from "forge-std/Test.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {ProposalTokens, ProposalTokenImpl} from "../src/ProposalTokens.sol";
+import { Test, Vm } from "forge-std/Test.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { ProposalTokens, ProposalTokenImpl } from "../src/ProposalTokens.sol";
 
 contract ProposalTokensTest is Test {
     ProposalTokens internal pt;
     address internal admin = makeAddr("admin");
     address internal alice = makeAddr("alice");
-    address internal bob   = makeAddr("bob");
+    address internal bob = makeAddr("bob");
 
     bytes32 internal constant QUANTUM_ROUND_ROLE = keccak256("QUANTUM_ROUND_ROLE");
 
     event ProposalTokensDeployed(
-        uint256 indexed roundId,
-        uint256 indexed proposalId,
-        address indexed credit,
-        address long,
-        address short
+        uint256 indexed roundId, uint256 indexed proposalId, address indexed credit, address long, address short
     );
 
     function setUp() public {
@@ -52,7 +48,7 @@ contract ProposalTokensTest is Test {
         pt.deployForProposal(1, 0, "CR1_0", "LO1_0", "SH1_0");
 
         address credit = pt.creditToken(1, 0);
-        address long_  = pt.longToken(1, 0);
+        address long_ = pt.longToken(1, 0);
         address short_ = pt.shortToken(1, 0);
 
         assertTrue(credit != address(0));
@@ -89,18 +85,39 @@ contract ProposalTokensTest is Test {
         pt.deployForProposal(1, 0, "CR1_0", "LO1_0", "SH1_0");
 
         ProposalTokenImpl credit = ProposalTokenImpl(pt.creditToken(1, 0));
-        ProposalTokenImpl long_  = ProposalTokenImpl(pt.longToken(1, 0));
+        ProposalTokenImpl long_ = ProposalTokenImpl(pt.longToken(1, 0));
         ProposalTokenImpl short_ = ProposalTokenImpl(pt.shortToken(1, 0));
 
         // symbols match
         assertEq(credit.symbol(), "CR1_0");
-        assertEq(long_.symbol(),  "LO1_0");
+        assertEq(long_.symbol(), "LO1_0");
         assertEq(short_.symbol(), "SH1_0");
 
         // minter set to deployer (admin in this test)
         assertEq(credit.minter(), admin);
-        assertEq(long_.minter(),  admin);
+        assertEq(long_.minter(), admin);
         assertEq(short_.minter(), admin);
+    }
+
+    function test_DeployForProposal_UsesSixCreditAndEighteenOutcomeDecimals() public {
+        vm.prank(admin);
+        pt.setCreditDecimals(6);
+
+        vm.prank(admin);
+        pt.deployForProposal(1, 0, "CR1_0", "LO1_0", "SH1_0");
+
+        assertEq(ProposalTokenImpl(pt.creditToken(1, 0)).decimals(), 6);
+        assertEq(ProposalTokenImpl(pt.longToken(1, 0)).decimals(), 18);
+        assertEq(ProposalTokenImpl(pt.shortToken(1, 0)).decimals(), 18);
+    }
+
+    function test_SetCreditDecimals_AfterDeployment_Reverts() public {
+        vm.prank(admin);
+        pt.deployForProposal(1, 0, "CR1_0", "LO1_0", "SH1_0");
+
+        vm.prank(admin);
+        vm.expectRevert(ProposalTokens.CreditDecimalsLocked.selector);
+        pt.setCreditDecimals(6);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -141,11 +158,7 @@ contract ProposalTokensTest is Test {
     function test_DeployForProposal_NotRole_Reverts() public {
         vm.prank(alice);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                alice,
-                QUANTUM_ROUND_ROLE
-            )
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, alice, QUANTUM_ROUND_ROLE)
         );
         pt.deployForProposal(1, 0, "CR1_0", "LO1_0", "SH1_0");
     }

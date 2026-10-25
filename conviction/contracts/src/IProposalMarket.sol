@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 /// @title IProposalMarket
 /// @notice Interface abstracting per-proposal price discovery and position trading.
-/// @dev Phase A implementation is an in-contract constant-product AMM. Phase B may route to Uniswap v4.
+/// @dev ConstantProductMarket is Phase A; WaveV4ProposalMarket is the local Phase B adapter.
 interface IProposalMarket {
     /// @notice Buy LONG tokens with credits.
     /// @param roundId Round identifier.
@@ -45,13 +45,13 @@ interface IProposalMarket {
         external
         returns (uint256 creditsOut);
 
-    /// @notice Returns the current spot price of LONG in credits-per-LONG, scaled 1e18.
+    /// @notice Returns the current LONG quote in SHORT-per-LONG units, scaled 1e18.
     /// @param roundId Round identifier.
     /// @param proposalId Proposal identifier.
     /// @return price Spot price scaled by 1e18.
     function spotPrice(uint256 roundId, uint256 proposalId) external view returns (uint256 price);
 
-    /// @notice Returns the TWAP of LONG price over a time window, scaled 1e18.
+    /// @notice Returns the TWAP of the same LONG quote over a time window, scaled 1e18.
     /// @param roundId Round identifier.
     /// @param proposalId Proposal identifier.
     /// @param windowStart Window start timestamp.
@@ -74,4 +74,18 @@ interface IProposalMarket {
     /// @param proposalId Proposal identifier.
     /// @param tradingEnd Trading end timestamp.
     function closeTwapWindow(uint256 roundId, uint256 proposalId, uint256 tradingEnd) external;
+
+    /// @notice Conversion from six-decimal credits to eighteen-decimal outcome units.
+    /// @dev Zero selects the legacy Phase A token-accounting path.
+    function completeSetScale() external view returns (uint256);
+
+    /// @notice Returns sale inventory, including matched outcome proceeds, to the round for settlement.
+    function consumeSellSettlement(uint256 roundId, uint256 proposalId)
+        external
+        returns (uint256 longReturned, uint256 shortReturned);
+
+    /// @notice Unwinds a proposal's adapter-owned liquidity and returns residual outcomes to the round.
+    function finalizeProposal(uint256 roundId, uint256 proposalId)
+        external
+        returns (uint256 longReturned, uint256 shortReturned);
 }

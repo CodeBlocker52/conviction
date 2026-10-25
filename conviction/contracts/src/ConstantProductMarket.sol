@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
-import {IProposalMarket} from "./IProposalMarket.sol";
+import { IProposalMarket } from "./IProposalMarket.sol";
 
 /// @title ConstantProductMarket
 /// @notice Phase A in-contract x*y=k market for proposal LONG pricing and simplified SHORT bookkeeping.
@@ -95,8 +95,8 @@ contract ConstantProductMarket is IProposalMarket, Ownable {
         _updateTwap(roundId, proposalId);
 
         uint256 creditsInTimesDenom = creditsIn * (10_000 - feeBps);
-        longOut = (uint256(m.longReserve) * creditsInTimesDenom)
-            / (uint256(m.creditReserve) * 10_000 + creditsInTimesDenom);
+        longOut =
+            (uint256(m.longReserve) * creditsInTimesDenom) / (uint256(m.creditReserve) * 10_000 + creditsInTimesDenom);
 
         if (longOut < minLongOut || longOut == 0) revert InsufficientOutput();
 
@@ -147,8 +147,8 @@ contract ConstantProductMarket is IProposalMarket, Ownable {
         _updateTwap(roundId, proposalId);
 
         uint256 longInTimesDenom = longIn * (10_000 - feeBps);
-        creditsOut = (uint256(m.creditReserve) * longInTimesDenom)
-            / (uint256(m.longReserve) * 10_000 + longInTimesDenom);
+        creditsOut =
+            (uint256(m.creditReserve) * longInTimesDenom) / (uint256(m.longReserve) * 10_000 + longInTimesDenom);
 
         if (creditsOut < minCreditsOut || creditsOut == 0) revert InsufficientOutput();
 
@@ -224,6 +224,31 @@ contract ConstantProductMarket is IProposalMarket, Ownable {
             m.twapAccumulator += m.twapLastPrice * (tradingEnd - m.twapLastUpdate);
             m.twapLastUpdate = tradingEnd;
         }
+    }
+
+    /// @inheritdoc IProposalMarket
+    function completeSetScale() external pure override returns (uint256) {
+        return 0;
+    }
+
+    /// @inheritdoc IProposalMarket
+    function consumeSellSettlement(uint256, uint256)
+        external
+        pure
+        override
+        returns (uint256 longRemainder, uint256 shortRemainder)
+    {
+        return (0, 0);
+    }
+
+    /// @inheritdoc IProposalMarket
+    function finalizeProposal(uint256, uint256)
+        external
+        pure
+        override
+        returns (uint256 longReturned, uint256 shortReturned)
+    {
+        return (0, 0);
     }
 
     /// @notice Updates TWAP accumulator to current timestamp.

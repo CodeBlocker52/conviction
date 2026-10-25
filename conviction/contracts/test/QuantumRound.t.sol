@@ -1008,6 +1008,14 @@ contract QuantumRoundTest is Test {
         qr.redeem(roundId);
 
         assertEq(qr.deposits(roundId, alice), 0);
+        assertEq(qr.roundRemainingCollateral(roundId), 0);
+        assertEq(qr.roundUserLiability(roundId), 0);
+    }
+
+    function test_SettledRoundLiability_IsCoveredByRemainingCollateral() public {
+        (uint256 roundId,) = _fullRound(1.5e18);
+
+        assertLe(qr.roundUserLiability(roundId), qr.roundRemainingCollateral(roundId));
     }
 
     function test_Redeem_NotSettled_Reverts() public {
@@ -1051,6 +1059,7 @@ contract QuantumRoundTest is Test {
         qr.redeem(roundId);
         assertEq(usdc.balanceOf(alice) - balanceBefore, deposit);
         assertEq(qr.deposits(roundId, alice), 0);
+        assertEq(qr.roundUserLiability(roundId), 0);
     }
 
     function test_Redeem_TotalPayoutLeDepositBound() public {

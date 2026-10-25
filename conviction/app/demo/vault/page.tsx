@@ -21,7 +21,7 @@ export default function VaultPage() {
     <DemoWorkspacePage view="vault" showHeading={false}>
         <header className="demo-page-heading demo-page-heading-primary">
           <div><span className="eyebrow">SHARED USDC FUND</span><h1>The Wavefund vault.</h1></div>
-          <p>Review the fund's allocation and manage simulated vault deposits, withdrawals, and shared market liquidity.</p>
+          <p>Review the fund's allocation and manage simulated vault deposits and withdrawals.</p>
         </header>
         <section className="vault-grid demo-vault-grid">
           <article className="vault-overview card-surface">

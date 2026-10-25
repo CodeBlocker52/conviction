@@ -11,7 +11,6 @@ import {
 } from "viem";
 
 const root = process.cwd();
-const generatorPath = resolve(root, "contracts/script/generate-contract-abis.mjs");
 
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
@@ -31,7 +30,6 @@ function findForge() {
 const forge = findForge();
 if (forge) {
   run(forge, ["build"]);
-  run(process.execPath, [generatorPath]);
 } else {
   console.warn("Forge is unavailable in this build environment; validating the checked-in generated ABI manifest.");
 }
