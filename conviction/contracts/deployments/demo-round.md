@@ -88,3 +88,18 @@ These 60-second oracle watcher updates were confirmed during the two demo attemp
 | 2 | 19:49:56 | [0x154f0ec84b63232d70167cb29c8b91ccf5549545f570feaa9c0a89a635b4594d](https://explorer.testnet.arc.io/tx/0x154f0ec84b63232d70167cb29c8b91ccf5549545f570feaa9c0a89a635b4594d) |
 | 2 | 19:51:00 | [0x320ced994084846a30e1b3a01f41e5ece60cfc6e58be7056c349113efc2f09aa](https://explorer.testnet.arc.io/tx/0x320ced994084846a30e1b3a01f41e5ece60cfc6e58be7056c349113efc2f09aa) |
 | 2 | 19:52:04 | [0x0e44a1968488fe55b475629e2e27ac432e908dcda09207612ca15d0b50f5c5b3](https://explorer.testnet.arc.io/tx/0x0e44a1968488fe55b475629e2e27ac432e908dcda09207612ca15d0b50f5c5b3) |
+
+
+## Round 3 close (Phase A) and Phase B deployment
+
+Round 3 was closed on the Phase A contracts with `demo-close-round.mjs --execute --yes`: winner proposal 0 (status quo), return ratio 0.998004632. No deposits existed, so no redemptions were needed.
+
+| Step | Transaction |
+|---|---|
+| collapse | [0x9f1dd862…3e1b1a](https://explorer.testnet.arc.io/tx/0x9f1dd8628dd44185d33ed853d9b5d189c64713737a84679e4c718905cc3e1b1a) |
+| oracle update | [0x83232c7a…9a1974](https://explorer.testnet.arc.io/tx/0x83232c7af832e56ed0ed026a0f1c9f7fc026213b43a069b71e5ddd3b7d9a1974) |
+| vault executeTrade (proposal 0, 0 bps tETH) | [0x9801a0ff…add9ca](https://explorer.testnet.arc.io/tx/0x9801a0ffe2152a5578be19db1b93d902db848ef334982b6b4eec8aa2a2add9ca) |
+| oracle update | [0x44db5a63…250409](https://explorer.testnet.arc.io/tx/0x44db5a639a11494eb8086fdaad8d547240312bbc1d5203aa7f41bf025b250409) |
+| reportReturn (settle) | [0xe47c37ed…145951](https://explorer.testnet.arc.io/tx/0xe47c37edf5f7528acac9ed02b39efa08e123348f96eebebedcd27f9ac2145951) |
+
+Phase B deployment, wiring and funding hashes are in `SOURCES.md` under "Phase B deployment".
