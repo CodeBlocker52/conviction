@@ -221,3 +221,12 @@ Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibi
 ### Bond policy (v1) and roadmap
 
 Price-based slashing is griefable: a rival can push a thin proposal market below any probability threshold in the final window for a few USDC, and because losing markets are erased the attack costs nothing if the rival's position was never going to be redeemed. v1 therefore refunds every bond at collapse. Spam is limited by the 10-proposal cap and the bond lock-up until collapse. Slashing may return only with a manipulation-resistant signal (for example a TWAP over a longer window combined with minimum volume, or governance review of invalid proposals). `ProposerRegistry.slashBond` and the round's treasury remain available for that future work.
+
+### Calibration (measured on the local PoolManager, p starts at 0.5, 0.3% fee included)
+
+| Seed per proposal | 0.5 USDC buy | 1 USDC buy | 2 USDC buy |
+|---|---|---|---|
+| 5 USDC | 0.5 -> 0.547 (+4.7 pp) | 0.5 -> 0.590 (+9.0 pp) | 0.5 -> 0.662 (+16.2 pp) |
+| 10 USDC | 0.5 -> 0.524 (+2.4 pp) | 0.5 -> 0.547 (+4.7 pp) | 0.5 -> 0.590 (+9.0 pp) |
+
+SHORT buys are symmetric. A 1 USDC trade moves pLong by 9.0 points at a 5 USDC seed, below the 15-point limit, so the plan keeps 5 USDC per proposal. With a scalar range of 0.95 to 1.05, one 1 USDC trade moves the implied return by about 0.9 percentage points. Use 10 USDC per proposal if demo trades above 1 USDC are expected.
