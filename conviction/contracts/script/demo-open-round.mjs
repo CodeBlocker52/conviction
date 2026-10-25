@@ -28,6 +28,7 @@ import {
   vaultAbi,
   walletClientFor,
 } from "./demo-round-common.mjs";
+import { liquidityForBuyImpact, readPositionLiquidity, readSavedPosition, usdcPerTEthFromSqrt, warnNearEdge } from "./pool-lib.mjs";
 
 const { contracts } = deployment;
 const deployerAddress = deployment.admin;
@@ -369,7 +370,8 @@ const requiredLiquidity = [
   liquidityForImpact(sqrtAtOracle, 90n),
 ].reduce((maximum, candidate) => candidate > maximum ? candidate : maximum);
 const depthLiquidityToAdd = requiredLiquidity > pool.liquidity ? requiredLiquidity - pool.liquidity : 0n;
-const liquidityToAdd = testMode ? 0n : depthLiquidityToAdd;
+// Depth now comes from the managed concentrated position (`npm run pool:recenter`), never from this script.
+const liquidityToAdd = 0n;
 const liquidityCaps = liquidityAmounts(liquidityToAdd, pool.sqrtPriceX96);
 const fullRangeCaps = liquidityAmounts(depthLiquidityToAdd, sqrtAtOracle);
 const concentratedRange = concentratedRangeAtOracle(sqrtAtOracle);
@@ -574,9 +576,14 @@ const finalDeviation = (postLiquidityPool.spotPrice > coinbase.priceUsdc
 if (finalDeviation > 50n) {
   throw new Error(`Pool remains ${finalDeviation} bps from Coinbase after rebalancing; round not opened.`);
 }
-const finalLiquidityRequirement = liquidityForImpact(postLiquidityPool.sqrtPriceX96, 90n);
+const savedPosition = readSavedPosition();
+const managedLiquidity = savedPosition ? await readPositionLiquidity(savedPosition.tickLower, savedPosition.tickUpper) : 0n;
+for (const warning of warnNearEdge(managedLiquidity > 0n ? savedPosition : null, usdcPerTEthFromSqrt(postLiquidityPool.sqrtPriceX96))) {
+  console.warn(`WARNING: ${warning}`);
+}
+const finalLiquidityRequirement = liquidityForBuyImpact(postLiquidityPool.sqrtPriceX96, 2_000_000n, 200) * 99n / 100n;
 if (!testMode && postLiquidityPool.liquidity < finalLiquidityRequirement) {
-  throw new Error("The pool's active liquidity does not meet the sub-1% 1-USDC trade-depth target; round not opened.");
+  throw new Error("The pool's active liquidity does not meet the 2% / 2 USDC depth target; run `npm run pool:recenter -- --execute`. Round not opened.");
 }
 
 const bondRequirement = bond * 2n;

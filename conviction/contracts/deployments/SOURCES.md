@@ -210,3 +210,26 @@ Checked through `https://explorer.testnet.arc.io/api/v2/smart-contracts/<address
 | Throwaway compatibility WaveHook | [`0x41cef812b6FF61419284E56f4380D4890cD28ac0`](https://explorer.testnet.arc.io/address/0x41cef812b6FF61419284E56f4380D4890cD28ac0#code) |
 
 Not verified: the throwaway compatibility adapter `0xD9E2…1F78` (test scaffolding from the Arc hook spike; submissions are accepted but do not match the current history).
+
+## USDC/tETH vault pool: concentrated position (owned by the deployer)
+
+The vault swaps USDC/tETH in the no-hook v4 pool (fee 0.30%, spacing 60). Depth comes from one concentrated position, plus ~9.2e9 of leftover full-range dust liquidity from the smoke tests.
+
+- **Owner of record:** the v4 callback [`0xFaDBe81aF357757d2cd84e33883fe41579f88c97`](https://explorer.testnet.arc.io/address/0xFaDBe81aF357757d2cd84e33883fe41579f88c97) holds the position (salt 0). Its `execute()` is `owner`-only, and the owner is the deployer. Only the deployer can remove it.
+- **Range:** −10% / +20% of the oracle price (USDC per tETH ≈ $2104.89 … $2824.27 at set-up; ticks 196860…199800). The −10% side holds the USDC for tETH→USDC sales; the +20% side is tETH only (tETH is a free mock token).
+- **Cost:** ≈ 10.68 USDC + 0.0075 tETH, within the approved 11 USDC cap. Re-centring reuses the USDC already in the position (remove, align, re-add), so it only needs gas plus a ~0.04 USDC cap margin that is not spent.
+- **Depth:** 2 USDC moves the spot price by ≈ 2.00% (execution price ≈ 1.30% worse than pre-trade spot including the 0.30% fee). 0.5 USDC: 0.50% spot / 0.55% effective; 1 USDC: 1.00% / 0.80%. Selling tETH worth 0.5 / 1 / 2 USDC: 0.50% / 0.99% / 1.96% spot.
+- **Record:** `contracts/deployments/pool-position.json` stores the ticks; on-chain liquidity is read from the PoolManager.
+
+Commands (run from `conviction/`, need `.env` with the deployer key):
+
+| Command | Effect |
+|---|---|
+| `npm run pool:recenter` | Read-only plan and impact table. |
+| `npm run pool:recenter -- --execute` | Remove the old position, align the pool to the Coinbase price, re-add −10%/+20% around it. Run before every demo. |
+| `npm run pool:recenter -- --remove --execute` | Withdraw the whole position and all its USDC/tETH to the deployer. |
+| `npm run pool:recenter -- --measure` | Print the price impact for 0.5 / 1 / 2 USDC buys and sells. |
+
+`demo:open-round` warns when the pool price is within 5% of either range edge and refuses to open (outside `--test`) when depth is below the 2 USDC / 2% target.
+
+Transactions (2026-10-25): first position add [`0xb1e7…b28a`](https://explorer.testnet.arc.io/tx/0xb1e7898b7404085f12307fdf0ccdb268819a1171c80046d024465c0983f5b28a) (align swap [`0x504d…4600`](https://explorer.testnet.arc.io/tx/0x504dde977e9ef40292d68b2c59209ef040867f9a5373fcbc4f4b02eeecc54600)); tested `--remove` [`0x569b…3994`](https://explorer.testnet.arc.io/tx/0x569b7e2205a9652d1b3c4ab282c30cd2cf945860b2f1b7473ebf8ef34a1f3994) (returned 10.680744 USDC + 0.007488 tETH); re-add [`0x53cf…e28fe`](https://explorer.testnet.arc.io/tx/0x53cacb38d9902d56680aa440b9ef857d1b7c0781b39fd29c16abaf61061e0f77); recenter with reuse: remove [`0xd91b…d0ed`](https://explorer.testnet.arc.io/tx/0xd91bd1e16e164f0329af63b84ca78dec40ea9018b2a0cf5c76f489fd2c5f35ed), add [`0x756a…df9d`](https://explorer.testnet.arc.io/tx/0x756a160d38192b0a1d8a427fae20bd673d89c37989c4f56335a02e02c39fdf9d).

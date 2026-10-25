@@ -1,0 +1,12 @@
+{
+  "owner": "0xFaDBe81aF357757d2cd84e33883fe41579f88c97",
+  "salt": "0x0",
+  "tickLower": 196860,
+  "tickUpper": 199800,
+  "liquidity": "4125594730881",
+  "centerUsdcPerTEth": 2348.855,
+  "lowerPct": 10,
+  "upperPct": 20,
+  "addTx": "0x756a160d38192b0a1d8a427fae20bd673d89c37989c4f56335a02e02c39fdf9d",
+  "updatedAt": "2026-10-25T19:46:40.794Z"
+}
