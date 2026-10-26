@@ -7,7 +7,9 @@ import {
   defineChain,
   encodeFunctionData,
   http,
+  keccak256,
   toFunctionSelector,
+  toHex,
 } from "viem";
 
 const root = process.cwd();
@@ -48,7 +50,8 @@ const abiChecks = [
   ["TestAsset", abis.testAssetAbi, deployment.contracts.testAsset],
   ["ProposalTokens", abis.proposalTokensAbi, deployment.contracts.proposalTokens],
   ["ProposerRegistry", abis.proposerRegistryAbi, deployment.contracts.proposerRegistry],
-  ["ConstantProductMarket", abis.constantProductMarketAbi, deployment.contracts.market],
+  ["WaveV4ProposalMarket", abis.waveMarketAbi, deployment.contracts.market],
+  ["WaveHook", abis.waveHookAbi, deployment.contracts.waveHook],
   ["QuantumRound", abis.quantumRoundAbi, deployment.contracts.quantumRound],
   ["Resolver", abis.resolverAbi, deployment.contracts.resolver],
   ["WavefundVault", abis.wavefundVaultAbi, deployment.contracts.vault],
@@ -59,14 +62,15 @@ const abiChecks = [
 ];
 const sourceLabels = [
   ["TestAsset (tETH, reused)", deployment.contracts.testAsset],
-  ["ProposalTokens (reused)", deployment.contracts.proposalTokens],
+  ["ProposalTokens", deployment.contracts.proposalTokens],
   ["ProposerRegistry (reused)", deployment.contracts.proposerRegistry],
-  ["ConstantProductMarket", deployment.contracts.market],
+  ["WaveV4ProposalMarket", deployment.contracts.market],
+  ["WaveHook", deployment.contracts.waveHook],
   ["QuantumRound", deployment.contracts.quantumRound],
   ["Resolver", deployment.contracts.resolver],
   ["WavefundVault (queued WAVE shares)", deployment.contracts.vault],
-  ["QuantumLP", deployment.contracts.quantumLp],
-  ["MockPriceOracle", deployment.contracts.priceOracle],
+  ["QuantumLP (reused)", deployment.contracts.quantumLp],
+  ["MockPriceOracle (reused)", deployment.contracts.priceOracle],
   ["Uniswap v4 PoolManager", deployment.contracts.poolManager],
   ["Uniswap v4 PositionManager", deployment.contracts.positionManager],
   ["Permit2", deployment.contracts.permit2],
@@ -118,6 +122,11 @@ for (const [contractAddress, abi, functionName, expectedAddress] of [
   [deployment.contracts.quantumRound, abis.quantumRoundAbi, "proposalTokens", deployment.contracts.proposalTokens],
   [deployment.contracts.quantumRound, abis.quantumRoundAbi, "proposerRegistry", deployment.contracts.proposerRegistry],
   [deployment.contracts.quantumRound, abis.quantumRoundAbi, "resolver", deployment.contracts.resolver],
+  [deployment.contracts.market, abis.waveMarketAbi, "waveHook", deployment.contracts.waveHook],
+  [deployment.contracts.market, abis.waveMarketAbi, "quantumRound", deployment.contracts.quantumRound],
+  [deployment.contracts.market, abis.waveMarketAbi, "proposalTokens", deployment.contracts.proposalTokens],
+  [deployment.contracts.market, abis.waveMarketAbi, "poolManager", deployment.contracts.poolManager],
+  [deployment.contracts.waveHook, abis.waveHookAbi, "adapter", deployment.contracts.market],
   [deployment.contracts.vault, abis.wavefundVaultAbi, "quantumRound", deployment.contracts.quantumRound],
   [deployment.contracts.vault, abis.wavefundVaultAbi, "resolver", deployment.contracts.resolver],
   [deployment.contracts.vault, abis.wavefundVaultAbi, "priceOracle", deployment.contracts.priceOracle],
@@ -133,6 +142,41 @@ for (const [contractAddress, abi, functionName, expectedAddress] of [
     throw new Error(`${functionName} wired into ${contractAddress} does not match current.json (${expectedAddress}).`);
   }
 }
+
+const creditDecimals = await client.readContract({
+  address: deployment.contracts.proposalTokens,
+  abi: abis.proposalTokensAbi,
+  functionName: "creditDecimals",
+});
+if (Number(creditDecimals) !== 6) throw new Error(`ProposalTokens.creditDecimals is ${creditDecimals}, expected 6.`);
+
+const roleChecks = [
+  [deployment.contracts.proposalTokens, abis.proposalTokensAbi, "QUANTUM_ROUND_ROLE", deployment.contracts.quantumRound],
+  [deployment.contracts.proposerRegistry, abis.proposerRegistryAbi, "QUANTUM_ROUND_ROLE", deployment.contracts.quantumRound],
+  [deployment.contracts.quantumLp, abis.quantumLpAbi, "QUANTUM_ROUND_ROLE", deployment.contracts.quantumRound],
+  [deployment.contracts.quantumRound, abis.quantumRoundAbi, "VAULT_ROLE", deployment.contracts.vault],
+  [deployment.contracts.quantumRound, abis.quantumRoundAbi, "KEEPER_ROLE", deployment.keeper],
+  [deployment.contracts.vault, abis.wavefundVaultAbi, "QUANTUM_ROUND_ROLE", deployment.contracts.quantumRound],
+  [deployment.contracts.resolver, abis.resolverAbi, "RESOLVER_ROLE", deployment.contracts.vault],
+];
+for (const [address, abi, role, account] of roleChecks) {
+  const granted = await client.readContract({
+    address,
+    abi,
+    functionName: "hasRole",
+    args: [keccak256(toHex(role)), account],
+  });
+  if (!granted) throw new Error(`${role} is not granted to ${account} on ${address}.`);
+}
+const marketOwner = await client.readContract({
+  address: deployment.contracts.market,
+  abi: abis.waveMarketAbi,
+  functionName: "owner",
+});
+if (marketOwner.toLowerCase() !== deployment.contracts.quantumRound.toLowerCase()) {
+  throw new Error(`Adapter owner ${marketOwner} is not the QuantumRound.`);
+}
+console.log("ProposalTokens credit decimals are 6 and Phase B roles are wired correctly.");
 
 for (const [label, address] of [
   ["tETH", deployment.contracts.testAsset],

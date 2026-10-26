@@ -1,7 +1,6 @@
 import { createPublicClient, defineChain, getAddress, http } from "viem";
 import deployment from "../../contracts/deployments/current.json";
 import {
-  constantProductMarketAbi,
   erc20Abi,
   mockPriceOracleAbi,
   poolManagerAbi,
@@ -12,6 +11,8 @@ import {
   resolverAbi,
   testAssetAbi,
   v4CallbackAbi,
+  waveHookAbi,
+  waveMarketAbi,
   wavefundVaultAbi,
 } from "./generated/contract-abis";
 
@@ -29,6 +30,7 @@ export const addresses = {
   proposalTokens: getAddress(deployment.contracts.proposalTokens),
   proposerRegistry: getAddress(deployment.contracts.proposerRegistry),
   market: getAddress(deployment.contracts.market),
+  waveHook: getAddress(deployment.contracts.waveHook),
   quantumRound: getAddress(deployment.contracts.quantumRound),
   resolver: getAddress(deployment.contracts.resolver),
   vault: getAddress(deployment.contracts.vault),
@@ -46,7 +48,9 @@ export const publicClient = createPublicClient({
 });
 
 export {
-  constantProductMarketAbi as proposalMarketAbi,
+  waveMarketAbi as proposalMarketAbi,
+  waveMarketAbi,
+  waveHookAbi,
   erc20Abi,
   mockPriceOracleAbi,
   poolManagerAbi,
