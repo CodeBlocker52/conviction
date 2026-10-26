@@ -1,12 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  formatUnits,
-  parseUnits,
-  type Address,
-  type Hash,
-} from "viem";
+import { formatUnits, type Address, type Hash } from "viem";
 import {
   addresses,
   arcTestnet,
@@ -17,8 +12,22 @@ import {
   publicClient,
   quantumRoundAbi,
   vaultAbi,
+  waveHookAbi,
 } from "../lib/contracts";
+import { fetchLogs, type ExplorerLog } from "../lib/explorer";
+import { fmtToken, parseCredits, parseToken, shortAddress } from "../lib/format";
+import {
+  BOUNDARY_MESSAGE,
+  outsideBounds,
+  poolIdOf,
+  probabilityAfterSwap,
+  probabilityFromSqrt,
+  readPoolState,
+  type PoolKeyTuple,
+} from "../lib/market";
 import { useWallet } from "./useWallet";
+
+export type RoundPhase = "trading" | "closed" | "collapsed" | "settled" | "cancelled";
 
 export type LiveProposal = {
   id: number;
@@ -26,15 +35,41 @@ export type LiveProposal = {
   proposerName: string;
   rationale: string;
   tEthBps: number;
-  longPrice: number;
-  executionPrice: number;
+  isStatusQuo: boolean;
+  /** LONG probability from the hook, 0 to 1. Null only if the pool could not be read. */
+  pLong: number | null;
+  pShort: number | null;
+  /** Final-window TWAP of pLong (0 to 1). */
+  twap: number | null;
+  /** True when the pool sits on the 0.01 / 0.99 edge of its liquidity range. */
+  atBoundary: boolean;
+  /** rMin + pLong * (rMax - rMin), as a percentage change. */
   impliedReturn: number | null;
-  creditReserve: bigint;
-  longReserve: bigint;
+  /** Pool marginal price in SHORT per LONG, p / (1 - p). */
+  poolRatio: number | null;
   claimedCredits: bigint;
   creditBalance: bigint;
   longBalance: bigint;
   shortBalance: bigint;
+  longToken: Address;
+  shortToken: Address;
+  poolKey: PoolKeyTuple;
+  tradingStart: bigint;
+  tradingEnd: bigint;
+  finalWindowSeconds: bigint;
+  /** Markets are finalised (liquidity pulled, seed returned) at collapse. */
+  finalized: boolean;
+};
+
+export type VaultTrade = {
+  roundId: bigint;
+  kind: "executed" | "cancelled";
+  txHash: Hash;
+  winnerTEthBps?: number;
+  deltaUsdc?: bigint;
+  deltaTEth?: bigint;
+  navUsdc?: bigint;
+  realisedReturn?: bigint;
 };
 
 export type LiveRound = {
@@ -43,6 +78,8 @@ export type LiveRound = {
   evaluationEnd: bigint;
   rMin: bigint;
   rMax: bigint;
+  twapWindow: number;
+  finalWindowStart: bigint;
   proposalCount: number;
   winnerProposalId: number | null;
   collapsed: boolean;
@@ -50,10 +87,16 @@ export type LiveRound = {
   cancelled: boolean;
   totalDeposited: bigint;
   realisedReturn: bigint;
-  phase: "trading" | "evaluation" | "settled";
+  phase: RoundPhase;
   deposit: bigint;
   remainingCredits: bigint;
   proposals: LiveProposal[];
+  /** USDC the wallet can redeem now (settled or cancelled rounds only). */
+  redeemable: bigint;
+  /** Payout in credits for one LONG / SHORT of the winning proposal, once settled. */
+  payoutPerLong: number | null;
+  payoutPerShort: number | null;
+  vaultTrade: VaultTrade | null;
 };
 
 export type VaultHistoryItem = {
@@ -63,12 +106,16 @@ export type VaultHistoryItem = {
   realisedReturn: bigint | null;
   allocationBps: number | null;
   status: string;
+  trade: VaultTrade | null;
 };
 
 export type LiveSnapshot = {
   roundCount: bigint;
   round: LiveRound | null;
+  /** Recent rounds in which the connected wallet holds a deposit or tokens. */
+  portfolio: LiveRound[];
   usdcBalance: bigint | null;
+  protocolSeed: bigint;
   vault: {
     navUsdc: bigint;
     usdcBalance: bigint;
@@ -80,24 +127,294 @@ export type LiveSnapshot = {
     shareBalance: bigint;
     queuedDeposit: bigint;
     queuedWithdrawal: bigint;
+    totalQueuedDeposit: bigint;
+    totalQueuedWithdrawal: bigint;
   };
   history: VaultHistoryItem[];
 };
 
-const asMessage = (error: unknown) => error instanceof Error ? error.message : "On-chain request failed.";
+export type TradeSide = "LONG" | "SHORT";
+export type TradeAction = "buy" | "sell";
 
-function decimalUnits(value: string, decimals = 6) {
-  if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error("Enter a valid positive amount.");
-  const amount = parseUnits(value, decimals);
-  if (amount <= 0n) throw new Error("Amount must be greater than zero.");
-  return amount;
+export type TradeQuote = {
+  action: TradeAction;
+  side: TradeSide;
+  amountIn: bigint;
+  /** Tokens (buy, 18 decimals) or credits (sell, 6 decimals). */
+  expectedOut: bigint;
+  minOut: bigint;
+  /** Credits paid or received per LONG/SHORT. */
+  averagePrice: number | null;
+  /** Percent difference between average and marginal price; positive means worse for the trader. */
+  priceImpactPct: number | null;
+  pAfter: number | null;
+  hitsBoundary: boolean;
+  /** Sells return unpaired tokens as dust. */
+  dust: { long: bigint; short: bigint } | null;
+};
+
+export const SLIPPAGE_BPS = 50n;
+const asMessage = (error: unknown) => error instanceof Error ? error.message : "On-chain request failed.";
+const SCALAR = 10n ** 18n;
+const POOL_FEE = 3_000;
+const POOL_TICK_SPACING = 60;
+
+type RoundTuple = readonly [
+  bigint, bigint, bigint, bigint, bigint, number, bigint, bigint, bigint, boolean, boolean, bigint, bigint, boolean,
+];
+
+const tokenCache = new Map<string, { credit: Address; long: Address; short: Address }>();
+
+async function tokensFor(roundId: bigint, proposalId: number) {
+  const cacheKey = `${roundId}:${proposalId}`;
+  const cached = tokenCache.get(cacheKey);
+  if (cached) return cached;
+  const [credit, long, short] = await Promise.all(
+    (["creditToken", "longToken", "shortToken"] as const).map((functionName) => publicClient.readContract({
+      address: addresses.proposalTokens,
+      abi: proposalTokensAbi,
+      functionName,
+      args: [roundId, BigInt(proposalId)],
+    })),
+  );
+  const value = { credit, long, short };
+  tokenCache.set(cacheKey, value);
+  return value;
 }
 
-function shareUnits(value: string) {
-  if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error("Enter a valid positive share amount.");
-  const amount = parseUnits(value, 18);
-  if (amount <= 0n) throw new Error("Share amount must be greater than zero.");
-  return amount;
+const nameCache = new Map<string, string>();
+
+async function proposerName(proposer: Address) {
+  const cached = nameCache.get(proposer);
+  if (cached) return cached;
+  let name = "";
+  try {
+    name = (await publicClient.readContract({
+      address: addresses.proposerRegistry,
+      abi: proposerRegistryAbi,
+      functionName: "agents",
+      args: [proposer],
+    }))[0];
+  } catch {
+    name = "";
+  }
+  const resolved = name || shortAddress(proposer);
+  if (name) nameCache.set(proposer, resolved);
+  return resolved;
+}
+
+let vaultLogCache: { at: number; logs: ExplorerLog[] } | null = null;
+
+async function vaultLogs() {
+  if (vaultLogCache && Date.now() - vaultLogCache.at < 30_000) return vaultLogCache.logs;
+  const logs = await fetchLogs(addresses.vault);
+  vaultLogCache = { at: Date.now(), logs };
+  return logs;
+}
+
+function vaultTradeFor(roundId: bigint, logs: ExplorerLog[]): VaultTrade | null {
+  const id = roundId.toString();
+  const forRound = logs.filter((log) => log.params.roundId === id);
+  const executed = forRound.find((log) => log.name === "TradeExecuted");
+  const cancelled = forRound.find((log) => log.name === "TradeCancelled");
+  const marked = forRound.find((log) => log.name === "NAVMarked");
+  const reported = forRound.find((log) => log.name === "ReturnReported");
+  if (executed) {
+    return {
+      roundId,
+      kind: "executed",
+      txHash: executed.txHash,
+      winnerTEthBps: Number(executed.params.winnerTEthBps),
+      deltaUsdc: BigInt(executed.params.deltaUsdc),
+      deltaTEth: BigInt(executed.params.deltaTEth),
+      navUsdc: marked ? BigInt(marked.params.navUsdc) : undefined,
+      realisedReturn: reported ? BigInt(reported.params.realisedReturn) : undefined,
+    };
+  }
+  if (cancelled) return { roundId, kind: "cancelled", txHash: cancelled.txHash };
+  return null;
+}
+
+function phaseOf(round: { collapsed: boolean; settled: boolean; cancelled: boolean; tradingEnd: bigint }): RoundPhase {
+  if (round.cancelled) return "cancelled";
+  if (round.settled) return "settled";
+  if (round.collapsed) return "collapsed";
+  return BigInt(Math.floor(Date.now() / 1000)) >= round.tradingEnd ? "closed" : "trading";
+}
+
+async function readProposal(params: {
+  roundId: bigint;
+  id: number;
+  rMin: bigint;
+  rMax: bigint;
+  collapsed: boolean;
+  account: Address | undefined;
+  full: boolean;
+}): Promise<LiveProposal> {
+  const { roundId, id, rMin, rMax, collapsed, account, full } = params;
+  const bigId = BigInt(id);
+  const [proposal, tokens] = await Promise.all([
+    publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "proposals", args: [roundId, bigId] }),
+    tokensFor(roundId, id),
+  ]);
+  // The adapter's poolKey() reverts once a market is finalised, so the key is rebuilt the way the adapter builds it.
+  const longFirst = BigInt(tokens.long) < BigInt(tokens.short);
+  const key: PoolKeyTuple = {
+    currency0: longFirst ? tokens.long : tokens.short,
+    currency1: longFirst ? tokens.short : tokens.long,
+    fee: POOL_FEE,
+    tickSpacing: POOL_TICK_SPACING,
+    hooks: addresses.waveHook,
+  };
+  const [claimedCredits, balances, name, details] = await Promise.all([
+    account
+      ? publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "creditsClaimed", args: [roundId, bigId, account] })
+      : Promise.resolve(0n),
+    account
+      ? Promise.all([tokens.credit, tokens.long, tokens.short].map((token) => publicClient.readContract({
+        address: token, abi: erc20Abi, functionName: "balanceOf", args: [account],
+      })))
+      : Promise.resolve([0n, 0n, 0n]),
+    full && id !== 0 ? proposerName(proposal[1]) : Promise.resolve("Protocol"),
+    publicClient.readContract({ address: addresses.waveHook, abi: waveHookAbi, functionName: "poolDetails", args: [poolIdOf(key)] }),
+  ]);
+
+  let pLong: number | null = null;
+  let twap: number | null = null;
+  let atBoundary = false;
+  if (full) {
+    try {
+      const [long] = await publicClient.readContract({
+        address: addresses.market, abi: proposalMarketAbi, functionName: "probabilities", args: [roundId, bigId],
+      });
+      pLong = Number(formatUnits(long, 18));
+    } catch {
+      // The adapter reverts once a market is finalised, and the hook reverts at the 0.01 / 0.99 edge.
+      try {
+        pLong = Number(formatUnits(await publicClient.readContract({
+          address: addresses.waveHook, abi: waveHookAbi, functionName: "pLong", args: [key],
+        }), 18));
+      } catch {
+        try {
+          const pool = await readPoolState(key);
+          pLong = probabilityFromSqrt(pool.sqrtPriceX96, key.currency0 === tokens.long);
+          atBoundary = true;
+        } catch {
+          pLong = null;
+        }
+      }
+    }
+    try {
+      twap = Number(formatUnits(await publicClient.readContract({
+        address: addresses.market, abi: proposalMarketAbi, functionName: "probabilityTwap", args: [roundId, bigId, 0n, 0n],
+      }), 18));
+    } catch {
+      try {
+        twap = Number(formatUnits(await publicClient.readContract({
+          address: addresses.waveHook, abi: waveHookAbi, functionName: "finalWindowTwap", args: [key],
+        }), 18));
+      } catch {
+        twap = null;
+      }
+    }
+  }
+  const range = Number(rMax - rMin) / 1e18;
+  const impliedReturn = pLong === null ? null : (Number(rMin) / 1e18 + pLong * range - 1) * 100;
+  return {
+    id,
+    proposer: proposal[1],
+    proposerName: name,
+    rationale: proposal[3],
+    tEthBps: Number(proposal[2].tEthBps),
+    isStatusQuo: proposal[6],
+    pLong,
+    pShort: pLong === null ? null : 1 - pLong,
+    twap,
+    atBoundary,
+    impliedReturn,
+    poolRatio: pLong === null ? null : pLong / (1 - pLong),
+    claimedCredits,
+    creditBalance: balances[0],
+    longBalance: balances[1],
+    shortBalance: balances[2],
+    longToken: tokens.long,
+    shortToken: tokens.short,
+    poolKey: key,
+    tradingStart: details[3],
+    tradingEnd: details[4],
+    finalWindowSeconds: details[5],
+    finalized: collapsed,
+  };
+}
+
+async function readRound(roundId: bigint, account: Address | undefined, full: boolean, scale: bigint, logs: ExplorerLog[]): Promise<LiveRound> {
+  const values = await publicClient.readContract({
+    address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "rounds", args: [roundId],
+  }) as unknown as RoundTuple;
+  const base = {
+    tradingEnd: values[1],
+    evaluationEnd: values[2],
+    rMin: values[3],
+    rMax: values[4],
+    twapWindow: Number(values[5]),
+    proposalCount: Number(values[7]),
+    winnerProposalId: values[8],
+    collapsed: values[9],
+    settled: values[10],
+    realisedReturn: values[11],
+    totalDeposited: values[12],
+    cancelled: values[13],
+  };
+  const [deposit, claimedTotal, proposals] = await Promise.all([
+    account ? publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "deposits", args: [roundId, account] }) : Promise.resolve(0n),
+    account ? publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "totalCreditsClaimed", args: [roundId, account] }) : Promise.resolve(0n),
+    Promise.all(Array.from({ length: base.proposalCount }, (_, id) => readProposal({
+      roundId, id, rMin: base.rMin, rMax: base.rMax, collapsed: base.collapsed, account, full,
+    }))),
+  ]);
+  const phase = phaseOf(base);
+  const winner = base.collapsed ? Number(base.winnerProposalId) : null;
+
+  // Mirrors QuantumRound.redeem: the realised return is clamped into [rMin, rMax] before payouts.
+  let payoutPerLong: number | null = null;
+  let payoutPerShort: number | null = null;
+  let redeemable = 0n;
+  const span = base.rMax - base.rMin;
+  if (base.settled && !base.cancelled) {
+    const clamped = base.realisedReturn < base.rMin ? base.rMin : base.realisedReturn > base.rMax ? base.rMax : base.realisedReturn;
+    const numer = clamped - base.rMin;
+    payoutPerLong = Number(numer) / Number(span);
+    payoutPerShort = 1 - payoutPerLong;
+    if (account) {
+      const unclaimed = deposit > claimedTotal ? deposit - claimedTotal : 0n;
+      let payout = unclaimed;
+      for (const item of proposals) {
+        payout += item.creditBalance;
+        if (item.id === winner) {
+          payout += (item.longBalance * numer) / (span * scale);
+          payout += (item.shortBalance * (span - numer)) / (span * scale);
+        }
+      }
+      redeemable = payout;
+    }
+  } else if (base.cancelled) {
+    redeemable = deposit;
+  }
+
+  return {
+    id: roundId,
+    ...base,
+    finalWindowStart: base.tradingEnd - BigInt(base.twapWindow),
+    winnerProposalId: winner,
+    phase,
+    deposit,
+    remainingCredits: deposit > claimedTotal ? deposit - claimedTotal : 0n,
+    proposals,
+    redeemable,
+    payoutPerLong,
+    payoutPerShort,
+    vaultTrade: base.collapsed ? vaultTradeFor(roundId, logs) : null,
+  };
 }
 
 export function useQuantumRound(enabled: boolean) {
@@ -111,6 +428,7 @@ export function useQuantumRound(enabled: boolean) {
     const [
       roundCount,
       usdcBalance,
+      protocolSeed,
       vaultUsdc,
       vaultTEth,
       oraclePrice,
@@ -119,228 +437,81 @@ export function useQuantumRound(enabled: boolean) {
       shareBalance,
       queuedDeposit,
       queuedWithdrawal,
+      totalQueuedDeposit,
+      totalQueuedWithdrawal,
+      scale,
     ] = await Promise.all([
       publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "roundCount" }),
-      address
-        ? publicClient.readContract({ address: addresses.usdc, abi: erc20Abi, functionName: "balanceOf", args: [address] })
-        : Promise.resolve(null),
+      address ? publicClient.readContract({ address: addresses.usdc, abi: erc20Abi, functionName: "balanceOf", args: [address] }) : Promise.resolve(null),
+      publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "protocolLiquiditySeed" }),
       publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "totalVaultUsdc" }),
       publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "totalVaultTEth" }),
       publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "oraclePriceTEthInUsdc" }),
       publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "spotPriceTEthInUsdc" }),
       publicClient.readContract({ address: addresses.vault, abi: erc20Abi, functionName: "totalSupply" }),
-      address
-        ? publicClient.readContract({ address: addresses.vault, abi: erc20Abi, functionName: "balanceOf", args: [address] })
-        : Promise.resolve(0n),
-      address
-        ? publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "queuedDepositUsdc", args: [address] })
-        : Promise.resolve(0n),
-      address
-        ? publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "queuedWithdrawalShares", args: [address] })
-        : Promise.resolve(0n),
+      address ? publicClient.readContract({ address: addresses.vault, abi: erc20Abi, functionName: "balanceOf", args: [address] }) : Promise.resolve(0n),
+      address ? publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "queuedDepositUsdc", args: [address] }) : Promise.resolve(0n),
+      address ? publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "queuedWithdrawalShares", args: [address] }) : Promise.resolve(0n),
+      publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "totalQueuedDepositUsdc" }),
+      publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "totalQueuedWithdrawalShares" }),
+      publicClient.readContract({ address: addresses.market, abi: proposalMarketAbi, functionName: "completeSetScale" }),
     ]);
-    const navUsdc = vaultUsdc + (vaultTEth * oraclePrice) / 10n ** 18n;
-    const tEthValue = (vaultTEth * oraclePrice) / 10n ** 18n;
+    const tEthValue = (vaultTEth * oraclePrice) / SCALAR;
+    const navUsdc = vaultUsdc + tEthValue;
     const tEthAllocationBps = navUsdc === 0n ? 0 : Number((tEthValue * 10_000n) / navUsdc);
+
+    // Event history is optional; a failing explorer must not hide on-chain state.
+    const logs = await vaultLogs().catch(() => [] as ExplorerLog[]);
+
     let round: LiveRound | null = null;
+    const portfolio: LiveRound[] = [];
     if (roundCount > 0n) {
-      const baseValues = await publicClient.readContract({
-        address: addresses.quantumRound,
-        abi: quantumRoundAbi,
-        functionName: "rounds",
-        args: [roundCount],
-      });
-      const base = {
-        id: baseValues[0],
-        tradingEnd: baseValues[1],
-        evaluationEnd: baseValues[2],
-        rMin: baseValues[3],
-        rMax: baseValues[4],
-        proposalCount: baseValues[7],
-        winnerProposalId: baseValues[8],
-        collapsed: baseValues[9],
-        settled: baseValues[10],
-        realisedReturn: baseValues[11],
-        totalDeposited: baseValues[12],
-        cancelled: baseValues[13],
-      };
-      const [deposit, totalCreditsClaimed, proposals] = await Promise.all([
-        address
-          ? publicClient.readContract({
-            address: addresses.quantumRound,
-            abi: quantumRoundAbi,
-            functionName: "deposits",
-            args: [roundCount, address],
-          })
-          : Promise.resolve(0n),
-        address
-          ? publicClient.readContract({
-            address: addresses.quantumRound,
-            abi: quantumRoundAbi,
-            functionName: "totalCreditsClaimed",
-            args: [roundCount, address],
-          })
-          : Promise.resolve(0n),
-        Promise.all(Array.from({ length: Number(base.proposalCount) }, async (_, id) => {
-          const [proposal, market, creditToken, longToken, shortToken, claimedCredits] = await Promise.all([
-            publicClient.readContract({
-              address: addresses.quantumRound,
-              abi: quantumRoundAbi,
-              functionName: "proposals",
-              args: [roundCount, BigInt(id)],
-            }),
-            publicClient.readContract({
-              address: addresses.market,
-              abi: proposalMarketAbi,
-              functionName: "markets",
-              args: [roundCount, BigInt(id)],
-            }),
-            publicClient.readContract({
-              address: addresses.proposalTokens,
-              abi: proposalTokensAbi,
-              functionName: "creditToken",
-              args: [roundCount, BigInt(id)],
-            }),
-            publicClient.readContract({
-              address: addresses.proposalTokens,
-              abi: proposalTokensAbi,
-              functionName: "longToken",
-              args: [roundCount, BigInt(id)],
-            }),
-            publicClient.readContract({
-              address: addresses.proposalTokens,
-              abi: proposalTokensAbi,
-              functionName: "shortToken",
-              args: [roundCount, BigInt(id)],
-            }),
-            address
-              ? publicClient.readContract({
-                address: addresses.quantumRound,
-                abi: quantumRoundAbi,
-                functionName: "creditsClaimed",
-                args: [roundCount, BigInt(id), address],
-              })
-              : Promise.resolve(0n),
-          ]);
-          const proposerName = id === 0
-            ? "Protocol"
-            : (await publicClient.readContract({
-              address: addresses.proposerRegistry,
-              abi: proposerRegistryAbi,
-              functionName: "agents",
-              args: [proposal[1]],
-            }))[0] || `${proposal[1].slice(0, 6)}…${proposal[1].slice(-4)}`;
-          const reserveTotal = market[0] + market[1];
-          const longPrice = reserveTotal === 0n ? 0 : Number((market[0] * 10n ** 18n) / reserveTotal) / 1e18;
-          const executionPrice = market[1] === 0n
-            ? 0
-            : Number((market[0] * 10n ** 18n) / market[1]) / 1e18;
-          const expectedReturn = Number(base.rMin) / 1e18
-            + longPrice * Number(base.rMax - base.rMin) / 1e18;
-          const [creditBalance, longBalance, shortBalance] = address
-            ? await Promise.all([
-              publicClient.readContract({ address: creditToken, abi: erc20Abi, functionName: "balanceOf", args: [address] }),
-              publicClient.readContract({ address: longToken, abi: erc20Abi, functionName: "balanceOf", args: [address] }),
-              publicClient.readContract({ address: shortToken, abi: erc20Abi, functionName: "balanceOf", args: [address] }),
-            ])
-            : [0n, 0n, 0n];
-          return {
-            id,
-            proposer: proposal[1],
-            proposerName,
-            rationale: proposal[3],
-            tEthBps: Number(proposal[2]),
-            longPrice,
-            executionPrice,
-            impliedReturn: (expectedReturn - 1) * 100,
-            creditReserve: market[0],
-            longReserve: market[1],
-            claimedCredits,
-            creditBalance,
-            longBalance,
-            shortBalance,
-          } satisfies LiveProposal;
-        })),
-      ]);
-      const now = BigInt(Math.floor(Date.now() / 1000));
-      const phase = base.settled || base.cancelled
-        ? "settled"
-        : base.collapsed || now >= base.tradingEnd
-          ? "evaluation"
-          : "trading";
-      round = {
-        id: base.id,
-        tradingEnd: base.tradingEnd,
-        evaluationEnd: base.evaluationEnd,
-        rMin: base.rMin,
-        rMax: base.rMax,
-        proposalCount: Number(base.proposalCount),
-        winnerProposalId: base.collapsed ? Number(base.winnerProposalId) : null,
-        collapsed: base.collapsed,
-        settled: base.settled,
-        cancelled: base.cancelled,
-        totalDeposited: base.totalDeposited,
-        realisedReturn: base.realisedReturn,
-        phase,
-        deposit,
-        remainingCredits: deposit > totalCreditsClaimed ? deposit - totalCreditsClaimed : 0n,
-        proposals,
-      };
+      round = await readRound(roundCount, address ?? undefined, true, scale, logs);
+      if (address) {
+        const earliest = roundCount > 6n ? roundCount - 5n : 1n;
+        for (let id = roundCount; id >= earliest; id--) {
+          const item = id === roundCount ? round : await readRound(id, address, false, scale, logs);
+          const holds = item.deposit > 0n || item.proposals.some((p) => p.creditBalance + p.longBalance + p.shortBalance > 0n);
+          if (holds) portfolio.push(item);
+        }
+      }
     }
 
     const firstHistoryRound = roundCount > 20n ? roundCount - 19n : 1n;
     const history = roundCount === 0n
       ? []
-      : await Promise.all(Array.from(
-        { length: Number(roundCount - firstHistoryRound + 1n) },
-        async (_, index) => {
-          const id = firstHistoryRound + BigInt(index);
-          const [pastRoundValues, state] = await Promise.all([
-            publicClient.readContract({
-              address: addresses.quantumRound,
-              abi: quantumRoundAbi,
-              functionName: "rounds",
-              args: [id],
-            }),
-            publicClient.readContract({
-              address: addresses.vault,
-              abi: vaultAbi,
-              functionName: "roundState",
-              args: [id],
-            }),
-          ]);
-          const pastRound = {
-            collapsed: pastRoundValues[9],
-            settled: pastRoundValues[10],
-            realisedReturn: pastRoundValues[11],
-            cancelled: pastRoundValues[13],
-            winnerProposalId: pastRoundValues[8],
-          };
-          let allocationBps: number | null = null;
-          if (pastRound.collapsed) {
-            const winner = await publicClient.readContract({
-              address: addresses.quantumRound,
-              abi: quantumRoundAbi,
-              functionName: "proposals",
-              args: [id, pastRound.winnerProposalId],
-            });
-            allocationBps = Number(winner[2]);
-          }
-          return {
-            roundId: id,
-            timestamp: state[4],
-            navUsdc: state[0],
-            realisedReturn: pastRound.settled ? pastRound.realisedReturn : null,
-            allocationBps,
-            status: pastRound.cancelled ? "Cancelled" : pastRound.settled ? "Settled" : pastRound.collapsed ? "Evaluating" : "Trading",
-          } satisfies VaultHistoryItem;
-        },
-      )).then((items) => items.filter((item) => item.timestamp > 0n));
+      : await Promise.all(Array.from({ length: Number(roundCount - firstHistoryRound + 1n) }, async (_, index) => {
+        const id = firstHistoryRound + BigInt(index);
+        const [values, state] = await Promise.all([
+          publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "rounds", args: [id] }) as unknown as Promise<RoundTuple>,
+          publicClient.readContract({ address: addresses.vault, abi: vaultAbi, functionName: "roundState", args: [id] }),
+        ]);
+        const past = { collapsed: values[9], settled: values[10], cancelled: values[13], tradingEnd: values[1] };
+        let allocationBps: number | null = null;
+        if (past.collapsed && !past.cancelled) {
+          const winner = await publicClient.readContract({
+            address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "proposals", args: [id, values[8]],
+          });
+          allocationBps = Number(winner[2].tEthBps);
+        }
+        const phase = phaseOf(past);
+        return {
+          roundId: id,
+          timestamp: state[4],
+          navUsdc: state[0],
+          realisedReturn: past.settled && !past.cancelled ? values[11] : null,
+          allocationBps,
+          status: phase === "collapsed" ? "Evaluating" : phase === "closed" ? "Awaiting collapse" : phase[0].toUpperCase() + phase.slice(1),
+          trade: vaultTradeFor(id, logs),
+        } satisfies VaultHistoryItem;
+      }));
 
     setSnapshot({
       roundCount,
       round,
+      portfolio,
       usdcBalance,
+      protocolSeed,
       vault: {
         navUsdc,
         usdcBalance: vaultUsdc,
@@ -352,6 +523,8 @@ export function useQuantumRound(enabled: boolean) {
         shareBalance,
         queuedDeposit,
         queuedWithdrawal,
+        totalQueuedDeposit,
+        totalQueuedWithdrawal,
       },
       history,
     });
@@ -363,15 +536,9 @@ export function useQuantumRound(enabled: boolean) {
     const refreshIfActive = () => {
       setLoading(true);
       refresh()
-        .then(() => {
-          if (active) setError("");
-        })
-        .catch((readError: unknown) => {
-          if (active) setError(asMessage(readError));
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
+        .then(() => { if (active) setError(""); })
+        .catch((readError: unknown) => { if (active) setError(asMessage(readError)); })
+        .finally(() => { if (active) setLoading(false); });
     };
     refreshIfActive();
     const timer = window.setInterval(refreshIfActive, 15_000);
@@ -392,215 +559,175 @@ export function useQuantumRound(enabled: boolean) {
     const hash = await send();
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== "success") throw new Error(`Transaction reverted: ${hash}`);
+    vaultLogCache = null;
     setRefreshIndex((index) => index + 1);
     return hash;
   }, [ensureWallet]);
 
-  const deposit = useCallback(async (roundId: bigint, amount: string) => {
+  const approveIfNeeded = useCallback(async (spender: Address, amount: bigint) => {
     const { address: account, walletClient: client } = ensureWallet();
-    const amountUnits = decimalUnits(amount);
     const allowance = await publicClient.readContract({
-      address: addresses.usdc,
-      abi: erc20Abi,
-      functionName: "allowance",
-      args: [account, addresses.quantumRound],
+      address: addresses.usdc, abi: erc20Abi, functionName: "allowance", args: [account, spender],
     });
-    if (allowance < amountUnits) {
+    if (allowance < amount) {
       await submit(() => client.writeContract({
-        account,
-        chain: arcTestnet,
-        address: addresses.usdc,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [addresses.quantumRound, amountUnits],
+        account, chain: arcTestnet, address: addresses.usdc, abi: erc20Abi, functionName: "approve", args: [spender, amount],
       }));
     }
-    return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.quantumRound,
-      abi: quantumRoundAbi,
-      functionName: "deposit",
-      args: [roundId, amountUnits],
-    }));
   }, [ensureWallet, submit]);
+
+  const deposit = useCallback(async (roundId: bigint, amount: string) => {
+    const { address: account, walletClient: client } = ensureWallet();
+    const units = parseCredits(amount);
+    await approveIfNeeded(addresses.quantumRound, units);
+    return submit(() => client.writeContract({
+      account, chain: arcTestnet, address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "deposit", args: [roundId, units],
+    }));
+  }, [approveIfNeeded, ensureWallet, submit]);
 
   const claimCredits = useCallback(async (roundId: bigint, proposalId: number, amount: string) => {
     const { address: account, walletClient: client } = ensureWallet();
     return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.quantumRound,
-      abi: quantumRoundAbi,
-      functionName: "claimCredits",
-      args: [roundId, BigInt(proposalId), decimalUnits(amount)],
+      account, chain: arcTestnet, address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "claimCredits",
+      args: [roundId, BigInt(proposalId), parseCredits(amount)],
     }));
   }, [ensureWallet, submit]);
+
+  /** Quotes through the adapter's exact single-range math. Used for both the ticket preview and the minimum output. */
+  const quoteTrade = useCallback(async (
+    roundId: bigint,
+    proposal: LiveProposal,
+    side: TradeSide,
+    action: TradeAction,
+    amount: string,
+  ): Promise<TradeQuote> => {
+    const amountIn = action === "buy" ? parseCredits(amount) : parseToken(amount);
+    const bigId = BigInt(proposal.id);
+    const args = [roundId, bigId, amountIn] as const;
+    const reference = side === "LONG" ? proposal.pLong : proposal.pShort;
+    let expectedOut: bigint;
+    let dust: TradeQuote["dust"] = null;
+    try {
+      if (action === "buy") {
+        expectedOut = await publicClient.readContract({
+          address: addresses.market, abi: proposalMarketAbi, functionName: side === "LONG" ? "quoteBuyLong" : "quoteBuyShort", args,
+        });
+      } else {
+        const [credits, longDust, shortDust] = await publicClient.readContract({
+          address: addresses.market, abi: proposalMarketAbi, functionName: side === "LONG" ? "quoteSellLong" : "quoteSellShort", args,
+        });
+        expectedOut = credits;
+        dust = { long: longDust, short: shortDust };
+      }
+    } catch {
+      throw new Error(BOUNDARY_MESSAGE);
+    }
+
+    const ownDust = dust ? (side === "LONG" ? dust.long : dust.short) : 0n;
+    const tokens = action === "buy" ? Number(formatUnits(expectedOut, 18)) : Number(formatUnits(amountIn - ownDust, 18));
+    const credits = action === "buy" ? Number(formatUnits(amountIn, 6)) : Number(formatUnits(expectedOut, 6));
+    const averagePrice = tokens > 0 ? credits / tokens : null;
+    const priceImpactPct = averagePrice !== null && reference
+      ? (action === "buy" ? averagePrice / reference - 1 : 1 - averagePrice / reference) * 100
+      : null;
+
+    // pLong after the trade, previewed with the pool's own liquidity; the swap leg is the opposite token for buys.
+    let pAfter: number | null = null;
+    try {
+      const pool = await readPoolState(proposal.poolKey);
+      const inputToken = action === "buy" ? (side === "LONG" ? proposal.shortToken : proposal.longToken) : (side === "LONG" ? proposal.longToken : proposal.shortToken);
+      const swapIn = action === "buy" ? amountIn * 10n ** 12n : amountIn - expectedOut * 10n ** 12n - ownDust;
+      pAfter = probabilityAfterSwap({
+        sqrtPriceX96: pool.sqrtPriceX96,
+        liquidity: pool.liquidity,
+        fee: proposal.poolKey.fee,
+        zeroForOne: proposal.poolKey.currency0 === inputToken,
+        amountIn: swapIn > 0n ? swapIn : 0n,
+        longIsCurrency0: proposal.poolKey.currency0 === proposal.longToken,
+      });
+    } catch {
+      pAfter = null;
+    }
+    return {
+      action,
+      side,
+      amountIn,
+      expectedOut,
+      minOut: (expectedOut * (10_000n - SLIPPAGE_BPS)) / 10_000n,
+      averagePrice,
+      priceImpactPct,
+      pAfter,
+      hitsBoundary: outsideBounds(pAfter),
+      dust,
+    };
+  }, []);
 
   const trade = useCallback(async (
     roundId: bigint,
     proposal: LiveProposal,
-    side: "LONG" | "SHORT",
+    side: TradeSide,
     amount: string,
-    action: "buy" | "sell",
+    action: TradeAction,
   ) => {
     const { address: account, walletClient: client } = ensureWallet();
-    const amountUnits = decimalUnits(amount, action === "sell" ? 18 : 6);
-    if (action === "buy" && amountUnits > proposal.creditBalance) {
-      throw new Error("Buy amount exceeds your available proposal credits.");
+    const quote = await quoteTrade(roundId, proposal, side, action, amount);
+    if (quote.hitsBoundary) throw new Error(BOUNDARY_MESSAGE);
+    if (action === "buy" && quote.amountIn > proposal.creditBalance) {
+      throw new Error("Buy amount exceeds your available proposal credits. Claim more credits first.");
     }
-    const heldTokens = side === "LONG" ? proposal.longBalance : proposal.shortBalance;
-    if (action === "sell" && amountUnits > heldTokens) {
-      throw new Error(`Sell amount exceeds your available ${side} balance.`);
-    }
-    const marketState = await publicClient.readContract({
-      address: addresses.market,
-      abi: proposalMarketAbi,
-      functionName: "markets",
-      args: [roundId, BigInt(proposal.id)],
-    });
-    const feeBps = await publicClient.readContract({
-      address: addresses.market,
-      abi: proposalMarketAbi,
-      functionName: "feeBps",
-    });
-    const feeFactor = 10_000n - BigInt(feeBps);
-    if (action === "buy" && side === "LONG") {
-      const estimate = (marketState[1] * amountUnits * feeFactor)
-        / (marketState[0] * 10_000n + amountUnits * feeFactor);
-      const minimum = (estimate * 9_950n) / 10_000n;
-      return submit(() => client.writeContract({
-        account,
-        chain: arcTestnet,
-        address: addresses.quantumRound,
-        abi: quantumRoundAbi,
-        functionName: "buyLong",
-        args: [roundId, BigInt(proposal.id), amountUnits, minimum],
-      }));
-    }
-    if (action === "buy" && side === "SHORT") {
-      const estimate = amountUnits;
-      if (marketState[0] < amountUnits) throw new Error("Insufficient market credit reserve for this SHORT purchase.");
-      const minimum = (estimate * 9_950n) / 10_000n;
-      return submit(() => client.writeContract({
-        account,
-        chain: arcTestnet,
-        address: addresses.quantumRound,
-        abi: quantumRoundAbi,
-        functionName: "buyShort",
-        args: [roundId, BigInt(proposal.id), amountUnits, minimum],
-      }));
-    }
-    if (action === "sell" && side === "LONG") {
-      const estimate = (marketState[0] * amountUnits * feeFactor)
-        / (marketState[1] * 10_000n + amountUnits * feeFactor);
-      const minimum = (estimate * 9_950n) / 10_000n;
-      return submit(() => client.writeContract({
-        account,
-        chain: arcTestnet,
-        address: addresses.quantumRound,
-        abi: quantumRoundAbi,
-        functionName: "sellLong",
-        args: [roundId, BigInt(proposal.id), amountUnits, minimum],
-      }));
-    }
-    const estimate = amountUnits;
-    if (marketState[2] < amountUnits) throw new Error("Insufficient issued SHORT supply for this sale.");
-    const minimum = (estimate * 9_950n) / 10_000n;
+    const held = side === "LONG" ? proposal.longBalance : proposal.shortBalance;
+    if (action === "sell" && quote.amountIn > held) throw new Error(`Sell amount exceeds your ${side} balance.`);
+    // Sells burn tokens directly through the round, so no ERC-20 approval is needed.
+    const functionName = action === "buy"
+      ? (side === "LONG" ? "buyLong" : "buyShort")
+      : (side === "LONG" ? "sellLong" : "sellShort");
     return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.quantumRound,
-      abi: quantumRoundAbi,
-      functionName: "sellShort",
-      args: [roundId, BigInt(proposal.id), amountUnits, minimum],
+      account, chain: arcTestnet, address: addresses.quantumRound, abi: quantumRoundAbi, functionName,
+      args: [roundId, BigInt(proposal.id), quote.amountIn, quote.minOut],
     }));
-  }, [ensureWallet, submit]);
+  }, [ensureWallet, quoteTrade, submit]);
 
   const collapse = useCallback(async (roundId: bigint) => {
     const { address: account, walletClient: client } = ensureWallet();
     return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.quantumRound,
-      abi: quantumRoundAbi,
-      functionName: "collapse",
-      args: [roundId],
+      account, chain: arcTestnet, address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "collapse", args: [roundId],
     }));
   }, [ensureWallet, submit]);
 
   const redeem = useCallback(async (roundId: bigint) => {
     const { address: account, walletClient: client } = ensureWallet();
     return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.quantumRound,
-      abi: quantumRoundAbi,
-      functionName: "redeem",
-      args: [roundId],
+      account, chain: arcTestnet, address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "redeem", args: [roundId],
     }));
   }, [ensureWallet, submit]);
 
   const depositToVault = useCallback(async (amount: string) => {
     const { address: account, walletClient: client } = ensureWallet();
-    const amountUnits = decimalUnits(amount);
-    const allowance = await publicClient.readContract({
-      address: addresses.usdc,
-      abi: erc20Abi,
-      functionName: "allowance",
-      args: [account, addresses.vault],
-    });
-    if (allowance < amountUnits) {
-      await submit(() => client.writeContract({
-        account,
-        chain: arcTestnet,
-        address: addresses.usdc,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [addresses.vault, amountUnits],
-      }));
-    }
+    const units = parseCredits(amount);
+    await approveIfNeeded(addresses.vault, units);
     return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.vault,
-      abi: vaultAbi,
-      functionName: "requestDeposit",
-      args: [amountUnits],
+      account, chain: arcTestnet, address: addresses.vault, abi: vaultAbi, functionName: "requestDeposit", args: [units],
     }));
-  }, [ensureWallet, submit]);
+  }, [approveIfNeeded, ensureWallet, submit]);
 
   const withdrawFromVault = useCallback(async (shares: string) => {
     const { address: account, walletClient: client } = ensureWallet();
     return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.vault,
-      abi: vaultAbi,
-      functionName: "requestWithdraw",
-      args: [shareUnits(shares)],
+      account, chain: arcTestnet, address: addresses.vault, abi: vaultAbi, functionName: "requestWithdraw", args: [parseToken(shares)],
     }));
   }, [ensureWallet, submit]);
 
   const cancelVaultDeposit = useCallback(async () => {
     const { address: account, walletClient: client } = ensureWallet();
     return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.vault,
-      abi: vaultAbi,
-      functionName: "cancelDepositRequest",
+      account, chain: arcTestnet, address: addresses.vault, abi: vaultAbi, functionName: "cancelDepositRequest",
     }));
   }, [ensureWallet, submit]);
 
   const cancelVaultWithdrawal = useCallback(async () => {
     const { address: account, walletClient: client } = ensureWallet();
     return submit(() => client.writeContract({
-      account,
-      chain: arcTestnet,
-      address: addresses.vault,
-      abi: vaultAbi,
-      functionName: "cancelWithdrawRequest",
+      account, chain: arcTestnet, address: addresses.vault, abi: vaultAbi, functionName: "cancelWithdrawRequest",
     }));
   }, [ensureWallet, submit]);
 
@@ -611,6 +738,7 @@ export function useQuantumRound(enabled: boolean) {
     refresh: () => setRefreshIndex((index) => index + 1),
     deposit,
     claimCredits,
+    quoteTrade,
     trade,
     collapse,
     redeem,
@@ -632,3 +760,5 @@ export function toTokenAmount(value: bigint) {
 export function toShareAmount(value: bigint) {
   return Number(formatUnits(value, 18));
 }
+
+export { fmtToken };

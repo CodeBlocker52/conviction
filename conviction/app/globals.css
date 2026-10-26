@@ -439,6 +439,13 @@ button { color: inherit; }
 .side-pill.long { color: #218361; background: #eaf7ef; }
 .side-pill.short { color: #ac782f; background: #fff4e2; }
 .voided-position { color: #9ba49e; font: 500 8px var(--sans); }
+.demo-proposal-card.winner { animation: winner-collapse .7s ease-out; }
+.demo-proposal-card.erased { opacity: .5; filter: grayscale(.8); transition: opacity .6s ease, filter .6s ease; }
+@keyframes winner-collapse { 0% { box-shadow: 0 0 0 0 #73c9a0; } 60% { box-shadow: 0 0 0 8px #d9f0e4; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.round-phase-pill.closed, .round-phase-pill.collapsed { color: #96702f; background: #fff5e1; }
+.round-phase-pill.closed i, .round-phase-pill.collapsed i { background: #d2a044; }
+.round-phase-pill.cancelled { color: #8a4a3f; background: #fbeceb; }
+.round-phase-pill.cancelled i { background: #cf6a5e; }
 .positions-footnote { display: flex; justify-content: space-between; gap: 10px; padding: 11px 2px; color: #919c95; font-size: 8px; }
 .positions-footnote strong { color: #435148; }
 .vault-flow-panel { display: grid; grid-template-columns: minmax(0, 1.5fr) .7fr .8fr 1.2fr; align-items: center; gap: 17px; margin-top: 14px; padding: 17px 18px; border: 1px solid #e6ece8; border-radius: 8px; background: white; }
