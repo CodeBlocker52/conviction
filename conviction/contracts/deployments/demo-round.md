@@ -166,3 +166,10 @@ Report (all values USDC):
 - The 1.762833 USDC the two wallets gave up stayed in the reserve: 0.30% fees and price impact on eight trades plus their unsold half-positions, which are worth less than par after settlement.
 - Wallet USDC (before → after): D 23.092392 → 22.154264 (gas 0.122374), K 34.377408 → 33.275356 (gas 0.154972). Payout per wallet net of its own redeem gas: D 5.178274, K 5.047030 (gross 5.184247 / 5.052920).
 - Vault: 5.000000 USDC / 0 tETH → 2.500000 USDC / 0.001048 tETH.
+
+## Live test round 3 (frontend cutover)
+
+- Pool recentred to ±20% (spot $2312.49, active liquidity 4,167,159,443,938): add position https://explorer.testnet.arc.io/tx/0x79b9a1cc5248b44b1df6324b495ddab982c75e993b0ca2e79245fde56cd20d87
+- Open round 3 (20 min, ends 2026-10-26T19:14:59Z): https://explorer.testnet.arc.io/tx/0x9ed41d081e9ebbffa9251b75c4fa42b5c7b23bfe47012ec99a76adcc66c038c0
+- Proposals: 20% https://explorer.testnet.arc.io/tx/0xb42dcc4107853de2246ff83ee27c23e28b486d6b9db72dc745a60c89eeccb165, 50% https://explorer.testnet.arc.io/tx/0xe017a82fccdb9cb4d7a1b28c46d8db824c07d91e2c7ea6fcf4fdd2f19fe6e3fe, 80% https://explorer.testnet.arc.io/tx/0x537692e255a6a1b5200e458d805054e587e31a2c32d3cdb34d67bc5e4f98a479
+- Close with `npm run demo:close-round -- --execute` after testing; hashes to be added.

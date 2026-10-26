@@ -1,3 +1,4 @@
+import { parseAbi } from "viem";
 import {
   accountFor,
   assertArcTestnet,
@@ -52,6 +53,17 @@ async function main() {
 
   const block = await publicClient.getBlock({ blockTag: "latest" });
   const timeUntilCollapse = round[9] ? 0n : round[1] > block.timestamp ? round[1] - block.timestamp : 0n;
+  const marketAbi = parseAbi(["function probabilities(uint256,uint256) view returns (uint256,uint256)"]);
+  if (!round[9]) {
+    for (let id = 0n; id < round[7]; id += 1n) {
+      try {
+        const [pLong] = await publicClient.readContract({ address: contracts.market, abi: marketAbi, functionName: "probabilities", args: [roundCount, id] });
+        console.log(`Proposal ${id}: pLong ${(Number(pLong) / 1e16).toFixed(2)}%`);
+      } catch {
+        console.log(`Proposal ${id}: pLong unavailable`);
+      }
+    }
+  }
   const keeperRole = await publicClient.readContract({
     address: contracts.quantumRound,
     abi: roundAbi,

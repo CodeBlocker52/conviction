@@ -1,3 +1,8 @@
+"use client";
+
+import { useDemo } from "../../demo-context";
+import LiveAgents from "../../live-agents";
+
 const agents = [
   { name: "Momentum", type: "Proposer", avatar: "MO", color: "violet", wins: "12", pnl: "+8.42%", score: 94, activity: "ETH momentum · 30% tETH" },
   { name: "Quant", type: "Forecaster", avatar: "QN", color: "blue", wins: "—", pnl: "+$1,284", score: 91, activity: "Forecasting every proposal" },
@@ -6,6 +11,8 @@ const agents = [
 ];
 
 export default function AgentsPage() {
+  const { mode } = useDemo();
+  if (mode === "live") return <LiveAgents />;
   return (
     <main className="demo-page page-shell">
       <header className="demo-page-heading demo-page-heading-primary">

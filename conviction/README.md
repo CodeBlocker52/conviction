@@ -7,7 +7,7 @@ AI agents propose trades for a shared USDC vault. Traders forecast how the vault
 > **Event:** ETHGlobal Mumbai
 > **Chain:** Arc testnet (Circle's stablecoin-native L1, USDC as gas)
 > **Target prizes (ETHGlobal allows up to 3):** Arc "Best DeFi / Onchain Finance App Built End to End in Arc Studio", Uniswap Foundation "Build with Uniswap", Chainlink "Best workflow with CRE"
-> **Status:** Phase A is deployed on Arc Testnet. Phase B's market adapter and complete-set settlement are implemented and locally tested; they are not deployed or connected to the live frontend.
+> **Status:** Phase B (Uniswap v4 hook proposal markets) is deployed, verified and smoke-tested on Arc Testnet, and the live frontend, keeper and demo scripts run against it. Phase A is superseded (see `contracts/deployments/SOURCES.md`).
 > **Based on:** "Quantum Markets" by Alpin Yukseloglu and Sofiane Larbi (Paradigm, June 2025). Implemented from scratch; see [Relationship to the reference implementation](#relationship-to-the-reference-implementation).
 
 ---
@@ -485,11 +485,20 @@ If we want to reuse any reference code, we ask the authors for permission first 
 
 | Real on Arc testnet | Simulated or limited |
 |---|---|
-| Phase A decision rounds, constant-product proposal markets, positions and settlement are onchain; a throwaway WaveHook compatibility pool has been exercised on Arc | Phase B adapter and settlement are local-only and not deployed; tETH is a mock token |
+| Phase B decision rounds, Uniswap v4 hook proposal markets (bounded 0.01–0.99, complete-set mint/redeem), TWAP selection, vault trade through the v4 pool, settlement and redemption are onchain and verified on Arc Explorer | tETH is a mock token and the USDC/tETH pool is funded by us |
 | Keeper-updated 8-decimal ETH/USD marks are stored onchain in MockPriceOracle | No live decentralized ETH/USD feed was confirmed on Arc Testnet; the keeper fetches Coinbase spot data and must update every 60 seconds and immediately before NAV marking and resolution |
-| Vault code uses Arc's Uniswap v4 PoolManager with a 500 bps oracle-relative slippage cap | The vault's no-hook USDC/tETH pool still requires a testnet smoke test and funded liquidity |
+| The vault trades through Arc's Uniswap v4 PoolManager with a 500 bps oracle-relative slippage cap; a concentrated ±20% position keeps the pool near the oracle price | The pool must be re-centred (`npm run pool:recenter -- --execute`) before each demo |
 | USDC deposits, payouts and gas | CRE workflow may run in simulation if Arc isn't supported |
 | Agent wallets via Circle developer-controlled wallets | All forecasters in the demo may be our own agents unless outsiders join |
+
+### Live mode: run and test (Phase B)
+
+1. `npm run pool:recenter` (plan), then `npm run pool:recenter -- --execute` if the pool is off the oracle price by more than 0.5%.
+2. `npm run demo:open-round -- --minutes 20 --execute` opens a round with three proposals and starts the oracle watcher (60 s updates only while a round is open; `npm run oracle:start|stop` controls it manually).
+3. On the site, switch to **Live**, connect MetaMask (Arc Testnet is added automatically). Deposit 1 USDC and claim credits on two proposals (about 1 credit each). Buy LONG on one proposal and SHORT on the other; the ticket shows the adapter quote, average price, impact and pLong after (minimum output = quote less 0.5%). Sell part of each; the received credits match the sell quote within 0.5%. Check Portfolio.
+4. After trading ends, press **Collapse** (anyone can). The highest final-window TWAP wins; other markets are erased and all bonds refunded.
+5. `npm run demo:close-round -- --execute` executes the vault trade, waits for the evaluation window and settles. Then **Redeem** in Markets or Portfolio: LONG pays π and SHORT pays 1 − π credits per token for the winning proposal, where π = (return − rMin) / (rMax − rMin). A vault deposit request on the Vault page is processed at the next decision.
+6. If the vault's slippage guard cancels the round, every deposit redeems at par.
 
 ---
 

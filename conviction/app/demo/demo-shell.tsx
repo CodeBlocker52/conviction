@@ -8,6 +8,16 @@ import { useDemo } from "../demo-context";
 import ThemeToggle from "../theme-toggle";
 import { useWallet } from "../hooks/useWallet";
 import { addresses, erc20Abi, publicClient } from "../lib/contracts";
+import { explorerAddress } from "../lib/explorer";
+
+const contractLinks = [
+  ["QuantumRound", addresses.quantumRound],
+  ["WaveV4ProposalMarket", addresses.market],
+  ["WaveHook", addresses.waveHook],
+  ["ProposalTokens", addresses.proposalTokens],
+  ["Resolver", addresses.resolver],
+  ["WavefundVault", addresses.vault],
+] as const;
 
 const navigation = [
   { label: "Home", href: "/demo" },
@@ -159,6 +169,14 @@ export default function DemoShell({ children }: { children: ReactNode }) {
       <footer className="demo-shell-footer page-shell">
         <Link className="brand" href="/"><span className="brand-mark"><span /><span /><span /></span><span>wavefund</span></Link>
         <span>{mode === "mock" ? "Local simulation · No real funds are managed" : "Live Arc Testnet data · transactions require wallet approval"}</span>
+        {mode === "live" && (
+          <details className="footer-contracts">
+            <summary>Contracts · Phase B · verified on Arc Explorer</summary>
+            {contractLinks.map(([name, address]) => (
+              <a key={name} href={explorerAddress(address)} target="_blank" rel="noreferrer">{name} {address.slice(0, 8)}…{address.slice(-6)} ↗</a>
+            ))}
+          </details>
+        )}
       </footer>
     </div>
   );

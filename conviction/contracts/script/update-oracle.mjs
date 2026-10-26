@@ -7,10 +7,11 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const rpcUrl = process.env.ARC_RPC_URL ?? process.env.ARC_TESTNET_RPC ?? "https://rpc.testnet.arc.io";
-const oracleAddress = process.env.MOCK_PRICE_ORACLE_ADDRESS ?? "0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d";
+const deployment = JSON.parse(readFileSync(new URL("../deployments/current.json", import.meta.url), "utf8"));
+const rpcUrl = process.env.ARC_RPC_URL ?? process.env.ARC_TESTNET_RPC ?? deployment.rpcUrl;
+const oracleAddress = deployment.contracts.priceOracle;
 const keeperPrivateKey = process.env.KEEPER_PK;
-const roundAddress = process.env.NEW_QUANTUM_ROUND_ADDRESS ?? "0x82a666Fc211c6A9a2509F941eA974AB0a7dDDb41";
+const roundAddress = deployment.contracts.quantumRound;
 const scriptPath = fileURLToPath(import.meta.url);
 const processKey = `wavefund-oracle-arc-testnet-${oracleAddress?.toLowerCase() ?? "unset"}`;
 const pidFile = `${tmpdir()}/${processKey}.pid`;

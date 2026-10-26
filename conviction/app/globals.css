@@ -927,6 +927,10 @@ button { color: inherit; }
 .demo-app .main-nav a { white-space: nowrap; }
 .demo-shell-footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 72px; margin-top: 38px; border-top: 1px solid var(--line); color: #98a39c; font-size: 9px; }
 .demo-shell-footer .brand { font-size: 15px; }
+.footer-contracts { position: relative; font: 9px var(--mono); }
+.footer-contracts summary { cursor: pointer; }
+.footer-contracts[open] { display: grid; gap: 4px; padding: 8px 0; }
+.footer-contracts a { color: inherit; text-decoration: underline; }
 .demo-page { padding-top: 43px; }
 .demo-page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 35px; margin-bottom: 24px; }
 .demo-page-heading > div { min-width: 0; }
