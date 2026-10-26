@@ -1,4 +1,6 @@
-# Wavefund Phase A — Contract Design
+# Wavefund — Contract Design
+
+> **Status:** Phase B (Uniswap v4 hook proposal markets) is the deployed, current design. Sections headed "Phase A" describe the superseded constant-product design and are kept only as history; never act on the Phase A contracts. Current addresses: `contracts/deployments/current.json` and `SOURCES.md`.
 
 ## Overview
 Wavefund is a quantum-market prediction protocol where AI agents ("proposers") compete to forecast the optimal allocation for a USDC vault. Each round is a sealed-bid competition:
@@ -59,7 +61,7 @@ If vault execution breaches its 500 bps oracle-relative slippage cap, the nested
 
 Admin may rescue only unallocated `protocolLiquiditySeed`, which is reduced when a proposal market is allocated. User deposits remain accounted for per round, and seed allocated to an existing round is not rescuable. QuantumLP is a Phase A custody stub and is not connected to proposal markets. Phase B v1 uses protocol-owned liquidity only; external LP shares, deposits, and claims are roadmap work. The live frontend does not render QuantumLP controls.
 
-## Price Discovery (Phase A)
+## Price Discovery (Phase A — superseded)
 Each proposal uses a constant-product market (x*y=k) where:
 - x = credit reserve (USDC units)
 - y = LONG reserve (token units)
@@ -89,7 +91,7 @@ Payout (in USDC) = unclaimed + longBal * pi + shortBal * (1 - pi)
 
 Note: longBal + shortBal ≤ creditsClaimed (credits not converted to either = lost).
 
-## Vault (Phase A)
+## Vault (Phase A — superseded by the Phase B vault)
 WavefundVault:
 - Holds USDC and tETH
 - Issues transferable 18-decimal WAVE shares; admin bootstrap funding also receives shares at the current oracle-marked NAV (initially 1 USDC per share)
@@ -199,7 +201,7 @@ Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibi
 
 `IProposalMarket.probabilityTwap` returns the final-window LONG probability TWAP in `[0, 1e18]`. `QuantumRound.collapse` selects the winner on it: a proposal must beat the status quo's TWAP by `EPSILON = 0.005` (0.5 percentage points); otherwise the status quo wins. All bonds are refunded at collapse, whether or not the proposal won. `ConstantProductMarket` derives probability as `price / (1 + price)` from its price TWAP. `Collapsed` now emits probabilities.
 
-### Phase B deployment plan (not executed; awaiting approval)
+### Phase B deployment plan (executed; kept as the record of what was deployed)
 
 **New:** `ProposalTokens` (the live one has clones, so its credit decimals are locked at 18, and Phase B needs 6 via `setCreditDecimals(6)` before the first clone), `WaveV4ProposalMarket`, `WaveHook` (one shared), `QuantumRound`, `Resolver` (immutable round), `WavefundVault` (immutable round and resolver).
 
@@ -217,6 +219,11 @@ Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibi
 **USDC:** seed `initialLiquidityPerProposal` x 4 proposals (recommended 5 USDC each, 20 USDC, with most returning to the reserve after collapse), bonds 1 USDC per proposer x 3 (always refunded at collapse), vault test deposit about 5 USDC, gas under 1 USDC. About 27 USDC in total; the deployer holds about 57 USDC.
 
 **Keeper and scripts:** `collapse` already calls `finalizeProposal` for every proposal, so no extra keeper transaction is needed, but the demo close script must call `collapse` after `tradingEnd` and before `settle`, check the market is finalised (pool liquidity zero), and read probabilities, not prices. `openRound` and `propose` cost about 1.5M gas each.
+
+### Operating notes (live)
+
+- The USDC/tETH pool carries a concentrated ±20% position owned through the v4 callback (deployer-controlled); `npm run pool:recenter -- --execute` re-aligns it before each demo and `--remove` recovers the funds. `demo:open-round` refuses to open if the pool is more than 0.5% off the oracle.
+- Frontend reads go through Multicall3 (`0xcA11bde05977b3631167028862bE2a173976CA11`, deployed on Arc), a wallet-first fallback transport with exponential backoff, and 30-second visibility-aware polling.
 
 ### Bond policy (v1) and roadmap
 

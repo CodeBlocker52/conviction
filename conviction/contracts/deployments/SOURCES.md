@@ -96,6 +96,7 @@ These addresses are historical and are not the current frontend configuration:
 | Uniswap v4 PoolManager | `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` | Arc testnet / Peach RC2 deployment; verified via PositionManager |
 | Uniswap v4 PositionManager | `0x87Dd714940ea540c921a92216e6E0DE1E2b1735C` | Arc testnet / Peach RC2 deployment |
 | Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` | Canonical Permit2 address; code verified on Arc testnet |
+| Multicall3 | `0xcA11bde05977b3631167028862bE2a173976CA11` | Canonical Multicall3; code present on Arc testnet (checked 2026-10-26), so no deployment was needed. The frontend batches reads through it |
 
 ## Funding and oracle transactions
 
