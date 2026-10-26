@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { isRateLimitError, setRpcStale } from "../lib/rpc";
 import { formatUnits, type Address, type Hash } from "viem";
 import {
   addresses,
@@ -155,6 +156,11 @@ export type TradeQuote = {
 
 export const SLIPPAGE_BPS = 50n;
 const asMessage = (error: unknown) => error instanceof Error ? error.message : "On-chain request failed.";
+const POLL_MS = 30_000;
+const friendlyError = (error: unknown) =>
+  isRateLimitError(error)
+    ? "The Arc RPC is rate limiting requests. Retrying shortly."
+    : "Could not read Arc Testnet right now. Retrying shortly.";
 const SCALAR = 10n ** 18n;
 const POOL_FEE = 3_000;
 const POOL_TICK_SPACING = 60;
@@ -422,9 +428,20 @@ export function useQuantumRound(enabled: boolean) {
   const [snapshot, setSnapshot] = useState<LiveSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [stale, setStale] = useState(false);
   const [refreshIndex, setRefreshIndex] = useState(0);
+  const forceRef = useRef(false);
+  const historyCache = useRef<{ key: string; history: VaultHistoryItem[] } | null>(null);
+  const pastRounds = useRef(new Map<string, LiveRound>());
 
   const refresh = useCallback(async () => {
+    const force = forceRef.current;
+    forceRef.current = false;
+    if (force) {
+      historyCache.current = null;
+      pastRounds.current.clear();
+      vaultLogCache = null;
+    }
     const [
       roundCount,
       usdcBalance,
@@ -470,7 +487,12 @@ export function useQuantumRound(enabled: boolean) {
       if (address) {
         const earliest = roundCount > 6n ? roundCount - 5n : 1n;
         for (let id = roundCount; id >= earliest; id--) {
-          const item = id === roundCount ? round : await readRound(id, address, false, scale, logs);
+          const cacheKey = `${address}:${id}:${roundCount}`;
+          let item = id === roundCount ? round : pastRounds.current.get(cacheKey);
+          if (!item) {
+            item = await readRound(id, address, false, scale, logs);
+            if (item.phase === "settled" || item.phase === "cancelled") pastRounds.current.set(cacheKey, item);
+          }
           const holds = item.deposit > 0n || item.proposals.some((p) => p.creditBalance + p.longBalance + p.shortBalance > 0n);
           if (holds) portfolio.push(item);
         }
@@ -478,7 +500,10 @@ export function useQuantumRound(enabled: boolean) {
     }
 
     const firstHistoryRound = roundCount > 20n ? roundCount - 19n : 1n;
-    const history = roundCount === 0n
+    const historyKey = `${roundCount}:${round?.phase ?? "none"}:${round?.vaultTrade ? "t" : "n"}`;
+    const history = historyCache.current?.key === historyKey
+      ? historyCache.current.history
+      : roundCount === 0n
       ? []
       : await Promise.all(Array.from({ length: Number(roundCount - firstHistoryRound + 1n) }, async (_, index) => {
         const id = firstHistoryRound + BigInt(index);
@@ -506,6 +531,7 @@ export function useQuantumRound(enabled: boolean) {
         } satisfies VaultHistoryItem;
       }));
 
+    historyCache.current = { key: historyKey, history };
     setSnapshot({
       roundCount,
       round,
@@ -530,21 +556,55 @@ export function useQuantumRound(enabled: boolean) {
     });
   }, [address]);
 
+  const hasSnapshot = useRef(false);
+  useEffect(() => { hasSnapshot.current = snapshot !== null; }, [snapshot]);
+
   useEffect(() => {
     if (!enabled) return;
     let active = true;
-    const refreshIfActive = () => {
+    let timer: number | undefined;
+    let running = false;
+    let failures = 0;
+
+    const schedule = () => {
+      if (!active) return;
+      const delay = failures === 0 ? POLL_MS : Math.min(60_000, 5_000 * 2 ** (failures - 1));
+      timer = window.setTimeout(tick, delay);
+    };
+    const tick = () => {
+      window.clearTimeout(timer);
+      if (!active) return;
+      if (document.hidden) return; // resumed by the visibilitychange handler
+      if (running) { schedule(); return; }
+      running = true;
       setLoading(true);
       refresh()
-        .then(() => { if (active) setError(""); })
-        .catch((readError: unknown) => { if (active) setError(asMessage(readError)); })
-        .finally(() => { if (active) setLoading(false); });
+        .then(() => {
+          failures = 0;
+          if (active) { setError(""); setStale(false); setRpcStale(false); }
+        })
+        .catch((readError: unknown) => {
+          failures += 1;
+          if (!active) return;
+          setStale(true);
+          setRpcStale(true);
+          // Keep the last good data on screen; only the very first load surfaces a (friendly) message.
+          if (!hasSnapshot.current) setError(friendlyError(readError));
+        })
+        .finally(() => {
+          running = false;
+          if (active) setLoading(false);
+          schedule();
+        });
     };
-    refreshIfActive();
-    const timer = window.setInterval(refreshIfActive, 15_000);
+    const onVisibility = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    tick();
     return () => {
       active = false;
-      window.clearInterval(timer);
+      setRpcStale(false);
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [enabled, refresh, refreshIndex]);
 
@@ -560,6 +620,7 @@ export function useQuantumRound(enabled: boolean) {
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== "success") throw new Error(`Transaction reverted: ${hash}`);
     vaultLogCache = null;
+    forceRef.current = true;
     setRefreshIndex((index) => index + 1);
     return hash;
   }, [ensureWallet]);
@@ -735,7 +796,8 @@ export function useQuantumRound(enabled: boolean) {
     snapshot,
     loading,
     error,
-    refresh: () => setRefreshIndex((index) => index + 1),
+    stale,
+    refresh: () => { forceRef.current = true; setRefreshIndex((index) => index + 1); },
     deposit,
     claimCredits,
     quoteTrade,

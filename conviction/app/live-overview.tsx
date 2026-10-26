@@ -7,7 +7,7 @@ import { fmtMoney, fmtPercentChange } from "./lib/format";
 export default function LiveOverview() {
   const live = useQuantumRound(true);
   const snapshot = live.snapshot;
-  if (live.error) return <main className="demo-page page-shell"><div className="storage-warning" role="alert">Live Arc reads failed: {live.error}</div></main>;
+  if (live.error && !live.snapshot) return <main className="demo-page page-shell"><div className="storage-warning" role="status">{live.error}</div></main>;
   if (!snapshot) return <main className="demo-page page-shell"><div className="storage-warning" role="status">Loading on-chain Wavefund state…</div></main>;
   const round = snapshot.round;
   const topProposal = round?.proposals.reduce((best, proposal) => (proposal.pLong ?? 0) > (best.pLong ?? 0) ? proposal : best);

@@ -1,4 +1,5 @@
-import { createPublicClient, defineChain, getAddress, http } from "viem";
+import { createPublicClient, getAddress } from "viem";
+import { arcTestnet, readTransport } from "./rpc";
 import deployment from "../../contracts/deployments/current.json";
 import {
   erc20Abi,
@@ -16,13 +17,7 @@ import {
   wavefundVaultAbi,
 } from "./generated/contract-abis";
 
-export const arcTestnet = defineChain({
-  id: deployment.chainId,
-  name: deployment.chainName,
-  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
-  rpcUrls: { default: { http: [deployment.rpcUrl] } },
-  blockExplorers: { default: { name: "Arc Explorer", url: deployment.explorerUrl } },
-});
+export { arcTestnet } from "./rpc";
 
 export const addresses = {
   usdc: getAddress(deployment.contracts.usdc),
@@ -44,7 +39,8 @@ export const addresses = {
 
 export const publicClient = createPublicClient({
   chain: arcTestnet,
-  transport: http(deployment.rpcUrl),
+  transport: readTransport,
+  batch: { multicall: { wait: 20, batchSize: 8_192 } },
 });
 
 export {

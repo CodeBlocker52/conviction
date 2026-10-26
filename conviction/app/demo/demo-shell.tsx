@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { formatUnits } from "viem";
@@ -9,6 +9,7 @@ import ThemeToggle from "../theme-toggle";
 import { useWallet } from "../hooks/useWallet";
 import { addresses, erc20Abi, publicClient } from "../lib/contracts";
 import { explorerAddress } from "../lib/explorer";
+import { getRpcStale, subscribeRpcStale } from "../lib/rpc";
 
 const contractLinks = [
   ["QuantumRound", addresses.quantumRound],
@@ -41,6 +42,7 @@ export default function DemoShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { demo, mode, setMode, connectDemoAccount } = useDemo();
   const wallet = useWallet();
+  const rpcStale = useSyncExternalStore(subscribeRpcStale, getRpcStale, () => false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [walletError, setWalletError] = useState("");
   const [usdcBalance, setUsdcBalance] = useState<bigint | null>(null);
@@ -165,6 +167,7 @@ export default function DemoShell({ children }: { children: ReactNode }) {
           {walletError || wallet.error || balanceError || "Switch your wallet to Arc Testnet to transact."}
         </div>
       )}
+      {mode === "live" && rpcStale && <div className="storage-warning stale-notice" role="status">Data may be stale; the Arc RPC is busy. Retrying…</div>}
       {children}
       <footer className="demo-shell-footer page-shell">
         <Link className="brand" href="/"><span className="brand-mark"><span /><span /><span /></span><span>wavefund</span></Link>

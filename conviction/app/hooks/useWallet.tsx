@@ -19,6 +19,7 @@ import {
   type WalletClient,
 } from "viem";
 import { arcTestnet } from "../lib/contracts";
+import { setReadProvider } from "../lib/rpc";
 
 type BrowserProvider = EIP1193Provider & {
   on?: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -303,6 +304,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       provider.removeListener?.("chainChanged", onChainChanged);
     };
   }, [disconnect, provider]);
+
+  useEffect(() => {
+    setReadProvider(provider && address && chainId === arcTestnet.id ? provider : null);
+    return () => setReadProvider(null);
+  }, [provider, address, chainId]);
 
   const value = useMemo(
     () => ({ address, chainId, walletClient, connecting, error, connect, switchToArc, disconnect }),

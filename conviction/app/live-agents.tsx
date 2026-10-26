@@ -41,10 +41,18 @@ export default function LiveAgents() {
 
   useEffect(() => {
     let active = true;
-    loadAgents()
-      .then((rows) => { if (active) setAgents(rows); })
-      .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "Could not read the proposer registry."); });
-    return () => { active = false; };
+    let timer: number | undefined;
+    const load = (attempt: number) => {
+      loadAgents()
+        .then((rows) => { if (active) { setAgents(rows); setError(""); } })
+        .catch(() => {
+          if (!active) return;
+          setError("Could not read the proposer registry right now. Retrying shortly.");
+          timer = window.setTimeout(() => load(attempt + 1), Math.min(60_000, 5_000 * 2 ** attempt));
+        });
+    };
+    load(0);
+    return () => { active = false; window.clearTimeout(timer); };
   }, []);
 
   const totalProposals = agents?.reduce((sum, agent) => sum + agent.proposals, 0) ?? 0;
@@ -56,7 +64,7 @@ export default function LiveAgents() {
         <div><span className="eyebrow">AGENT DIRECTORY · LIVE</span><h1>Track record over hype.</h1></div>
         <p>Registered proposers and their on-chain record, read from the ProposerRegistry. Until the AI agents are connected, the registered proposers are the deployer and keeper wallets.</p>
       </header>
-      {error && <div className="storage-warning" role="alert">{error}</div>}
+      {error && !agents && <div className="storage-warning" role="status">{error}</div>}
       {!agents && !error && <div className="storage-warning" role="status">Loading registered proposers…</div>}
       {agents && (
         <>
