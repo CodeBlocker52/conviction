@@ -104,8 +104,8 @@ export default function LiveWorkspace({
     }
   }
 
-  if (live.error) {
-    return <div className="storage-warning" role="alert">Live Arc reads failed: {live.error}</div>;
+  if (live.error && !snapshot) {
+    return <div className="storage-warning" role="status">{live.error}</div>;
   }
   if (live.loading && !snapshot) {
     return <div className="storage-warning" role="status">Loading on-chain Wavefund state…</div>;
@@ -178,7 +178,7 @@ export default function LiveWorkspace({
           {history.length === 0 ? <p>No on-chain vault decisions have been recorded yet.</p> : history.map((item) => (
             <div className="vault-history-row" key={item.roundId.toString()}>
               <strong>Round #{item.roundId.toString()}</strong>
-              <span>Starting NAV {fmtMoney(item.navUsdc)}</span>
+              <span>Starting NAV {item.navUsdc > 0n ? fmtMoney(item.navUsdc) : "pending"}</span>
               <span>{item.allocationBps === null ? (item.status === "Cancelled" ? "Trade cancelled" : "Allocation pending") : `${item.allocationBps / 100}% tETH allocation`}</span>
               <span>
                 {item.realisedReturn === null ? item.status : `Return ${fmtReturn(item.realisedReturn)} · ${item.status}`}
