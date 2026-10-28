@@ -179,3 +179,27 @@ Report (all values USDC):
 - Round 3 had no trades, so the status quo won. Collapse [`0x324c…c964`](https://explorer.testnet.arc.io/tx/0x324ca77650b56a5b3aa389974d37cc1d6b0fda0e18ce63b955fff87ee002c964), vault trade [`0x4b45…96a8`](https://explorer.testnet.arc.io/tx/0x4b45ad67bd9d0c1e947e75fc583069506aa44693a1e554b144c452f8ef0196a8), settle [`0xf27b…0c3b`](https://explorer.testnet.arc.io/tx/0xf27b0567127b6d78ba7a877c7c6d10ce4be0a462779212e423216d0e9f600c3b) (return ratio 0.993986). Its winning-market seed (5 USDC) returns to `protocolLiquiditySeed` once its liabilities are redeemed.
 - Pool recentred: remove [`0xe2f4…6c83`](https://explorer.testnet.arc.io/tx/0xe2f4eb6fb6c93eddeb8ce138e0f089c1838063539338faecdb43baf06e76c83f), align [`0xaa73…54a5`](https://explorer.testnet.arc.io/tx/0xaa73aea0ea21901977e0275be3a1ddf0175c5dfbf4ead71f6a81f247084754a5), add [`0x4eb5…a32b`](https://explorer.testnet.arc.io/tx/0x4eb586b5e817251891bfd9a165ede96432444f7539da687590e04b4265a3a32b).
 - Round 4 (30 min, trading ends 2026-10-26T20:03:39Z = 01:33:39 IST on 27 Oct): seed top-up [`0x9496…31b4`](https://explorer.testnet.arc.io/tx/0x9496864a6773862419a2ea5057c1e86e1ae40ca8e0567c6eeff9eb78731531b4), open [`0xac21…aa49`](https://explorer.testnet.arc.io/tx/0xac219556ddd4bd372781aa1a6dd8a9ac5de2ebbfd89582b3dafca0254eaeaa49), proposals [`0xee65…22bd`](https://explorer.testnet.arc.io/tx/0xee656de0632e72bf5f61209b41b7912971abdec3a13c1e66250cfb073a0f22bd) (20%), [`0x52a6…b983`](https://explorer.testnet.arc.io/tx/0x52a6a2f418abb1bd1622f07a44e91a778db2cba75ffe1d9319171c94d230b983) (50%), [`0x5c55…30a3`](https://explorer.testnet.arc.io/tx/0x5c553d3391cc9a38be9d78e441d8dc3af64e90db71286ea37c00e612a65630a3) (80%).
+
+## Vault migration (old Phase B contracts, before the v2 redeploy)
+
+Goal: let every WAVE holder exit and recover the protocol reserve before replacing the contracts.
+
+| Step | Transaction |
+| --- | --- |
+| Round 5 open | [0x57b9…e0db](https://explorer.testnet.arc.io/tx/0x57b9eac63379da3dfc5129a6fd0647a0504719f056ce4ef9bfde02c48f41e0db) |
+| Keeper deposit 0.1 USDC | [0xea2c…b26a](https://explorer.testnet.arc.io/tx/0xea2c797490eb499abe223308252b153a142ffe0ed062670a1a46af3b24a5b26a) |
+| Keeper withdraw request | [0x84c0…da25](https://explorer.testnet.arc.io/tx/0x84c06b1b19f5259cb9f9332125706eace04ae5c6b0c0a5edf8a48274ffe6da25) |
+| Deployer withdraw request | [0xbb6d…394d](https://explorer.testnet.arc.io/tx/0xbb6d6eec7e00a32a8332db4acea9eb333afe3fc9363d4607132c2e8ba50e394d) |
+| Round 5 collapse | [0x8482…e5328](https://explorer.testnet.arc.io/tx/0x8482f14fb607c582b05c8cb624bc7433d068a850ce0ae07a639276a328ae5709) |
+| Round 5 executeTrade (status quo) | [0xa693…bc0d](https://explorer.testnet.arc.io/tx/0xa693cb6c0a49d498f270296d07a853b4a743ff05f24c507187ab476ebc00bc0d) |
+| Round 5 reportReturn | [0x0650…47fe](https://explorer.testnet.arc.io/tx/0x06507ce7bfb62c75448e368798eca57cc94c10fb5c70ebbec8ff330ea2d747fe) |
+| Round 5 keeper redeem | [0x176c…261e1b](https://explorer.testnet.arc.io/tx/0x176c6fd7b24ead61f3e700721373cd5910912e421d03716fbc59ca17ba261e1b) |
+| Round 6 open | [0x3ea9…85db](https://explorer.testnet.arc.io/tx/0x3ea9d4c58a34e740177e3bc2fdfd1a3e3ce2cc8b9ed63b74492493a285db855a) |
+| Round 6 collapse | [0x61cf…870df](https://explorer.testnet.arc.io/tx/0x61cf260fe23914006db50a944349ff1bf8c9217643a7f2045d545931ccb870df) |
+| Round 6 executeTrade | [0xc2f8…e78a](https://explorer.testnet.arc.io/tx/0xc2f836905afbe1ec9568a1d0343e5971979669b85e853c2de2366ae724e5e78a) |
+| Round 6 reportReturn | [0x22af…76be4](https://explorer.testnet.arc.io/tx/0x22af2982f63111f0f25199ddde209bd2f46ebc9575dfaa5419e58db55d760be4) |
+| Round 6 keeper redeem | [0x0334…1d2c](https://explorer.testnet.arc.io/tx/0x0334a2ac06fc6578536d818c5e565a43797a0dcc918708ab422bb4c54f5a1d2c) |
+| Rescue 20.205275 USDC reserve to deployer | [0x4f34…ab69](https://explorer.testnet.arc.io/tx/0x4f34cedf3a008a983b241264d5b77f222276df634f41b4659f5777968cc5ab69) |
+
+Outcome: WAVE supply is 1 wei (deployer dust, unredeemable), the old vault holds about 0.000001 USDC, and the reserve was back at 20.205275 USDC before the rescue.
+Round 3's 5 USDC seed stays locked in the old `QuantumRound` (no release path existed there); it is not recoverable.
