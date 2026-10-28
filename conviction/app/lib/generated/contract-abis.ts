@@ -4248,6 +4248,19 @@ export const quantumRoundAbi = [
   },
   {
     "type": "function",
+    "name": "allocationSource",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IAllocationSource"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "buyLong",
     "inputs": [
       {
@@ -4711,6 +4724,19 @@ export const quantumRoundAbi = [
   },
   {
     "type": "function",
+    "name": "releaseSeed",
+    "inputs": [
+      {
+        "name": "roundId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "renounceRole",
     "inputs": [
       {
@@ -4770,6 +4796,30 @@ export const quantumRoundAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "roundClaimedCredits",
+    "inputs": [
+      {
+        "name": "roundId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -5040,6 +5090,19 @@ export const quantumRoundAbi = [
   },
   {
     "type": "function",
+    "name": "setAllocationSource",
+    "inputs": [
+      {
+        "name": "source",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setInitialLiquidityPerProposal",
     "inputs": [
       {
@@ -5103,30 +5166,6 @@ export const quantumRoundAbi = [
   },
   {
     "type": "function",
-    "name": "totalCreditsClaimed",
-    "inputs": [
-      {
-        "name": "roundId",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "user",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "treasury",
     "inputs": [],
     "outputs": [
@@ -5147,6 +5186,25 @@ export const quantumRoundAbi = [
         "name": "",
         "type": "address",
         "internalType": "contract IERC20"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "winnerIsStatusQuo",
+    "inputs": [
+      {
+        "name": "roundId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
@@ -5527,6 +5585,25 @@ export const quantumRoundAbi = [
   },
   {
     "type": "event",
+    "name": "SeedReleased",
+    "inputs": [
+      {
+        "name": "roundId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "Settled",
     "inputs": [
       {
@@ -5656,6 +5733,11 @@ export const quantumRoundAbi = [
   {
     "type": "error",
     "name": "NotRegistered",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NothingToRelease",
     "inputs": []
   },
   {
@@ -6294,6 +6376,19 @@ export const wavefundVaultAbi = [
         "name": "",
         "type": "address",
         "internalType": "Currency"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "currentTEthBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
       }
     ],
     "stateMutability": "view"

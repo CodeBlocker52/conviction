@@ -90,7 +90,6 @@ export type LiveRound = {
   realisedReturn: bigint;
   phase: RoundPhase;
   deposit: bigint;
-  remainingCredits: bigint;
   proposals: LiveProposal[];
   /** USDC the wallet can redeem now (settled or cancelled rounds only). */
   redeemable: bigint;
@@ -371,9 +370,8 @@ async function readRound(roundId: bigint, account: Address | undefined, full: bo
     totalDeposited: values[12],
     cancelled: values[13],
   };
-  const [deposit, claimedTotal, proposals] = await Promise.all([
+  const [deposit, proposals] = await Promise.all([
     account ? publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "deposits", args: [roundId, account] }) : Promise.resolve(0n),
-    account ? publicClient.readContract({ address: addresses.quantumRound, abi: quantumRoundAbi, functionName: "totalCreditsClaimed", args: [roundId, account] }) : Promise.resolve(0n),
     Promise.all(Array.from({ length: base.proposalCount }, (_, id) => readProposal({
       roundId, id, rMin: base.rMin, rMax: base.rMax, collapsed: base.collapsed, account, full,
     }))),
@@ -392,14 +390,14 @@ async function readRound(roundId: bigint, account: Address | undefined, full: bo
     payoutPerLong = Number(numer) / Number(span);
     payoutPerShort = 1 - payoutPerLong;
     if (account) {
-      const unclaimed = deposit > claimedTotal ? deposit - claimedTotal : 0n;
-      let payout = unclaimed;
-      for (const item of proposals) {
-        payout += item.creditBalance;
-        if (item.id === winner) {
-          payout += (item.longBalance * numer) / (span * scale);
-          payout += (item.shortBalance * (span - numer)) / (span * scale);
-        }
+      // Only the winner's credits and tokens count; the cap is per proposal, so erased markets never reduce it.
+      const won = proposals.find((item) => item.id === winner);
+      const claimedWinner = won?.claimedCredits ?? 0n;
+      let payout = deposit > claimedWinner ? deposit - claimedWinner : 0n;
+      if (won) {
+        payout += won.creditBalance;
+        payout += (won.longBalance * numer) / (span * scale);
+        payout += (won.shortBalance * (span - numer)) / (span * scale);
       }
       redeemable = payout;
     }
@@ -414,7 +412,6 @@ async function readRound(roundId: bigint, account: Address | undefined, full: bo
     winnerProposalId: winner,
     phase,
     deposit,
-    remainingCredits: deposit > claimedTotal ? deposit - claimedTotal : 0n,
     proposals,
     redeemable,
     payoutPerLong,

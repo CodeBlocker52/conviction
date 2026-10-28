@@ -1,4 +1,4 @@
-# Wavefund Phase B — Arc Testnet Deployment and Sources
+# Wavefund Phase B v2 — Arc Testnet Deployment and Sources
 
 ## Network and operating rules
 
@@ -11,27 +11,42 @@
 - Source configuration: Solidity `0.8.26`, Osaka EVM, `via_ir = true`; Uniswap v4 core `1.0.2`.
 - `current.json` is the canonical application and demo-script address config. `npm run check:contracts` rebuilds Forge artifacts and checks configured Arc addresses, the checked-in app ABI selectors, and this deployment record. Keep the app ABIs aligned with the active deployment; regenerate them with `node contracts/script/generate-contract-abis.mjs` only when updating the frontend to a deployment that includes the corresponding contracts.
 
-## Current deployment (Phase B)
+## Current deployment (Phase B v2: per-proposal credit claims)
 
 Admin/deployer: `0xDA026fbF1F9a98632F52AA23F92c0041d6Ef3ac2`
 Keeper: `0xE7DD9a5fafa5739B466C61914311e39717f7192c`
 
-All Phase B contracts below are verified on Arc's Blockscout explorer (see "Blockscout verification").
+Redeployed after the contract fixes: per-proposal credit cap, winner-only redemption, status quo = no vault trade, `releaseSeed`, and proposal 0 mirroring the vault's allocation. Six contracts are new; the registry, oracle, tETH, `QuantumLP`, PoolManager and the USDC/tETH pool are reused.
 
 | Contract | Address | Deployment transaction |
 |---|---|---|
 | TestAsset (tETH, reused) | `0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d` | Existing |
-| ProposalTokens | `0xA3998Bb07BD324C886bf87965e66f32e4ABcCa4E` | [0x857b1ddbcd351c35b68a996db24473275775119d2547033450a42c81157453e9](https://explorer.testnet.arc.io/tx/0x857b1ddbcd351c35b68a996db24473275775119d2547033450a42c81157453e9) |
+| ProposalTokens | `0xB5c884d76a29A7dA7B290d14BB8616E4CFB32884` | [0x7b366d2c…163928](https://explorer.testnet.arc.io/tx/0x7b366d2c4529aa62ac7021a4e2622eb7178d3018548c4d5ee442073ad6163928) |
 | ProposerRegistry (reused) | `0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346` | Existing |
-| WaveV4ProposalMarket | `0x5A2DA260d3C7A7abd1Ae851D234022bd6699fa7A` | [0x501f0d29fe413b8b277687805026ef49a7dac217e1ef75c483b8876eeabb337d](https://explorer.testnet.arc.io/tx/0x501f0d29fe413b8b277687805026ef49a7dac217e1ef75c483b8876eeabb337d) |
-| WaveHook | `0xA2FD9c9E3f7515868DE9d84394A5237901D98Ac0` | [0x3dfac480012d5b97e2459cb9f1f69b83fc0293ca770719b60e65c8399029b8f5](https://explorer.testnet.arc.io/tx/0x3dfac480012d5b97e2459cb9f1f69b83fc0293ca770719b60e65c8399029b8f5) |
-| QuantumRound | `0x74b798AcB0fD0Bfd219F4f6C770166e32648B0c5` | [0x6d3f3a3d942ddb9fd117b0e783eec6e1035070620531f3fee5163e01b384a2c3](https://explorer.testnet.arc.io/tx/0x6d3f3a3d942ddb9fd117b0e783eec6e1035070620531f3fee5163e01b384a2c3) |
-| Resolver | `0x74Fdf9F04589A9FE558D6F9D39D996b4FB4E9a48` | [0x313b2f29c716dad63d60f47b800b889c9e65c71b027976e36d39f625d1f159f5](https://explorer.testnet.arc.io/tx/0x313b2f29c716dad63d60f47b800b889c9e65c71b027976e36d39f625d1f159f5) |
-| WavefundVault (queued WAVE shares) | `0xA1E37Becb47A3566d98EF55d0A3c14FA54E69865` | [0xb95c16de313fd4e59fb1d45bb78779d61a86bf2d336a776e7dc0b01809ad065a](https://explorer.testnet.arc.io/tx/0xb95c16de313fd4e59fb1d45bb78779d61a86bf2d336a776e7dc0b01809ad065a) |
+| WaveV4ProposalMarket | `0xC32e0b3d5b49Cbd66dce5b97E616Ddbfc3681159` | [0xab03b8d4…c3726e](https://explorer.testnet.arc.io/tx/0xab03b8d4de7d0b66cc15798effe0c5cab79544f19f1aafff50c60e2262c3726e) |
+| WaveHook | `0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0` | [0x4d265401…b52a01](https://explorer.testnet.arc.io/tx/0x4d265401f057319908c067d2cefd37f59e1377ea2cd417ec013dbbab5cb52a01) |
+| QuantumRound | `0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A` | [0x73fab872…d0f65e](https://explorer.testnet.arc.io/tx/0x73fab8724e0ad4bf99f337ae3fa727f0134354f1378ee2750bbb623405d0f65e) |
+| Resolver | `0x20932A078D333A3A628E32f20C79105D914d3506` | [0x305d0cbc…af3c20](https://explorer.testnet.arc.io/tx/0x305d0cbcf3ef5eaf38c79841563d6bebb495e2f767985c299e3078bc80af3c20) |
+| WavefundVault (queued WAVE shares) | `0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137` | [0x8aae934a…c50d61](https://explorer.testnet.arc.io/tx/0x8aae934a22302a380da1e58908f2abe105009a47291af7fe2da1ff77cec50d61) |
 | QuantumLP (reused) | `0x885512902D1f5d05f81A678FdFFE0e339623c415` | Existing |
 | MockPriceOracle (reused) | `0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d` | Existing |
 
-The frontend, keeper and demo scripts read these addresses from `current.json`.
+The frontend, keeper and demo scripts read these addresses from `current.json`. Wiring (`WirePhaseB`) verified every role on-chain, including `allocationSource = vault` and the revocation of the previous round's roles on the registry and `QuantumLP` and of the previous vault's roles on the previous round and resolver. Funding: 20 USDC protocol seed ([approve](https://explorer.testnet.arc.io/tx/0x207efa1c24a02994417cd91f054c260389ea79bb6ec40e8c9d67aefb49c7d9fc), [addProtocolLiquiditySeed](https://explorer.testnet.arc.io/tx/0x957325718a12d0a589de7ec590f20d59e9f20a303d636dc13c8b60159db653db)) and a 5 USDC vault bootstrap ([approve](https://explorer.testnet.arc.io/tx/0x7db28061b1ca82c0cdec7c08fef1f492769e54ab5d92c39da116aef94d885ddb), [fundVault](https://explorer.testnet.arc.io/tx/0xe5f23dfa3f5287903fcb1e23e1655c05415cf7f4bbbed6ac0f766b1c2d4f053d)).
+
+Wiring transactions: [transferOwnership(market→round)](https://explorer.testnet.arc.io/tx/0x47056e893171fd54afb7603e974c03a40ae77351e74078e9c16062d48278e590), [setInitialLiquidityPerProposal](https://explorer.testnet.arc.io/tx/0x92dcea0d5e4897d8b483afc538aa1e7e6f35ded9bc0cd038629b0c4f09107972), [setAllocationSource](https://explorer.testnet.arc.io/tx/0x8028c731581ed506309a9de1bd9e452a0f6339a73d945bd33add182bdcb02e91); the remaining grant/revoke transactions are in `broadcast/WirePhaseB.s.sol/5042002/run-latest.json`.
+
+## Superseded: first Phase B deployment (v1)
+
+Replaced by the v2 contracts above. Do not use these addresses. All holders exited and the reserve was rescued (see `demo-round.md`, "Vault migration"). **5 USDC (round 3's winning seed) remains locked in the v1 `QuantumRound`**: that contract has no seed-release path, so it cannot be recovered. About 0.000001 USDC and 1 wei of WAVE (deployer dust) remain in the v1 vault.
+
+| Contract | Address |
+|---|---|
+| ProposalTokens | `0xA3998Bb07BD324C886bf87965e66f32e4ABcCa4E` |
+| WaveV4ProposalMarket | `0x5A2DA260d3C7A7abd1Ae851D234022bd6699fa7A` |
+| WaveHook | `0xA2FD9c9E3f7515868DE9d84394A5237901D98Ac0` |
+| QuantumRound | `0x74b798AcB0fD0Bfd219F4f6C770166e32648B0c5` |
+| Resolver | `0x74Fdf9F04589A9FE558D6F9D39D996b4FB4E9a48` |
+| WavefundVault | `0xA1E37Becb47A3566d98EF55d0A3c14FA54E69865` |
 
 ## Phase A deployment (superseded — not used by the app)
 
@@ -179,7 +194,7 @@ The simulation estimated `0.1613021 USDC` at a `25 gwei` max fee, below the auth
 | Execute compatibility swap | [0x4acb36973a7785d2e27a9218a3b124776419890cb9d861b48875650ea390ebc5](https://explorer.testnet.arc.io/tx/0x4acb36973a7785d2e27a9218a3b124776419890cb9d861b48875650ea390ebc5) | Adapter `0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78`; PoolManager `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` |
 
 
-## Phase B deployment details (current)
+## Phase B v1 deployment details (superseded)
 
 Deployed on Arc Testnet with `DeployPhaseB.s.sol`, `DeployWaveHook.s.sol` and `WirePhaseB.s.sol`; funded with `fund-phase-b.mjs`. `current.json` and the frontend now point at Phase B. Roles were verified on-chain by `WirePhaseB` after broadcast. The old round's roles on `ProposerRegistry` and `QuantumLP`, and the old vault's roles on the old round and old resolver, were revoked.
 
@@ -207,6 +222,19 @@ Earlier notes said the Phase A `QuantumRound` had no rescue path. That was wrong
 ## Blockscout (explorer) verification
 
 Checked through `https://explorer.testnet.arc.io/api/v2/smart-contracts/<address>`: every contract below returns `is_verified: true` with source code, not only a Sourcify job. Phase B contracts were submitted with `forge verify-contract --verifier blockscout` (compiler 0.8.26, optimizer 200 runs, via-IR). The explorer reports `evm_version` as `cancun` and flags the matches as partial (metadata hash differs), which is how it records Sourcify/Blockscout mirrors.
+
+**Phase B v2 (current):**
+
+| Contract | Explorer (verified source) |
+|---|---|
+| ProposalTokens | [`0xB5c884d76a29A7dA7B290d14BB8616E4CFB32884`](https://explorer.testnet.arc.io/address/0xB5c884d76a29A7dA7B290d14BB8616E4CFB32884#code) |
+| WaveV4ProposalMarket | [`0xC32e0b3d5b49Cbd66dce5b97E616Ddbfc3681159`](https://explorer.testnet.arc.io/address/0xC32e0b3d5b49Cbd66dce5b97E616Ddbfc3681159#code) |
+| QuantumRound | [`0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A`](https://explorer.testnet.arc.io/address/0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A#code) |
+| Resolver | [`0x20932A078D333A3A628E32f20C79105D914d3506`](https://explorer.testnet.arc.io/address/0x20932A078D333A3A628E32f20C79105D914d3506#code) |
+| WavefundVault | [`0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137`](https://explorer.testnet.arc.io/address/0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137#code) |
+| WaveHook | [`0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0`](https://explorer.testnet.arc.io/address/0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0#code) |
+
+**Phase B v1 (superseded) and Phase A:**
 
 | Contract | Explorer (verified source) |
 |---|---|

@@ -50,7 +50,7 @@ const phaseLabel: Record<LiveRound["phase"], string> = {
 };
 
 function proposalTitle(proposal: LiveProposal) {
-  return proposal.id === 0 ? "Keep current allocation (Protocol)" : `Proposal ${proposal.id}`;
+  return proposal.id === 0 ? `Keep current allocation (${(proposal.tEthBps / 100).toFixed(0)}% tETH)` : `Proposal ${proposal.id}`;
 }
 
 function TxLink({ trade }: { trade: VaultTrade }) {
@@ -452,7 +452,7 @@ function TradeTicket({
     <aside className="demo-trade-ticket" aria-label="On-chain forecasting trade controls">
       <div className="ticket-header"><div><span className="eyebrow">ON-CHAIN MARKET</span><h3>{proposalTitle(proposal)}</h3></div><span className="ticket-avatar avatar-violet">WF</span></div>
       <p className="ticket-allocation">{proposal.tEthBps / 100}% tETH · {100 - proposal.tEthBps / 100}% USDC</p>
-      <p className="ticket-rationale">{proposal.id === 0 ? "Keep the vault's current allocation." : proposal.rationale || "No proposal rationale was published."}</p>
+      <p className="ticket-rationale">{proposal.id === 0 ? `Keep the vault's current allocation (${(proposal.tEthBps / 100).toFixed(0)}% tETH at the round's start).` : proposal.rationale || "No proposal rationale was published."}</p>
       <div className="ticket-prices">
         <div><span>pLong · LONG price in credits</span><strong>{prob(proposal.pLong)}</strong></div>
         <div><span>Pool price · SHORT per LONG</span><strong>{prob(proposal.poolRatio)}</strong></div>
@@ -463,10 +463,10 @@ function TradeTicket({
       {trading ? (
         <>
           <div className="credit-claim-box">
-            <div><strong>Claim proposal credits</strong><span>Unclaimed round limit {fmtUsdc(round.remainingCredits)}</span></div>
+            <div><strong>Claim proposal credits</strong><span>Up to {fmtUsdc(round.deposit > proposal.claimedCredits ? round.deposit - proposal.claimedCredits : 0n)} credits for this proposal</span></div>
             <div className="inline-money-input"><input aria-label="Credits to claim" type="number" min="0.000001" step="0.1" value={claimAmount} onChange={(event) => setClaimAmount(event.target.value)} /><span>credits</span></div>
             <div className="credit-claim-status"><span>Claimed {fmtUsdc(proposal.claimedCredits)}</span></div>
-            <button className="button button-outline" type="button" disabled={!canTransact || round.remainingCredits === 0n} onClick={onClaim}>Claim credits for this proposal</button>
+            <button className="button button-outline" type="button" disabled={!canTransact || round.deposit <= proposal.claimedCredits} onClick={onClaim}>Claim credits for this proposal</button>
           </div>
           <div className="ticket-side-toggle" role="group" aria-label="Outcome token">
             <button type="button" className={side === "LONG" ? "active long" : ""} onClick={() => setSide("LONG")}>LONG <span>↑</span></button>

@@ -430,6 +430,10 @@ button { color: inherit; }
 .positions-table-head { min-height: 33px; padding: 0 10px; border-bottom: 1px solid #e9eeeb; color: #98a39c; background: #fafbfa; font: 8px var(--mono); letter-spacing: .35px; }
 .positions-row { min-height: 43px; padding: 0 10px; border-bottom: 1px solid #f0f2f0; color: #4c5a51; font: 9px var(--mono); }
 .positions-row > span small { color: #a0aaa4; font: 7px var(--sans); }
+.position-row { display: grid; grid-template-columns: minmax(150px, 1.5fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(220px, 2fr); align-items: center; column-gap: 20px; row-gap: 4px; min-height: 43px; padding: 10px; border-bottom: 1px solid #f0f2f0; color: #4c5a51; font: 9px var(--mono); }
+.position-row > strong { color: #39473e; overflow-wrap: anywhere; }
+.position-row > span { overflow-wrap: anywhere; }
+@media (max-width: 760px) { .position-row { grid-template-columns: 1fr; } }
 .vault-history-row { display: grid; grid-template-columns: .7fr 1.2fr 1.2fr 1.2fr; align-items: center; gap: 12px; padding: 12px 8px; border-bottom: 1px solid #f0f2f0; color: #4c5a51; font: 9px/1.45 var(--mono); }
 .vault-history-row strong { color: #39473e; }
 .proposal-address { overflow-wrap: anywhere; font-family: var(--mono); }
