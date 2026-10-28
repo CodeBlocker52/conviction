@@ -575,29 +575,26 @@ contract QuantumRoundTest is Test {
         emit CreditsClaimed(roundId, 0, alice, deposit);
         qr.claimCredits(roundId, 0, deposit);
 
-        assertEq(qr.totalCreditsClaimed(roundId, alice), deposit);
+        assertEq(qr.creditsClaimed(roundId, 0, alice), deposit);
         address creditAddr = proposalTokens.creditToken(roundId, 0);
         assertEq(ProposalTokenImpl(creditAddr).balanceOf(alice), deposit);
     }
 
-    function test_ClaimCredits_AggregateCap() public {
+    function test_ClaimCredits_PerProposalCap() public {
         uint256 roundId = _openRound();
         uint256 deposit = 10_000_000;
         _fundAndDeposit(alice, roundId, deposit);
         _propose(roundId, 5000);
 
-        // Claim deposit for proposal 0
-        vm.prank(alice);
-        qr.claimCredits(roundId, 0, deposit / 2);
+        // The full deposit can be claimed in every proposal independently.
+        vm.startPrank(alice);
+        qr.claimCredits(roundId, 0, deposit);
+        qr.claimCredits(roundId, 1, deposit);
 
-        // Claim deposit for proposal 1
-        vm.prank(alice);
-        qr.claimCredits(roundId, 1, deposit / 2);
-
-        // Claiming one more credit should fail — total exceeds deposit
-        vm.prank(alice);
+        // But not beyond the deposit within one proposal.
         vm.expectRevert(QuantumRound.InsufficientDeposit.selector);
         qr.claimCredits(roundId, 0, 1);
+        vm.stopPrank();
     }
 
     function test_ClaimCredits_ZeroAmount_Reverts() public {
@@ -1164,6 +1161,157 @@ contract QuantumRoundTest is Test {
         vm.expectRevert();
         resolver.submitReturn(roundId, 1e18);
     }
+    // ─────────────────────────────────────────────────────────
+    // Per-proposal credits, redemption and seed release
+    // ─────────────────────────────────────────────────────────
+
+    function test_PerProposalClaims_LosingMarketTradesDoNotReduceRedemption() public {
+        uint256 roundId = _openRound();
+        uint256 p1 = _propose(roundId, 3000);
+        uint256 p2 = _propose(roundId, 6000);
+        uint256 deposit = 10_000_000;
+        _fundAndDeposit(alice, roundId, deposit);
+
+        // One deposit funds the full amount of credits in every proposal.
+        vm.startPrank(alice);
+        qr.claimCredits(roundId, 0, deposit);
+        qr.claimCredits(roundId, p1, deposit);
+        qr.claimCredits(roundId, p2, deposit);
+        // Spend every credit in the markets that will lose (SHORT keeps them below the status quo).
+        qr.buyShort(roundId, p1, deposit, 0);
+        qr.buyShort(roundId, p2, deposit, 0);
+        vm.stopPrank();
+
+        _collapseRound(roundId);
+        assertEq(_getRound(roundId).winnerProposalId, 0);
+        _settleRound(roundId, 1.2e18);
+
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        qr.redeem(roundId);
+        assertEq(usdc.balanceOf(alice) - before, deposit, "full deposit back");
+    }
+
+    function test_PerProposalClaims_RedeemIsDepositMinusClaimedPlusPayout() public {
+        uint256 roundId = _openRound();
+        uint256 p1 = _propose(roundId, 3000);
+        uint256 deposit = 10_000_000;
+        _fundAndDeposit(alice, roundId, deposit);
+
+        vm.startPrank(alice);
+        qr.claimCredits(roundId, 0, deposit);
+        qr.claimCredits(roundId, p1, 4_000_000);
+        qr.buyLong(roundId, p1, 4_000_000, 0);
+        vm.stopPrank();
+
+        _collapseRound(roundId);
+        uint256 winner = _getRound(roundId).winnerProposalId;
+        _settleRound(roundId, 1.25e18);
+
+        address longTok = proposalTokens.longToken(roundId, winner);
+        uint256 longBal = IERC20(longTok).balanceOf(alice);
+        uint256 expected = deposit - qr.creditsClaimed(roundId, winner, alice)
+            + IERC20(proposalTokens.creditToken(roundId, winner)).balanceOf(alice) + longBal * (1.25e18 - R_MIN)
+            / (R_MAX - R_MIN);
+
+        uint256 before = usdc.balanceOf(alice);
+        vm.prank(alice);
+        qr.redeem(roundId);
+        assertApproxEqAbs(usdc.balanceOf(alice) - before, expected, 2);
+    }
+
+    function testFuzz_PerProposalClaims_SolvencyAndSeedReturn(uint96 buy1, uint96 buy2, uint96 sellFrac, uint8 retPick)
+        public
+    {
+        uint256 roundId = _openRound();
+        uint256 p1 = _propose(roundId, 3000);
+        uint256 p2 = _propose(roundId, 6000);
+        uint256 reserveBefore = qr.protocolLiquiditySeed();
+        uint256 seedPerProposal = qr.roundSeedPerProposal(roundId);
+        uint256 deposit = 20_000_000;
+        address bob = makeAddr("bob");
+        _fundAndDeposit(alice, roundId, deposit);
+        _fundAndDeposit(bob, roundId, deposit);
+
+        uint256 b1 = bound(buy1, 10_000, deposit);
+        uint256 b2 = bound(buy2, 10_000, deposit);
+        address[2] memory users = [alice, bob];
+        for (uint256 u = 0; u < 2; u++) {
+            vm.startPrank(users[u]);
+            qr.claimCredits(roundId, p1, deposit);
+            qr.claimCredits(roundId, p2, deposit);
+            qr.buyLong(roundId, p1, b1, 0);
+            if (u == 0) qr.buyShort(roundId, p2, b2, 0);
+            else qr.buyLong(roundId, p2, b2, 0);
+            vm.stopPrank();
+        }
+        uint256 aliceLong = IERC20(proposalTokens.longToken(roundId, p1)).balanceOf(alice);
+        uint256 sellAmount = bound(sellFrac, 0, aliceLong / 2);
+        if (sellAmount >= 10_000) {
+            vm.prank(alice);
+            qr.sellLong(roundId, p1, sellAmount, 0);
+        }
+
+        _collapseRound(roundId);
+        int256 ret = int256(bound(retPick, 0, 255) * 1e18 / 128); // 0 .. ~2x, clamped to [rMin, rMax]
+        _settleRound(roundId, ret);
+
+        uint256 usdcBefore = usdc.balanceOf(address(qr));
+        uint256 paid;
+        for (uint256 u = 0; u < 2; u++) {
+            uint256 b = usdc.balanceOf(users[u]);
+            vm.prank(users[u]);
+            qr.redeem(roundId);
+            paid += usdc.balanceOf(users[u]) - b;
+        }
+        assertLe(paid, 2 * deposit + seedPerProposal, "payouts exceed deposits plus winning seed");
+        assertEq(qr.roundUserLiability(roundId), 0);
+        // Everything not paid out returns to the reserve: reserve + payouts account for the whole pot.
+        assertEq(usdcBefore - paid, usdc.balanceOf(address(qr)));
+        assertEq(qr.protocolLiquiditySeed() + paid, reserveBefore + 2 * deposit + 3 * seedPerProposal);
+    }
+
+    function test_ReleaseSeed_AutomaticWhenNobodyDeposited() public {
+        uint256 reserveBefore = qr.protocolLiquiditySeed();
+        uint256 roundId = _openRound();
+        _propose(roundId, 4000);
+        _collapseRound(roundId);
+        _settleRound(roundId, 1e18);
+
+        assertEq(qr.protocolLiquiditySeed(), reserveBefore, "all seed back in reserve");
+        assertEq(qr.roundRemainingCollateral(roundId), 0);
+    }
+
+    function test_ReleaseSeed_WaitsForLiabilitiesThenReturnsOnLastRedeem() public {
+        uint256 reserveBefore = qr.protocolLiquiditySeed();
+        uint256 roundId = _openRound();
+        _fundAndDeposit(alice, roundId, 5_000_000);
+        _collapseRound(roundId);
+        _settleRound(roundId, 1e18);
+
+        vm.expectRevert(QuantumRound.NothingToRelease.selector);
+        qr.releaseSeed(roundId);
+
+        vm.prank(alice);
+        qr.redeem(roundId);
+        assertEq(qr.protocolLiquiditySeed(), reserveBefore);
+        vm.expectRevert(QuantumRound.NothingToRelease.selector);
+        qr.releaseSeed(roundId);
+    }
+
+    function test_StatusQuoProposalShowsVaultAllocation() public {
+        MockAllocationSource source = new MockAllocationSource(4200);
+        vm.prank(admin);
+        qr.setAllocationSource(address(source));
+
+        uint256 roundId = _openRound();
+        (,, QuantumRound.Allocation memory target,,,, bool isStatusQuo) = qr.proposals(roundId, 0);
+        assertEq(target.tEthBps, 4200);
+        assertTrue(isStatusQuo);
+
+        _collapseRound(roundId);
+        assertTrue(qr.winnerIsStatusQuo(roundId));
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1225,6 +1373,18 @@ contract QuantumRoundHandler is Test {
         try qr.deposit(currentRoundId, amount) {
             totalExpectedDeposits += amount;
         } catch { }
+    }
+}
+
+contract MockAllocationSource {
+    uint16 public bps;
+
+    constructor(uint16 bps_) {
+        bps = bps_;
+    }
+
+    function currentTEthBps() external view returns (uint16) {
+        return bps;
     }
 }
 

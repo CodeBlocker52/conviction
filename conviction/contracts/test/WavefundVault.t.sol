@@ -24,6 +24,16 @@ contract VaultTestRound {
     function cancelRound(uint256) external {
         cancelled = true;
     }
+
+    bool public statusQuoWins;
+
+    function setStatusQuoWins(bool value) external {
+        statusQuoWins = value;
+    }
+
+    function winnerIsStatusQuo(uint256) external view returns (bool) {
+        return statusQuoWins;
+    }
 }
 
 contract VaultTestResolver {
@@ -83,6 +93,19 @@ contract WavefundVaultTest is Test {
         assertTrue(executed);
         assertFalse(reported);
         assertFalse(cancelled);
+    }
+
+    function test_StatusQuoWinnerDoesNotTrade() public {
+        round.setStatusQuoWins(true);
+        // A swap would hit the unmocked pool and fail; status quo must skip it even if bps is non-zero.
+        vault.executeTrade(1, 10_000);
+
+        (,,,,, bool executed,, bool cancelled) = vault.roundState(1);
+        assertTrue(executed);
+        assertFalse(cancelled);
+        assertEq(vault.totalVaultUsdc(), 10_000_000);
+        assertEq(vault.totalVaultTEth(), 0);
+        assertEq(vault.currentTEthBps(), 0);
     }
 
     function test_ExecuteTradeRejectsStaleOracle() public {

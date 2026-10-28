@@ -36,6 +36,7 @@ interface IResolver {
 interface IQuantumRoundVault {
     function cancelRound(uint256 roundId) external;
     function roundEvaluationEnd(uint256 roundId) external view returns (uint64);
+    function winnerIsStatusQuo(uint256 roundId) external view returns (bool);
 }
 
 /// @title WavefundVault
@@ -462,6 +463,13 @@ contract WavefundVault is AccessControl, ERC20, ReentrancyGuard, IUnlockCallback
 
         emit NAVMarked(roundId, totalValueUsdc, priceUsdcPerTEth, publishedAt);
 
+        // Status quo means "keep the current allocation": no swap, only queued flows are processed.
+        if (quantumRound.winnerIsStatusQuo(roundId)) {
+            state.executed = true;
+            emit TradeExecuted(roundId, _tEthBps(currentTEthValueUsdc, totalValueUsdc), 0, 0);
+            return;
+        }
+
         try this.performTrade(winnerTEthBps, priceUsdcPerTEth) returns (int256 deltaUsdc, int256 deltaTEth) {
             state.executed = true;
             emit TradeExecuted(roundId, winnerTEthBps, deltaUsdc, deltaTEth);
@@ -570,6 +578,17 @@ contract WavefundVault is AccessControl, ERC20, ReentrancyGuard, IUnlockCallback
     function oraclePriceTEthInUsdc() public view returns (uint256) {
         (int256 answer, uint8 answerDecimals,) = priceOracle.latestPrice();
         return VaultPriceMath.fromOracle(answer, answerDecimals);
+    }
+
+    /// @notice Returns the vault's current tETH allocation in basis points at the oracle price.
+    function currentTEthBps() external view returns (uint16) {
+        uint256 tEthValue = _tEthValueInUsdc(totalVaultTEth, oraclePriceTEthInUsdc());
+        return _tEthBps(tEthValue, totalVaultUsdc + tEthValue);
+    }
+
+    function _tEthBps(uint256 tEthValue, uint256 totalValue) internal pure returns (uint16) {
+        if (totalValue == 0) return 0;
+        return uint16(FullMath.mulDiv(tEthValue, 10_000, totalValue));
     }
 
     /// @notice Returns the current oracle-marked vault NAV in 6-decimal USDC units.

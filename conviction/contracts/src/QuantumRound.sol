@@ -13,6 +13,10 @@ import { ProposerRegistry } from "./ProposerRegistry.sol";
 
 /// @title QuantumRound
 /// @notice Core Wavefund Phase A contract: rounds, proposals, deposits, trading delegation, collapse, settlement, redemption.
+interface IAllocationSource {
+    function currentTEthBps() external view returns (uint16);
+}
+
 contract QuantumRound is AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -95,10 +99,11 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
     /// @notice Credits claimed per user in each proposal market per round.
     mapping(uint256 roundId => mapping(uint256 proposalId => mapping(address user => uint256))) public creditsClaimed;
 
-    /// @notice Aggregate credits claimed by user across all proposals in a round.
-    mapping(uint256 roundId => mapping(address user => uint256)) public totalCreditsClaimed;
+    /// @notice Aggregate credits claimed by all users in each proposal market.
+    mapping(uint256 roundId => mapping(uint256 proposalId => uint256)) public roundClaimedCredits;
 
-    /// @notice Round-level deposits not yet converted into claimed credits or redeemed.
+    /// @notice Deposit principal still owed to users: set at collapse to deposits minus the winner's claimed credits.
+    /// @dev Credits claimed in erased proposals never reduce what a depositor gets back.
     mapping(uint256 roundId => uint256) public roundUnclaimedCollateral;
 
     /// @notice Protocol seed allocated to each proposal when a round opens.
@@ -112,6 +117,9 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
     /// @notice Number of rounds opened so far.
     uint256 public roundCount;
+
+    /// @notice Optional source of the vault's current tETH allocation, used to label the status-quo proposal.
+    IAllocationSource public allocationSource;
 
     /// @notice Protocol-owned USDC available for seeding proposal markets.
     uint256 public protocolLiquiditySeed;
@@ -187,6 +195,12 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
 
     /// @notice Thrown when settlement caller is not keeper/resolver and emergency window is not reached.
     error UnauthorizedSettlement();
+
+    /// @notice Thrown when a settled round still has user liabilities or no seed to release.
+    error NothingToRelease();
+
+    /// @notice Emitted when a round's remaining seed returns to the protocol reserve.
+    event SeedReleased(uint256 indexed roundId, uint256 amount);
 
     /// @notice Emitted when a round is opened.
     event RoundOpened(
@@ -284,6 +298,11 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
     function setInitialLiquidityPerProposal(uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (amount == 0) revert ZeroAmount();
         initialLiquidityPerProposal = amount;
+    }
+
+    /// @notice Sets the contract that reports the vault's current allocation for the status-quo proposal.
+    function setAllocationSource(address source) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        allocationSource = IAllocationSource(source);
     }
 
     /// @notice Updates resolver contract that may call settle.
@@ -407,7 +426,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         proposals[newRoundId][0] = Proposal({
             id: 0,
             proposer: address(this),
-            target: Allocation({ tEthBps: 0 }),
+            target: Allocation({ tEthBps: _currentAllocationBps() }),
             rationaleURI: "status-quo",
             bondAmount: 0,
             bondRefunded: true,
@@ -487,13 +506,12 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         usdc.safeTransferFrom(msg.sender, address(this), amount);
         deposits[roundId][msg.sender] += amount;
         round.totalDeposited += amount;
-        roundUnclaimedCollateral[roundId] += amount;
 
         emit Deposited(roundId, msg.sender, amount);
     }
 
     /// @notice Claims proposal-market credits against deposited USDC balance.
-    /// @dev Aggregate credits claimed across all proposals in a round cannot exceed the caller's round deposit.
+    /// @dev Each proposal's claimed credits are capped at the caller's deposit independently of other proposals.
     /// @param roundId Round identifier.
     /// @param proposalId Proposal identifier.
     /// @param amount Credit amount to claim.
@@ -506,15 +524,13 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (proposalId >= round.proposalCount) revert InvalidProposal();
 
         uint256 userDeposit = deposits[roundId][msg.sender];
-        uint256 alreadyClaimedTotal = totalCreditsClaimed[roundId][msg.sender];
-        if (alreadyClaimedTotal + amount > userDeposit) revert InsufficientDeposit();
+        if (creditsClaimed[roundId][proposalId][msg.sender] + amount > userDeposit) revert InsufficientDeposit();
 
         address credit = proposalTokens.creditToken(roundId, proposalId);
         if (credit == address(0)) revert InvalidProposal();
 
         creditsClaimed[roundId][proposalId][msg.sender] += amount;
-        totalCreditsClaimed[roundId][msg.sender] = alreadyClaimedTotal + amount;
-        roundUnclaimedCollateral[roundId] -= amount;
+        roundClaimedCredits[roundId][proposalId] += amount;
         ProposalTokenImpl(credit).mint(msg.sender, amount);
 
         emit CreditsClaimed(roundId, proposalId, msg.sender, amount);
@@ -691,6 +707,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         }
 
         round.winnerProposalId = bestProposal;
+        roundUnclaimedCollateral[roundId] = round.totalDeposited - roundClaimedCredits[roundId][bestProposal];
         uint256 seedPerProposal = roundSeedPerProposal[roundId];
 
         for (uint256 i = 0; i < count; i++) {
@@ -751,6 +768,37 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         }
 
         emit Settled(roundId, effectiveReturn);
+
+        if (round.totalDeposited == 0) _releaseSeed(roundId);
+    }
+
+    /// @notice Returns a settled round's remaining collateral (the winning seed) to the protocol reserve.
+    /// @dev Permissionless once no user liabilities remain.
+    function releaseSeed(uint256 roundId) external nonReentrant {
+        Round storage round = rounds[roundId];
+        if (round.id == 0) revert InvalidProposal();
+        if (!round.settled) revert RoundNotSettled();
+        if (roundUserLiability(roundId) != 0 || roundRemainingCollateral[roundId] == 0) revert NothingToRelease();
+        _releaseSeed(roundId);
+    }
+
+    function _releaseSeed(uint256 roundId) internal {
+        uint256 amount = roundRemainingCollateral[roundId];
+        protocolLiquiditySeed += amount;
+        roundRemainingCollateral[roundId] = 0;
+        roundWinningSeed[roundId] = 0;
+        if (amount > 0) emit SeedReleased(roundId, amount);
+    }
+
+    function _currentAllocationBps() internal view returns (uint16) {
+        if (address(allocationSource) == address(0)) return 0;
+        return allocationSource.currentTEthBps();
+    }
+
+    /// @notice True when the round's winner is the status-quo proposal (the vault should not trade).
+    function winnerIsStatusQuo(uint256 roundId) external view returns (bool) {
+        Round storage round = rounds[roundId];
+        return round.collapsed && proposals[roundId][round.winnerProposalId].isStatusQuo;
     }
 
     /// @notice Redeems user payout from a settled round.
@@ -772,7 +820,8 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
             return;
         }
 
-        uint256 claimed = totalCreditsClaimed[roundId][msg.sender];
+        uint256 winnerId = round.winnerProposalId;
+        uint256 claimed = creditsClaimed[roundId][winnerId][msg.sender];
         if (claimed > userDeposit) revert InsufficientCredits();
         uint256 unclaimed = userDeposit - claimed;
         if (unclaimed > roundUnclaimedCollateral[roundId]) revert InsufficientDeposit();
@@ -782,14 +831,15 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         uint256 piDenom = uint256(round.rMax) - uint256(round.rMin);
         uint256 scale = market.completeSetScale();
         uint256 payoutScale = scale == 0 ? 1 : scale;
-        uint256 creditPayout;
         uint256 outcomePayout;
+        uint256 creditPayout;
         bool hasPosition = false;
 
-        for (uint256 proposalId = 0; proposalId < round.proposalCount; proposalId++) {
-            address credit = proposalTokens.creditToken(roundId, proposalId);
-            address longTokenAddr = proposalTokens.longToken(roundId, proposalId);
-            address shortTokenAddr = proposalTokens.shortToken(roundId, proposalId);
+        // Only the winning proposal's tokens carry value; erased proposals' tokens are left untouched.
+        {
+            address credit = proposalTokens.creditToken(roundId, winnerId);
+            address longTokenAddr = proposalTokens.longToken(roundId, winnerId);
+            address shortTokenAddr = proposalTokens.shortToken(roundId, winnerId);
             if (credit == address(0) || longTokenAddr == address(0) || shortTokenAddr == address(0)) {
                 revert InvalidProposal();
             }
@@ -799,7 +849,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
             uint256 shortBal = IERC20(shortTokenAddr).balanceOf(msg.sender);
             if (creditBal > 0) {
                 ProposalTokenImpl(credit).burn(msg.sender, creditBal);
-                creditPayout += creditBal;
+                creditPayout = creditBal;
                 hasPosition = true;
             }
             if (longBal > 0) {
@@ -810,11 +860,8 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
                 ProposalTokenImpl(shortTokenAddr).burn(msg.sender, shortBal);
                 hasPosition = true;
             }
-
-            if (proposalId == round.winnerProposalId) {
-                outcomePayout += Math.mulDiv(longBal, piNumer, piDenom * payoutScale);
-                outcomePayout += Math.mulDiv(shortBal, piDenom - piNumer, piDenom * payoutScale);
-            }
+            outcomePayout += Math.mulDiv(longBal, piNumer, piDenom * payoutScale);
+            outcomePayout += Math.mulDiv(shortBal, piDenom - piNumer, piDenom * payoutScale);
         }
 
         if (userDeposit == 0 && !hasPosition) revert InsufficientDeposit();
@@ -827,11 +874,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (roundUserLiability(roundId) > roundRemainingCollateral[roundId]) revert InsufficientSolvencyReserve();
 
         usdc.safeTransfer(msg.sender, payout);
-        if (roundUserLiability(roundId) == 0) {
-            protocolLiquiditySeed += roundRemainingCollateral[roundId];
-            roundRemainingCollateral[roundId] = 0;
-            roundWinningSeed[roundId] = 0;
-        }
+        if (roundUserLiability(roundId) == 0) _releaseSeed(roundId);
 
         emit Redeemed(roundId, msg.sender, payout);
     }
@@ -844,10 +887,7 @@ contract QuantumRound is AccessControl, ReentrancyGuard {
         if (round.cancelled) return roundUnclaimedCollateral[roundId];
 
         liability = roundUnclaimedCollateral[roundId];
-        for (uint256 proposalId = 0; proposalId < round.proposalCount; proposalId++) {
-            address credit = proposalTokens.creditToken(roundId, proposalId);
-            liability += IERC20(credit).totalSupply();
-        }
+        liability += IERC20(proposalTokens.creditToken(roundId, round.winnerProposalId)).totalSupply();
 
         uint256 scale = market.completeSetScale();
         uint256 payoutScale = scale == 0 ? 1 : scale;
