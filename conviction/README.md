@@ -7,7 +7,7 @@ AI agents propose trades for a shared USDC vault. Traders forecast how the vault
 > **Event:** ETHGlobal Mumbai
 > **Chain:** Arc testnet (Circle's stablecoin-native L1, USDC as gas)
 > **Target prizes (ETHGlobal allows up to 3):** Arc "Best DeFi / Onchain Finance App Built End to End in Arc Studio", Uniswap Foundation "Build with Uniswap", Chainlink "Best workflow with CRE"
-> **Status:** Phase B (Uniswap v4 hook proposal markets) is deployed, verified and smoke-tested on Arc Testnet, and the live frontend, keeper and demo scripts run against it. Phase A is superseded (see `contracts/deployments/SOURCES.md`).
+> **Status:** Phase B v2 (Uniswap v4 hook proposal markets, per-proposal credit claims) is deployed, verified and smoke-tested on Arc Testnet, and the live frontend, keeper and demo scripts run against it. Phase A and the first Phase B deployment are superseded (see `contracts/deployments/SOURCES.md`).
 > **Based on:** "Quantum Markets" by Alpin Yukseloglu and Sofiane Larbi (Paradigm, June 2025). Implemented from scratch; see [Relationship to the reference implementation](#relationship-to-the-reference-implementation).
 
 ---
@@ -491,14 +491,18 @@ If we want to reuse any reference code, we ask the authors for permission first 
 | USDC deposits, payouts and gas | CRE workflow may run in simulation if Arc isn't supported |
 | Agent wallets via Circle developer-controlled wallets | All forecasters in the demo may be our own agents unless outsiders join |
 
-### Live mode: run and test (Phase B)
+### Live mode: run and test (Phase B v2)
+
+**Automatic (recommended):** `npm run keeper:run` (needs `KEEPER_PK` in `.env`). The keeper collapses a round when trading ends, **immediately** runs the vault's trade (so the evaluation window measures a real period), then reports and settles when evaluation ends. It runs the oracle watcher while a round is active, logs every transaction with its explorer link, and stops cleanly on Ctrl+C. Optional: `--open-every <minutes> --window <minutes>` opens the next round that long after the previous one settled; `--poll <seconds>` sets the check interval (default 15).
+
+**Manual steps:**
 
 1. `npm run pool:recenter` (plan), then `npm run pool:recenter -- --execute` if the pool is off the oracle price by more than 0.5%.
-2. `npm run demo:open-round -- --minutes 20 --execute` opens a round with three proposals and starts the oracle watcher (60 s updates only while a round is open; `npm run oracle:start|stop` controls it manually).
-3. On the site, switch to **Live**, connect MetaMask (Arc Testnet is added automatically). Deposit 1 USDC and claim credits on two proposals (about 1 credit each). Buy LONG on one proposal and SHORT on the other; the ticket shows the adapter quote, average price, impact and pLong after (minimum output = quote less 0.5%). Sell part of each; the received credits match the sell quote within 0.5%. Check Portfolio.
-4. After trading ends, press **Collapse** (anyone can). The highest final-window TWAP wins; other markets are erased and all bonds refunded.
-5. `npm run demo:close-round -- --execute` executes the vault trade, waits for the evaluation window and settles. Then **Redeem** in Markets or Portfolio: LONG pays π and SHORT pays 1 − π credits per token for the winning proposal, where π = (return − rMin) / (rMax − rMin). A vault deposit request on the Vault page is processed at the next decision.
-6. If the vault's slippage guard cancels the round, every deposit redeems at par.
+2. `npm run demo:open-round -- --minutes 30 --execute` opens a round with three proposals and starts the oracle watcher.
+3. On the site, switch to **Live**, connect MetaMask (Arc Testnet is added automatically). Deposit 1 USDC. Credits are capped **per proposal**: claim up to 1 credit in every proposal from that one deposit. Buy LONG on one proposal and SHORT on another; the ticket shows the adapter quote, average price, impact and pLong after (minimum output = quote less 0.5%). Sell part of each; the received credits match the sell quote within 0.5%. Check Portfolio.
+4. After trading ends, press **Collapse** (anyone can) unless `keeper:run` is running. The highest final-window TWAP wins; other markets are erased and all bonds refunded. If proposal 0 (the vault's current allocation) wins, the vault does not trade.
+5. `npm run demo:close-round -- --execute` (or the keeper) executes the vault trade, waits for the evaluation window and settles. Then **Redeem**: you receive `deposit − claimed[winner] + winner credits + LONG × π + SHORT × (1 − π)`, where π = (return − rMin) / (rMax − rMin). Credits and tokens in erased proposals do not reduce it. A vault deposit request on the Vault page is processed at the next decision.
+6. If the vault's slippage guard cancels the round, every deposit redeems at par. A round nobody deposits into settles automatically and its seed returns to the reserve (`releaseSeed` is also callable by anyone).
 
 ---
 

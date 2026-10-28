@@ -1,6 +1,6 @@
 # Wavefund — Contract Design
 
-> **Status:** Phase B (Uniswap v4 hook proposal markets) is the deployed, current design. Sections headed "Phase A" describe the superseded constant-product design and are kept only as history; never act on the Phase A contracts. Current addresses: `contracts/deployments/current.json` and `SOURCES.md`.
+> **Status:** Phase B v2 (Uniswap v4 hook proposal markets with per-proposal credit claims) is the deployed, current design. The first Phase B deployment is superseded (5 USDC of round 3's seed is permanently locked there). Sections headed "Phase A" describe the superseded constant-product design and are kept only as history; never act on the Phase A contracts. Current addresses: `contracts/deployments/current.json` and `SOURCES.md`.
 
 ## Overview
 Wavefund is a quantum-market prediction protocol where AI agents ("proposers") compete to forecast the optimal allocation for a USDC vault. Each round is a sealed-bid competition:
@@ -82,14 +82,20 @@ Phase B is intended to replace this with bounded Uniswap v4 LONG/SHORT hook pool
 ## Payout Formula
 Given:
 - pi = (clamp(realisedReturn, rMin, rMax) - rMin) / (rMax - rMin)  [0,1]
-- longBal = user's LONG token balance in the winning proposal
-- shortBal = user's SHORT token balance in the winning proposal
-- creditsClaimed = total credits allocated to winner by this user
-- unclaimed = deposit - creditsClaimed
+- creditBal, longBal, shortBal = the user's balances of the **winning** proposal's tokens
+- claimed[winner] = credits this user claimed in the winning proposal
+- unclaimed = deposit - claimed[winner]
 
-Payout (in USDC) = unclaimed + longBal * pi + shortBal * (1 - pi)
+Payout (in USDC) = unclaimed + creditBal + longBal * pi + shortBal * (1 - pi)
 
-Note: longBal + shortBal ≤ creditsClaimed (credits not converted to either = lost).
+### Per-proposal credit cap (v2)
+Credits are a **per-proposal** allowance, not a shared budget: a user's claims in each proposal are capped at their deposit independently, so a 1 USDC deposit can claim 1 credit in every proposal (`creditsClaimed[round][proposal][user] <= deposit`). This is the quantum-markets mechanism: only the winning proposal's market is ever settled, so credits spent in erased proposals cost nothing. Consequently:
+- Only the winner's tokens matter at redemption; positions in erased proposals never reduce the payout. A user who trades only in losing proposals redeems their full deposit.
+- Solvency: at collapse `roundUnclaimedCollateral = totalDeposited - roundClaimedCredits[winner]`; user liabilities are the winner's outstanding credits, its LONG/SHORT payouts at pi, and that unclaimed collateral. Payouts never exceed deposits plus the winning seed (fuzzed in `testFuzz_PerProposalClaims_SolvencyAndSeedReturn`).
+- Proposal 0 (status quo) stores the vault's current tETH allocation at round open (`allocationSource`). If it wins, `WavefundVault.executeTrade` marks NAV, processes queued deposits/withdrawals and does **not** trade (`TradeExecuted(round, currentBps, 0, 0)`).
+- `releaseSeed(roundId)` is permissionless: once a round is settled or cancelled and no user liabilities remain, the remaining winning seed returns to `protocolLiquiditySeed`. Settle calls it automatically when nobody deposited; the last `redeem` calls it otherwise.
+
+Earlier versions used one shared claim limit (`totalCreditsClaimed`) and counted every proposal's credits at redemption; that was removed in v2.
 
 ## Vault (Phase A — superseded by the Phase B vault)
 WavefundVault:
@@ -237,3 +243,9 @@ Price-based slashing is griefable: a rival can push a thin proposal market below
 | 10 USDC | 0.5 -> 0.524 (+2.4 pp) | 0.5 -> 0.547 (+4.7 pp) | 0.5 -> 0.590 (+9.0 pp) |
 
 SHORT buys are symmetric. A 1 USDC trade moves pLong by 9.0 points at a 5 USDC seed, below the 15-point limit, so the plan keeps 5 USDC per proposal. With a scalar range of 0.95 to 1.05, one 1 USDC trade moves the implied return by about 0.9 percentage points. Use 10 USDC per proposal if demo trades above 1 USDC are expected.
+
+### Phase B v2 redeploy and migration (executed)
+- **Seed top-up revert:** the intermittent revert of `addProtocolLiquiditySeed` right after an approval was the RPC node used for gas estimation not yet having seen the just-mined approval. Scripts now retry pre-broadcast errors (`sendContract`); there was no contract bug.
+- **Migration:** a status-quo-only round on the old contracts processed queued withdrawals for every WAVE holder (two rounds, because the old vault cannot pay a withdrawal shortfall from tETH after the 0.3% swap fee), the reserve was rescued, and the old roles were revoked. See `deployments/demo-round.md`.
+- **Redeploy:** `ProposalTokens`, `WaveV4ProposalMarket`, `QuantumRound`, `Resolver`, `WavefundVault`, `WaveHook` are new; registry, oracle, tETH, `QuantumLP`, PoolManager and the USDC/tETH pool position are reused. `WirePhaseB` also sets `allocationSource = vault` and revokes the previous round's and vault's roles.
+- **Keeper:** `npm run keeper:run` collapses at trading end, runs the vault trade immediately (so evaluation measures a real period), then reports and settles at evaluation end.
