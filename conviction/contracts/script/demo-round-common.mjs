@@ -95,15 +95,27 @@ export async function assertArcTestnet() {
   }
 }
 
+// Gas estimation can hit an RPC node that has not yet seen the previous block (for example the
+// approval just mined), which makes a valid call look like a revert. Retrying before broadcast is safe.
 export async function sendContract(label, walletClient, address, abi, functionName, args) {
-  const hash = await walletClient.writeContract({
-    account: walletClient.account,
-    chain,
-    address,
-    abi,
-    functionName,
-    args,
-  });
+  let hash;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      hash = await walletClient.writeContract({
+        account: walletClient.account,
+        chain,
+        address,
+        abi,
+        functionName,
+        args,
+      });
+      break;
+    } catch (error) {
+      if (attempt >= 4) throw error;
+      console.log(`${label}: pre-broadcast error (${String(error.shortMessage ?? error.message).split("\n")[0]}); retrying`);
+      await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
+    }
+  }
   const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
   if (receipt.status !== "success") throw new Error(`${label} reverted: ${hash}`);
   console.log(`${label}: ${explorerUrl}/tx/${hash}`);
