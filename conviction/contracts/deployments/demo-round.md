@@ -203,3 +203,57 @@ Goal: let every WAVE holder exit and recover the protocol reserve before replaci
 
 Outcome: WAVE supply is 1 wei (deployer dust, unredeemable), the old vault holds about 0.000001 USDC, and the reserve was back at 20.205275 USDC before the rescue.
 Round 3's 5 USDC seed stays locked in the old `QuantumRound` (no release path existed there); it is not recoverable.
+
+
+---
+
+## Phase B v2 smoke rounds
+
+Run on the v2 contracts with `keeper:run` handling collapse, the vault trade and settlement (raw logs: `smoke-v2-a.json`, `smoke-v2-b.json`).
+
+### Round 1 (A): full path, non-status-quo winner
+
+Three proposals (20%, 50%, 80% tETH). Wallet D deposited 1 USDC and claimed 1 credit in all four proposals (a second claim reverted: the per-proposal cap holds). It bought and sold LONG and SHORT across proposals; proposal 2 won and the vault traded 50% into tETH. Realised return 0.9938.
+
+| Step | Transaction |
+|---|---|
+| D approves USDC to 0x181E2A | [0xf0d7…36f1](https://explorer.testnet.arc.io/tx/0xf0d759d042201ccc4f6adb426c0025b96c763aef4ff175d939094442ed2136f1) |
+| K approves USDC to 0x181E2A | [0xd3a7…8bca](https://explorer.testnet.arc.io/tx/0xd3a7ea41a36eb776fc0417740b75cc596dc7190fd6df60fed1c7d6406da88bca) |
+| D approves USDC to 0xc60ce4 | [0xc161…3280](https://explorer.testnet.arc.io/tx/0xc161e75b3cd9bed155ae8be2f3e7ce7dc38bb22781fee5a91b872e7410203280) |
+| Open round | [0x21af…09d2](https://explorer.testnet.arc.io/tx/0x21af49dd02e76c9be3d9e7689e14ca3bb4bc7b9788395127c9110375233309d2) |
+| D proposes 20% tETH | [0x68be…a6ba](https://explorer.testnet.arc.io/tx/0x68bed3baffdbe50faa40922cc30e6814e5ee847b50724012eda99347c709a6ba) |
+| K proposes 50% tETH | [0x3475…8ef4](https://explorer.testnet.arc.io/tx/0x3475a29007900dace06fe563a6d297d421426c96ce0661182f2ff6b8bfe48ef4) |
+| D proposes 80% tETH | [0xcf9a…1bb1](https://explorer.testnet.arc.io/tx/0xcf9afe0b56757472b99a742bc3f574336d3b1020c36bb0501e01b9efa4921bb1) |
+| D deposits 1 USDC | [0xf597…276b](https://explorer.testnet.arc.io/tx/0xf5975468cc89ad3734cebf78e8c440bfc1b3e930cfcfd33ee6e2ba16b316276b) |
+| D claims 1 credit on proposal 0 | [0xf6fe…5da7](https://explorer.testnet.arc.io/tx/0xf6fee8e5f7bb78f4caf16386a3016959ffe5e3a2d4df02ce1a18ab9381435da7) |
+| D claims 1 credit on proposal 1 | [0xb45b…f77b](https://explorer.testnet.arc.io/tx/0xb45bcfa3fd90f3ffe2204dbea0d70f2d2d647a664642091177d0d5325e9bf77b) |
+| D claims 1 credit on proposal 2 | [0x37f9…b5f8](https://explorer.testnet.arc.io/tx/0x37f95f3a77884f330eac22e5266739c2fe8ece30a8b7014d423227ac8e33b5f8) |
+| D claims 1 credit on proposal 3 | [0x55d2…d100](https://explorer.testnet.arc.io/tx/0x55d2ae2832aedf29878d00cb94ce2d672ff5f2165681c6511b1aa33a8248d100) |
+| D buys LONG on proposal 2 with 1 credits (quote 1.831249) | [0xb5cd…a366](https://explorer.testnet.arc.io/tx/0xb5cd91797e7750a6dcb540bf3166acb3ed6afba1dcfa69718fdd139c4208a366) |
+| D buys SHORT on proposal 1 with 1 credits (quote 1.831249) | [0xe713…f278](https://explorer.testnet.arc.io/tx/0xe71350607e028aa8f47878f4d9c6fe944450b74cc84b9c5329abdbdb2b7ef278) |
+| D buys SHORT on proposal 3 with 1 credits (quote 1.831249) | [0x1d02…939d](https://explorer.testnet.arc.io/tx/0x1d02f39e6f775feb7c6ae5c1e08cd1ddc6b9e5bc4f1b0706402f25bda0e3939d) |
+| D sells 0.915624 LONG on proposal 2 (quote 0.519260 credits) | [0x32dd…30fb](https://explorer.testnet.arc.io/tx/0x32dd5a9c6cc62a9544eb8cc2b53104070b8c876c72400101c831c9a4af2a30fb) |
+| D sells 0.915624 SHORT on proposal 1 (quote 0.519260 credits) | [0xe0ee…bc91](https://explorer.testnet.arc.io/tx/0xe0ee23a6a23a2a5d05ee14eaca69188fdd004475b19a501bce23bcd1f5c4bc91) |
+| D sells 0.915624 SHORT on proposal 3 (quote 0.519260 credits) | [0x6bf5…ff67](https://explorer.testnet.arc.io/tx/0x6bf51d3c97e6f863783522d340c8b9e83ddffef13137d13717d37ac86351ff67) |
+| D redeems | [0x4492…af28](https://explorer.testnet.arc.io/tx/0x44920698b788978767390823db8681e8c3c69e2e6b1bd45ffbbf28c2f71baf28) |
+
+Redeem check: expected `deposit − claimed[winner] + credits + LONG×π + SHORT×(1−π)` = 0.920087 USDC; actual = 0.920087 USDC (match: True). Positions in erased proposals did not reduce it.
+
+| USDC (6 dp) | Before | After redeem |
+|---|---|---|
+| Reserve (`protocolLiquiditySeed`) | 20.000000 | 20.079913 |
+| QuantumRound balance | 20.000000 | 20.079913 |
+| Vault USDC | 5.000000 | 2.500000 (+0.001055 tETH) |
+| Wallet D | 41.813916 | 41.564568 (net of gas) |
+
+Reconciliation: 1.000000 in = 0.920087 paid out + 0.079913 kept by the reserve (reserve 20.000000 → 20.079913; round balance equals reserve). Unaccounted: 0. The vault moved 2.5 USDC into tETH as the winning trade.
+
+### Round 2 (B): empty round
+
+Nobody deposited. Status quo won, the vault did not trade (vault balances unchanged), and the seed returned to the reserve at settle without any redeem (reserve 20.079913 before and 20.079913 after).
+
+| Step | Transaction |
+|---|---|
+| Open round | [0xfdd5…2da3](https://explorer.testnet.arc.io/tx/0xfdd5a56939d67ba27ff35c5169d13e8fc63e75b97bafe9bce22ac2d53cbf2da3) |
+
+Reconciliation: USDC in 0, USDC out 0, reserve unchanged, unaccounted 0.
