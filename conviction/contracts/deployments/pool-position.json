@@ -1,12 +1,12 @@
 {
   "owner": "0xFaDBe81aF357757d2cd84e33883fe41579f88c97",
   "salt": "0x0",
-  "tickLower": 196920,
-  "tickUpper": 199860,
-  "liquidity": "4138594268296",
-  "centerUsdcPerTEth": 2334.155,
+  "tickLower": 196860,
+  "tickUpper": 199800,
+  "liquidity": "4125251507598",
+  "centerUsdcPerTEth": 2349.245,
   "lowerPct": 10,
   "upperPct": 20,
-  "addTx": "0x2ce1b8f9b9402835583466d1699ff1b069beebacdc9a2bf7e7540d21d656c117",
-  "updatedAt": "2026-10-28T17:38:00.090Z"
+  "addTx": "0x7844e367d34960b4d9c8eed9469d19841805166ccde2cddba61b2c4682144b6b",
+  "updatedAt": "2026-10-28T18:52:02.537Z"
 }
