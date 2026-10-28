@@ -1,0 +1,169 @@
+{
+  "explorerUrl": "https://explorer.testnet.arc.io",
+  "log": [
+    {
+      "label": "D approves USDC to 0x181E2A",
+      "wallet": "D",
+      "hash": "0xf0d759d042201ccc4f6adb426c0025b96c763aef4ff175d939094442ed2136f1",
+      "url": "https://explorer.testnet.arc.io/tx/0xf0d759d042201ccc4f6adb426c0025b96c763aef4ff175d939094442ed2136f1"
+    },
+    {
+      "label": "K approves USDC to 0x181E2A",
+      "wallet": "K",
+      "hash": "0xd3a7ea41a36eb776fc0417740b75cc596dc7190fd6df60fed1c7d6406da88bca",
+      "url": "https://explorer.testnet.arc.io/tx/0xd3a7ea41a36eb776fc0417740b75cc596dc7190fd6df60fed1c7d6406da88bca"
+    },
+    {
+      "label": "D approves USDC to 0xc60ce4",
+      "wallet": "D",
+      "hash": "0xc161e75b3cd9bed155ae8be2f3e7ce7dc38bb22781fee5a91b872e7410203280",
+      "url": "https://explorer.testnet.arc.io/tx/0xc161e75b3cd9bed155ae8be2f3e7ce7dc38bb22781fee5a91b872e7410203280"
+    },
+    {
+      "label": "Open round",
+      "wallet": "K",
+      "hash": "0x21af49dd02e76c9be3d9e7689e14ca3bb4bc7b9788395127c9110375233309d2",
+      "url": "https://explorer.testnet.arc.io/tx/0x21af49dd02e76c9be3d9e7689e14ca3bb4bc7b9788395127c9110375233309d2"
+    },
+    {
+      "label": "D proposes 20% tETH",
+      "wallet": "D",
+      "hash": "0x68bed3baffdbe50faa40922cc30e6814e5ee847b50724012eda99347c709a6ba",
+      "url": "https://explorer.testnet.arc.io/tx/0x68bed3baffdbe50faa40922cc30e6814e5ee847b50724012eda99347c709a6ba"
+    },
+    {
+      "label": "K proposes 50% tETH",
+      "wallet": "K",
+      "hash": "0x3475a29007900dace06fe563a6d297d421426c96ce0661182f2ff6b8bfe48ef4",
+      "url": "https://explorer.testnet.arc.io/tx/0x3475a29007900dace06fe563a6d297d421426c96ce0661182f2ff6b8bfe48ef4"
+    },
+    {
+      "label": "D proposes 80% tETH",
+      "wallet": "D",
+      "hash": "0xcf9afe0b56757472b99a742bc3f574336d3b1020c36bb0501e01b9efa4921bb1",
+      "url": "https://explorer.testnet.arc.io/tx/0xcf9afe0b56757472b99a742bc3f574336d3b1020c36bb0501e01b9efa4921bb1"
+    },
+    {
+      "label": "D deposits 1 USDC",
+      "wallet": "D",
+      "hash": "0xf5975468cc89ad3734cebf78e8c440bfc1b3e930cfcfd33ee6e2ba16b316276b",
+      "url": "https://explorer.testnet.arc.io/tx/0xf5975468cc89ad3734cebf78e8c440bfc1b3e930cfcfd33ee6e2ba16b316276b"
+    },
+    {
+      "label": "D claims 1 credit on proposal 0",
+      "wallet": "D",
+      "hash": "0xf6fee8e5f7bb78f4caf16386a3016959ffe5e3a2d4df02ce1a18ab9381435da7",
+      "url": "https://explorer.testnet.arc.io/tx/0xf6fee8e5f7bb78f4caf16386a3016959ffe5e3a2d4df02ce1a18ab9381435da7"
+    },
+    {
+      "label": "D claims 1 credit on proposal 1",
+      "wallet": "D",
+      "hash": "0xb45bcfa3fd90f3ffe2204dbea0d70f2d2d647a664642091177d0d5325e9bf77b",
+      "url": "https://explorer.testnet.arc.io/tx/0xb45bcfa3fd90f3ffe2204dbea0d70f2d2d647a664642091177d0d5325e9bf77b"
+    },
+    {
+      "label": "D claims 1 credit on proposal 2",
+      "wallet": "D",
+      "hash": "0x37f95f3a77884f330eac22e5266739c2fe8ece30a8b7014d423227ac8e33b5f8",
+      "url": "https://explorer.testnet.arc.io/tx/0x37f95f3a77884f330eac22e5266739c2fe8ece30a8b7014d423227ac8e33b5f8"
+    },
+    {
+      "label": "D claims 1 credit on proposal 3",
+      "wallet": "D",
+      "hash": "0x55d2ae2832aedf29878d00cb94ce2d672ff5f2165681c6511b1aa33a8248d100",
+      "url": "https://explorer.testnet.arc.io/tx/0x55d2ae2832aedf29878d00cb94ce2d672ff5f2165681c6511b1aa33a8248d100"
+    },
+    {
+      "label": "D buys LONG on proposal 2 with 1 credits (quote 1.831249)",
+      "wallet": "D",
+      "hash": "0xb5cd91797e7750a6dcb540bf3166acb3ed6afba1dcfa69718fdd139c4208a366",
+      "url": "https://explorer.testnet.arc.io/tx/0xb5cd91797e7750a6dcb540bf3166acb3ed6afba1dcfa69718fdd139c4208a366"
+    },
+    {
+      "label": "D buys SHORT on proposal 1 with 1 credits (quote 1.831249)",
+      "wallet": "D",
+      "hash": "0xe71350607e028aa8f47878f4d9c6fe944450b74cc84b9c5329abdbdb2b7ef278",
+      "url": "https://explorer.testnet.arc.io/tx/0xe71350607e028aa8f47878f4d9c6fe944450b74cc84b9c5329abdbdb2b7ef278"
+    },
+    {
+      "label": "D buys SHORT on proposal 3 with 1 credits (quote 1.831249)",
+      "wallet": "D",
+      "hash": "0x1d02f39e6f775feb7c6ae5c1e08cd1ddc6b9e5bc4f1b0706402f25bda0e3939d",
+      "url": "https://explorer.testnet.arc.io/tx/0x1d02f39e6f775feb7c6ae5c1e08cd1ddc6b9e5bc4f1b0706402f25bda0e3939d"
+    },
+    {
+      "label": "D sells 0.915624 LONG on proposal 2 (quote 0.519260 credits)",
+      "wallet": "D",
+      "hash": "0x32dd5a9c6cc62a9544eb8cc2b53104070b8c876c72400101c831c9a4af2a30fb",
+      "url": "https://explorer.testnet.arc.io/tx/0x32dd5a9c6cc62a9544eb8cc2b53104070b8c876c72400101c831c9a4af2a30fb"
+    },
+    {
+      "label": "D sells 0.915624 SHORT on proposal 1 (quote 0.519260 credits)",
+      "wallet": "D",
+      "hash": "0xe0ee23a6a23a2a5d05ee14eaca69188fdd004475b19a501bce23bcd1f5c4bc91",
+      "url": "https://explorer.testnet.arc.io/tx/0xe0ee23a6a23a2a5d05ee14eaca69188fdd004475b19a501bce23bcd1f5c4bc91"
+    },
+    {
+      "label": "D sells 0.915624 SHORT on proposal 3 (quote 0.519260 credits)",
+      "wallet": "D",
+      "hash": "0x6bf51d3c97e6f863783522d340c8b9e83ddffef13137d13717d37ac86351ff67",
+      "url": "https://explorer.testnet.arc.io/tx/0x6bf51d3c97e6f863783522d340c8b9e83ddffef13137d13717d37ac86351ff67"
+    },
+    {
+      "label": "D redeems",
+      "wallet": "D",
+      "hash": "0x44920698b788978767390823db8681e8c3c69e2e6b1bd45ffbbf28c2f71baf28",
+      "url": "https://explorer.testnet.arc.io/tx/0x44920698b788978767390823db8681e8c3c69e2e6b1bd45ffbbf28c2f71baf28"
+    }
+  ],
+  "before": {
+    "D": "41813916",
+    "K": "49349953",
+    "reserve": "20000000",
+    "roundUsdc": "20000000",
+    "registryUsdc": "0",
+    "vaultUsdc": "5000000",
+    "vaultTEth": "0"
+  },
+  "preRedeem": {
+    "D": "40648452",
+    "K": "49222629",
+    "reserve": "15000000",
+    "roundUsdc": "21000000",
+    "registryUsdc": "0",
+    "vaultUsdc": "2500000",
+    "vaultTEth": "1054719528886627"
+  },
+  "after": {
+    "D": "41564568",
+    "K": "49222629",
+    "reserve": "20079913",
+    "roundUsdc": "20079913",
+    "registryUsdc": "0",
+    "vaultUsdc": "2500000",
+    "vaultTEth": "1054719528886627"
+  },
+  "report": {
+    "round": "1",
+    "winner": "2",
+    "probsBefore": [
+      "0.500000",
+      "0.454498",
+      "0.545501",
+      "0.454498"
+    ],
+    "claimedWinner": "1000000",
+    "creditsWinner": "519260",
+    "longWinner": "915624713297612856",
+    "shortWinner": "234392679906",
+    "expectedPayout": "920087",
+    "redeemedPayout": "920087",
+    "matches": true,
+    "perProposalCapHeld": true,
+    "reserveBefore": "20000000",
+    "reserveAfterRedeem": "20079913",
+    "reserveDiff": "79913",
+    "roundContractUsdcAfter": "20079913",
+    "unaccountedRoundUsdc": "0"
+  }
+}

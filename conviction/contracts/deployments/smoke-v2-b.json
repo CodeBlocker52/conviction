@@ -1,0 +1,40 @@
+{
+  "explorerUrl": "https://explorer.testnet.arc.io",
+  "log": [
+    {
+      "label": "Open round",
+      "wallet": "K",
+      "hash": "0xfdd5a56939d67ba27ff35c5169d13e8fc63e75b97bafe9bce22ac2d53cbf2da3",
+      "url": "https://explorer.testnet.arc.io/tx/0xfdd5a56939d67ba27ff35c5169d13e8fc63e75b97bafe9bce22ac2d53cbf2da3"
+    }
+  ],
+  "before": {
+    "D": "41564568",
+    "K": "49222629",
+    "reserve": "20079913",
+    "roundUsdc": "20079913",
+    "registryUsdc": "0",
+    "vaultUsdc": "2500000",
+    "vaultTEth": "1054719528886627"
+  },
+  "after": {
+    "D": "41564568",
+    "K": "49165052",
+    "reserve": "20079913",
+    "roundUsdc": "20079913",
+    "registryUsdc": "0",
+    "vaultUsdc": "2500000",
+    "vaultTEth": "1054719528886627"
+  },
+  "report": {
+    "round": "2",
+    "winner": "0",
+    "statusQuoWon": true,
+    "deposits": "0",
+    "vaultUnchanged": true,
+    "vaultExecuted": true,
+    "reserveBefore": "20079913",
+    "reserveAfterSettle": "20079913",
+    "seedReturnedWithoutRedeem": true
+  }
+}
