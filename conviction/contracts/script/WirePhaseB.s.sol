@@ -12,12 +12,12 @@ import { WaveV4ProposalMarket } from "../src/WaveV4ProposalMarket.sol";
 
 address constant WIRE_REGISTRY = 0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346;
 address constant WIRE_QUANTUM_LP = 0x885512902D1f5d05f81A678FdFFE0e339623c415;
-address constant WIRE_OLD_ROUND = 0x82a666Fc211c6A9a2509F941eA974AB0a7dDDb41;
-address constant WIRE_OLD_VAULT = 0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D;
-address constant WIRE_OLD_RESOLVER = 0xeA89585fb62e6eB63D101409093D88A94A936A4C;
+address constant WIRE_OLD_ROUND = 0x74b798AcB0fD0Bfd219F4f6C770166e32648B0c5;
+address constant WIRE_OLD_VAULT = 0xA1E37Becb47A3566d98EF55d0A3c14FA54E69865;
+address constant WIRE_OLD_RESOLVER = 0x74Fdf9F04589A9FE558D6F9D39D996b4FB4E9a48;
 uint256 constant WIRE_SEED_PER_PROPOSAL = 5_000_000;
 
-/// @notice Step 3 of the Phase B cutover: hands the market to the round and wires every role. No USDC moves.
+/// @notice Step 3 of the Phase B v2 cutover (old = the first Phase B deployment): hands the market to the round and wires every role. No USDC moves.
 /// @dev Requires the hook to be set already (DeployWaveHook.s.sol) because the round owns the market afterwards.
 contract WirePhaseB is Script {
     error WrongChain();
@@ -51,6 +51,7 @@ contract WirePhaseB is Script {
         round.grantRole(keeperRole, keeper);
         round.grantRole(vaultRole, address(vault));
         round.setInitialLiquidityPerProposal(WIRE_SEED_PER_PROPOSAL);
+        round.setAllocationSource(address(vault));
         resolver.grantRole(resolverRole, address(vault));
         vault.grantRole(qrRole, address(round));
         vault.grantRole(keeperRole, keeper);
@@ -77,6 +78,7 @@ contract WirePhaseB is Script {
         if (Resolver(WIRE_OLD_RESOLVER).hasRole(resolverRole, WIRE_OLD_VAULT)) {
             revert RoleStillGranted("old resolver vault");
         }
+        if (address(round.allocationSource()) != address(vault)) revert RoleMissing("allocation source");
         if (tokens.creditDecimals() != 6) revert RoleMissing("credit decimals");
 
         console2.log("Phase B wiring complete and verified.");
