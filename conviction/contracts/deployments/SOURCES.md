@@ -1,5 +1,7 @@
 # Wavefund Phase B v2 — Arc Testnet Deployment and Sources
 
+The top of this file describes only the current (v2) deployment. Everything under "Superseded deployments (history)" is kept for reference and must not be used.
+
 ## Network and operating rules
 
 - Chain: Arc Testnet, chain ID `5042002`
@@ -35,7 +37,76 @@ The frontend, keeper and demo scripts read these addresses from `current.json`. 
 
 Wiring transactions: [transferOwnership(market→round)](https://explorer.testnet.arc.io/tx/0x47056e893171fd54afb7603e974c03a40ae77351e74078e9c16062d48278e590), [setInitialLiquidityPerProposal](https://explorer.testnet.arc.io/tx/0x92dcea0d5e4897d8b483afc538aa1e7e6f35ded9bc0cd038629b0c4f09107972), [setAllocationSource](https://explorer.testnet.arc.io/tx/0x8028c731581ed506309a9de1bd9e452a0f6339a73d945bd33add182bdcb02e91); the remaining grant/revoke transactions are in `broadcast/WirePhaseB.s.sol/5042002/run-latest.json`.
 
-## Superseded: first Phase B deployment (v1)
+## Blockscout (explorer) verification (v2)
+
+Checked through `https://explorer.testnet.arc.io/api/v2/smart-contracts/<address>`: every contract below returns `is_verified: true` with source code, not only a Sourcify job. The v2 contracts were submitted with `forge verify-contract --verifier blockscout` (compiler 0.8.26, optimizer 200 runs, via-IR). The explorer reports `evm_version` as `cancun` and flags the matches as partial (metadata hash differs), which is how it records Sourcify/Blockscout mirrors.
+
+| Contract | Explorer (verified source) |
+|---|---|
+| ProposalTokens | [`0xB5c884d76a29A7dA7B290d14BB8616E4CFB32884`](https://explorer.testnet.arc.io/address/0xB5c884d76a29A7dA7B290d14BB8616E4CFB32884#code) |
+| WaveV4ProposalMarket | [`0xC32e0b3d5b49Cbd66dce5b97E616Ddbfc3681159`](https://explorer.testnet.arc.io/address/0xC32e0b3d5b49Cbd66dce5b97E616Ddbfc3681159#code) |
+| QuantumRound | [`0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A`](https://explorer.testnet.arc.io/address/0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A#code) |
+| Resolver | [`0x20932A078D333A3A628E32f20C79105D914d3506`](https://explorer.testnet.arc.io/address/0x20932A078D333A3A628E32f20C79105D914d3506#code) |
+| WavefundVault | [`0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137`](https://explorer.testnet.arc.io/address/0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137#code) |
+| WaveHook | [`0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0`](https://explorer.testnet.arc.io/address/0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0#code) |
+| QuantumLP (reused) | [`0x885512902D1f5d05f81A678FdFFE0e339623c415`](https://explorer.testnet.arc.io/address/0x885512902D1f5d05f81A678FdFFE0e339623c415#code) |
+| MockPriceOracle (reused) | [`0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d`](https://explorer.testnet.arc.io/address/0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d#code) |
+| TestAsset tETH (reused) | [`0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d`](https://explorer.testnet.arc.io/address/0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d#code) |
+| ProposerRegistry (reused) | [`0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346`](https://explorer.testnet.arc.io/address/0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346#code) |
+
+## USDC/tETH vault pool: concentrated position (owned by the deployer)
+
+The vault swaps USDC/tETH in the no-hook v4 pool (fee 0.30%, spacing 60). Depth comes from one concentrated position, plus ~9.2e9 of leftover full-range dust liquidity from the smoke tests.
+
+- **Owner of record:** the v4 callback [`0xFaDBe81aF357757d2cd84e33883fe41579f88c97`](https://explorer.testnet.arc.io/address/0xFaDBe81aF357757d2cd84e33883fe41579f88c97) holds the position (salt 0). Its `execute()` is `owner`-only, and the owner is the deployer. Only the deployer can remove it.
+- **Range:** −10% / +20% of the oracle price (USDC per tETH ≈ $2104.89 … $2824.27 at set-up; ticks 196860…199800). The −10% side holds the USDC for tETH→USDC sales; the +20% side is tETH only (tETH is a free mock token).
+- **Cost:** ≈ 10.68 USDC + 0.0075 tETH, within the approved 11 USDC cap. Re-centring reuses the USDC already in the position (remove, align, re-add), so it only needs gas plus a ~0.04 USDC cap margin that is not spent.
+- **Depth:** 2 USDC moves the spot price by ≈ 2.00% (execution price ≈ 1.30% worse than pre-trade spot including the 0.30% fee). 0.5 USDC: 0.50% spot / 0.55% effective; 1 USDC: 1.00% / 0.80%. Selling tETH worth 0.5 / 1 / 2 USDC: 0.50% / 0.99% / 1.96% spot.
+- **Record:** `contracts/deployments/pool-position.json` stores the ticks; on-chain liquidity is read from the PoolManager.
+
+Commands (run from `conviction/`, need `.env` with the deployer key):
+
+| Command | Effect |
+|---|---|
+| `npm run pool:recenter` | Read-only plan and impact table. |
+| `npm run pool:recenter -- --execute` | Remove the old position, align the pool to the Coinbase price, re-add −10%/+20% around it. Run before every demo. |
+| `npm run pool:recenter -- --remove --execute` | Withdraw the whole position and all its USDC/tETH to the deployer. |
+| `npm run pool:recenter -- --measure` | Print the price impact for 0.5 / 1 / 2 USDC buys and sells. |
+
+`demo:open-round` warns when the pool price is within 5% of either range edge and refuses to open (outside `--test`) when depth is below the 2 USDC / 2% target.
+
+Transactions (2026-10-25): first position add [`0xb1e7…b28a`](https://explorer.testnet.arc.io/tx/0xb1e7898b7404085f12307fdf0ccdb268819a1171c80046d024465c0983f5b28a) (align swap [`0x504d…4600`](https://explorer.testnet.arc.io/tx/0x504dde977e9ef40292d68b2c59209ef040867f9a5373fcbc4f4b02eeecc54600)); tested `--remove` [`0x569b…3994`](https://explorer.testnet.arc.io/tx/0x569b7e2205a9652d1b3c4ab282c30cd2cf945860b2f1b7473ebf8ef34a1f3994) (returned 10.680744 USDC + 0.007488 tETH); re-add (same position, ticks unchanged); recenter with reuse: remove [`0xd91b…d0ed`](https://explorer.testnet.arc.io/tx/0xd91bd1e16e164f0329af63b84ca78dec40ea9018b2a0cf5c76f489fd2c5f35ed), add [`0x756a…df9d`](https://explorer.testnet.arc.io/tx/0x756a160d38192b0a1d8a427fae20bd673d89c37989c4f56335a02e02c39fdf9d).
+## Smoke rounds on v2
+
+Both rounds ran on the v2 contracts, with `keeper:run` doing the collapse, vault trade and settlement. Every hash is in [`demo-round.md`](./demo-round.md) and the raw logs in [`smoke-v2-a.json`](./smoke-v2-a.json) and [`smoke-v2-b.json`](./smoke-v2-b.json).
+
+| Round | Scenario | Result |
+|---|---|---|
+| 1 (A) | One wallet deposits 1 USDC and claims 1 credit in every proposal (a second claim reverts); buys and sells LONG and SHORT; proposal 2 (50% tETH) wins and the vault trades immediately | Redeem payout 0.920087 USDC = `deposit − claimed[winner] + credits + LONG×π + SHORT×(1−π)` exactly; reserve 20.000000 → 20.079913; unaccounted 0 |
+| 2 (B) | Nobody deposits | Status quo wins, the vault does not trade, the seed returns to the reserve at settle without a redeem (reserve unchanged at 20.079913) |
+
+Round 3 was opened afterwards as a live test round for manual testing.
+
+## External Arc testnet contracts
+
+| Contract | Address | Source |
+|---|---|---|
+| Uniswap v4 PoolManager | `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` | Arc testnet / Peach RC2 deployment; verified via PositionManager |
+| Uniswap v4 PositionManager | `0x87Dd714940ea540c921a92216e6E0DE1E2b1735C` | Arc testnet / Peach RC2 deployment |
+| Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` | Canonical Permit2 address; code verified on Arc testnet |
+| Multicall3 | `0xcA11bde05977b3631167028862bE2a173976CA11` | Canonical Multicall3; code present on Arc testnet (checked 2026-10-26), so no deployment was needed. The frontend batches reads through it |
+
+## Oracle source and current limitations
+
+The deployed `MockPriceOracle` is keeper-fed using Coinbase's public ETH/USD quote, stored with 8 decimal places. The contract rejects stale values after five minutes. Run a one-shot update with `npm run oracle:update`; start or stop the managed watcher with `npm run oracle:start` / `npm run oracle:stop`. The watcher checks the latest round every 60 seconds and submits an update only while that round exists and is neither settled nor canceled, avoiding idle keeper transactions.
+
+No fresh, verifiable decentralized ETH/USD feed on Arc Testnet was confirmed during deployment checks. Pyth's verified Arc deployment was mainnet-only; Stork had an Arc Testnet contract but no verified fresh ETH/USD feed ID/value; Chainlink and RedStone listings did not identify a verified Arc Testnet feed. The keeper-fed oracle is therefore a centralized testnet fallback, not a production oracle.
+
+## Superseded deployments (history)
+
+None of the contracts or transactions below are used by the app, the keeper or the demo scripts.
+
+### Superseded: first Phase B deployment (v1)
 
 Replaced by the v2 contracts above. Do not use these addresses. All holders exited and the reserve was rescued (see `demo-round.md`, "Vault migration"). **5 USDC (round 3's winning seed) remains locked in the v1 `QuantumRound`**: that contract has no seed-release path, so it cannot be recovered. About 0.000001 USDC and 1 wei of WAVE (deployer dust) remain in the v1 vault.
 
@@ -48,7 +119,7 @@ Replaced by the v2 contracts above. Do not use these addresses. All holders exit
 | Resolver | `0x74Fdf9F04589A9FE558D6F9D39D996b4FB4E9a48` |
 | WavefundVault | `0xA1E37Becb47A3566d98EF55d0A3c14FA54E69865` |
 
-## Phase A deployment (superseded — not used by the app)
+### Phase A deployment (superseded — not used by the app)
 
 | Contract | Address | Deployment transaction |
 |---|---|---|
@@ -104,16 +175,7 @@ These addresses are historical and are not the current frontend configuration:
 | QuantumLP | `0x9CFF913Fbc88bC6572C1D0B5820Ea9dd40d11d06` |
 | WavefundVault (pre-share; unrecoverable 2 USDC) | `0x65648366C96Af7b3c2ECdC1B78A06d975A1505F3` |
 
-## External Arc testnet contracts
-
-| Contract | Address | Source |
-|---|---|---|
-| Uniswap v4 PoolManager | `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` | Arc testnet / Peach RC2 deployment; verified via PositionManager |
-| Uniswap v4 PositionManager | `0x87Dd714940ea540c921a92216e6E0DE1E2b1735C` | Arc testnet / Peach RC2 deployment |
-| Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` | Canonical Permit2 address; code verified on Arc testnet |
-| Multicall3 | `0xcA11bde05977b3631167028862bE2a173976CA11` | Canonical Multicall3; code present on Arc testnet (checked 2026-10-26), so no deployment was needed. The frontend batches reads through it |
-
-## Funding and oracle transactions
+### Funding and oracle transactions
 
 The new QuantumRound was funded with `25.118770 USDC`; its initial per-proposal liquidity is `2.511877 USDC` across 10 proposal slots. The vault was funded with `2 USDC`.
 
@@ -128,7 +190,7 @@ The new QuantumRound was funded with `25.118770 USDC`; its initial per-proposal 
 | Keeper oracle update | [0x6b5f88bbbfa27c4210ea2c89712f5157ff49fbdd26f53c89c0591741cdd913a2](https://explorer.testnet.arc.io/tx/0x6b5f88bbbfa27c4210ea2c89712f5157ff49fbdd26f53c89c0591741cdd913a2) |
 | Keeper oracle update | [0xa5f8c62935ea5fa024a3fd493367574105cb494c4104906f11ba96be81c6d235](https://explorer.testnet.arc.io/tx/0xa5f8c62935ea5fa024a3fd493367574105cb494c4104906f11ba96be81c6d235) |
 
-## Uniswap v4 test pool
+### Uniswap v4 test pool
 
 - Pool ID: `0xf97ceccf5459daf2698220187746a07ffe754c79519e0fec30b2b33d967df176`
 - Key: USDC / deployed tETH, fee `3000`, tick spacing `60`, no hook.
@@ -153,19 +215,13 @@ The new QuantumRound was funded with `25.118770 USDC`; its initial per-proposal 
 | Revoke obsolete tETH approval | [0xd8d6970294e2890f12b21cdedb44c012f1af54a6cd9f261130cf5dd3d20075d8](https://explorer.testnet.arc.io/tx/0xd8d6970294e2890f12b21cdedb44c012f1af54a6cd9f261130cf5dd3d20075d8) |
 | Revoke corrected tETH approval | [0x20c5faf8e112fc2edc0849deb4bb4d0cc8f582a5e2f5caa61f97d2b521da59c6](https://explorer.testnet.arc.io/tx/0x20c5faf8e112fc2edc0849deb4bb4d0cc8f582a5e2f5caa61f97d2b521da59c6) |
 
-## Oracle source and current limitations
-
-The deployed `MockPriceOracle` is keeper-fed using Coinbase's public ETH/USD quote, stored with 8 decimal places. The contract rejects stale values after five minutes. Run a one-shot update with `npm run oracle:update`; start or stop the managed watcher with `npm run oracle:start` / `npm run oracle:stop`. The watcher checks the latest round every 60 seconds and submits an update only while that round exists and is neither settled nor canceled, avoiding idle keeper transactions.
-
-No fresh, verifiable decentralized ETH/USD feed on Arc Testnet was confirmed during deployment checks. Pyth's verified Arc deployment was mainnet-only; Stork had an Arc Testnet contract but no verified fresh ETH/USD feed ID/value; Chainlink and RedStone listings did not identify a verified Arc Testnet feed. The keeper-fed oracle is therefore a centralized testnet fallback, not a production oracle.
-
-## Full-round demo status
+### Full-round demo status
 
 The v4 smoke test and full on-chain demo are complete; all confirmed actions are linked in [`demo-round.md`](./demo-round.md). Attempt 1 selected a 50% tETH allocation, but its 0.05-USDC swap exceeded the vault's 5% slippage limit and canceled safely; both user deposits were redeemed at par. Attempt 2 selected a 7.5% tETH allocation and completed the real `WavefundVault`/Uniswap v4 swap, NAV report, settlement, and both redemptions. Round 2 is settled, not canceled, and reported a `0.99655` return ratio. Its final vault state is `0.0925 USDC` plus `0.000003062520335899 tETH`; all `0.1 WAVE` shares remain with the deployer.
 
 The demo runner's planned principal is 3.6 USDC from the deployer (0.1-USDC initial vault bootstrap, two 1-USDC proposal bonds, and a 1.5-USDC round deposit) and 2.5 USDC from the keeper (one 1-USDC bond and a 1.5-USDC round deposit), plus Arc transaction fees. Fees are paid in USDC. Final balances after both attempts were 59.455213 USDC for the deployer and 39.687255 USDC for the keeper. The runner now permits a retry only when the preceding round is canceled and settled; it refunds any outstanding deposits, requires all vault shares to belong to the deployer, and checks the seed, roles, balances, and pool/oracle deviation before opening another round.
 
-## Phase B compatibility test (throwaway)
+### Phase B compatibility test (throwaway)
 
 This isolated Arc Testnet test exercised `WaveHook` against the deployed Uniswap v4 PoolManager. It is not part of `current.json`, the frontend configuration, the Phase A market, the vault, or Round 3. It used only test tokens for pool operations; no USDC token transfer or existing Wavefund contract was involved. Arc-native USDC paid the transaction fees listed below.
 
@@ -193,8 +249,7 @@ The simulation estimated `0.1613021 USDC` at a `25 gwei` max fee, below the auth
 | Initialize pool and add bounded liquidity | [0x0e31cd9bae037ea82cb951d6ea0acb0d3c9434aff16034bf8989a178a9af7cbe](https://explorer.testnet.arc.io/tx/0x0e31cd9bae037ea82cb951d6ea0acb0d3c9434aff16034bf8989a178a9af7cbe) | Adapter `0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78`; PoolManager `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` |
 | Execute compatibility swap | [0x4acb36973a7785d2e27a9218a3b124776419890cb9d861b48875650ea390ebc5](https://explorer.testnet.arc.io/tx/0x4acb36973a7785d2e27a9218a3b124776419890cb9d861b48875650ea390ebc5) | Adapter `0xD9E2F10672Fc8e7871b401D7a24c82a78da71F78`; PoolManager `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` |
 
-
-## Phase B v1 deployment details (superseded)
+### Phase B v1 deployment details (superseded)
 
 Deployed on Arc Testnet with `DeployPhaseB.s.sol`, `DeployWaveHook.s.sol` and `WirePhaseB.s.sol`; funded with `fund-phase-b.mjs`. `current.json` and the frontend now point at Phase B. Roles were verified on-chain by `WirePhaseB` after broadcast. The old round's roles on `ProposerRegistry` and `QuantumLP`, and the old vault's roles on the old round and old resolver, were revoked.
 
@@ -215,24 +270,11 @@ Funding: approve round seed (20 USDC) [0x3180e567…6651d5](https://explorer.tes
 
 Gas: all three scripts cost about 0.37 USDC (priority fee 1 gwei, max fee 150 gwei, base fee 20 gwei).
 
-## Phase A rescue check (correction)
+### Phase A rescue check (correction)
 
 Earlier notes said the Phase A `QuantumRound` had no rescue path. That was wrong: `rescueProtocolSeed(uint256)` exists on `0x82a6…Db41`, but it is capped by `protocolLiquiditySeed`, which is 0 (every seed was allocated to rounds 1–3 markets). The contract holds 31.043040 USDC that is not rescuable. Superseded vault `0xe4CE…b84D` is also no longer authorised on the old round or resolver.
 
-## Blockscout (explorer) verification
-
-Checked through `https://explorer.testnet.arc.io/api/v2/smart-contracts/<address>`: every contract below returns `is_verified: true` with source code, not only a Sourcify job. Phase B contracts were submitted with `forge verify-contract --verifier blockscout` (compiler 0.8.26, optimizer 200 runs, via-IR). The explorer reports `evm_version` as `cancun` and flags the matches as partial (metadata hash differs), which is how it records Sourcify/Blockscout mirrors.
-
-**Phase B v2 (current):**
-
-| Contract | Explorer (verified source) |
-|---|---|
-| ProposalTokens | [`0xB5c884d76a29A7dA7B290d14BB8616E4CFB32884`](https://explorer.testnet.arc.io/address/0xB5c884d76a29A7dA7B290d14BB8616E4CFB32884#code) |
-| WaveV4ProposalMarket | [`0xC32e0b3d5b49Cbd66dce5b97E616Ddbfc3681159`](https://explorer.testnet.arc.io/address/0xC32e0b3d5b49Cbd66dce5b97E616Ddbfc3681159#code) |
-| QuantumRound | [`0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A`](https://explorer.testnet.arc.io/address/0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A#code) |
-| Resolver | [`0x20932A078D333A3A628E32f20C79105D914d3506`](https://explorer.testnet.arc.io/address/0x20932A078D333A3A628E32f20C79105D914d3506#code) |
-| WavefundVault | [`0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137`](https://explorer.testnet.arc.io/address/0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137#code) |
-| WaveHook | [`0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0`](https://explorer.testnet.arc.io/address/0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0#code) |
+### Blockscout verification of superseded contracts
 
 **Phase B v1 (superseded) and Phase A:**
 
@@ -249,33 +291,6 @@ Checked through `https://explorer.testnet.arc.io/api/v2/smart-contracts/<address
 | Resolver (Phase A) | [`0xeA89585fb62e6eB63D101409093D88A94A936A4C`](https://explorer.testnet.arc.io/address/0xeA89585fb62e6eB63D101409093D88A94A936A4C#code) |
 | WavefundVault (Phase A, superseded) | [`0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D`](https://explorer.testnet.arc.io/address/0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D#code) |
 | ConstantProductMarket | [`0xEC6d767c62029A2868E1475873D9C2aE172F72df`](https://explorer.testnet.arc.io/address/0xEC6d767c62029A2868E1475873D9C2aE172F72df#code) |
-| QuantumLP | [`0x885512902D1f5d05f81A678FdFFE0e339623c415`](https://explorer.testnet.arc.io/address/0x885512902D1f5d05f81A678FdFFE0e339623c415#code) |
-| MockPriceOracle | [`0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d`](https://explorer.testnet.arc.io/address/0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d#code) |
-| TestAsset (tETH) | [`0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d`](https://explorer.testnet.arc.io/address/0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d#code) |
-| ProposerRegistry | [`0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346`](https://explorer.testnet.arc.io/address/0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346#code) |
 | Throwaway compatibility WaveHook | [`0x41cef812b6FF61419284E56f4380D4890cD28ac0`](https://explorer.testnet.arc.io/address/0x41cef812b6FF61419284E56f4380D4890cD28ac0#code) |
 
 Not verified: the throwaway compatibility adapter `0xD9E2…1F78` (test scaffolding from the Arc hook spike; submissions are accepted but do not match the current history).
-
-## USDC/tETH vault pool: concentrated position (owned by the deployer)
-
-The vault swaps USDC/tETH in the no-hook v4 pool (fee 0.30%, spacing 60). Depth comes from one concentrated position, plus ~9.2e9 of leftover full-range dust liquidity from the smoke tests.
-
-- **Owner of record:** the v4 callback [`0xFaDBe81aF357757d2cd84e33883fe41579f88c97`](https://explorer.testnet.arc.io/address/0xFaDBe81aF357757d2cd84e33883fe41579f88c97) holds the position (salt 0). Its `execute()` is `owner`-only, and the owner is the deployer. Only the deployer can remove it.
-- **Range:** −10% / +20% of the oracle price (USDC per tETH ≈ $2104.89 … $2824.27 at set-up; ticks 196860…199800). The −10% side holds the USDC for tETH→USDC sales; the +20% side is tETH only (tETH is a free mock token).
-- **Cost:** ≈ 10.68 USDC + 0.0075 tETH, within the approved 11 USDC cap. Re-centring reuses the USDC already in the position (remove, align, re-add), so it only needs gas plus a ~0.04 USDC cap margin that is not spent.
-- **Depth:** 2 USDC moves the spot price by ≈ 2.00% (execution price ≈ 1.30% worse than pre-trade spot including the 0.30% fee). 0.5 USDC: 0.50% spot / 0.55% effective; 1 USDC: 1.00% / 0.80%. Selling tETH worth 0.5 / 1 / 2 USDC: 0.50% / 0.99% / 1.96% spot.
-- **Record:** `contracts/deployments/pool-position.json` stores the ticks; on-chain liquidity is read from the PoolManager.
-
-Commands (run from `conviction/`, need `.env` with the deployer key):
-
-| Command | Effect |
-|---|---|
-| `npm run pool:recenter` | Read-only plan and impact table. |
-| `npm run pool:recenter -- --execute` | Remove the old position, align the pool to the Coinbase price, re-add −10%/+20% around it. Run before every demo. |
-| `npm run pool:recenter -- --remove --execute` | Withdraw the whole position and all its USDC/tETH to the deployer. |
-| `npm run pool:recenter -- --measure` | Print the price impact for 0.5 / 1 / 2 USDC buys and sells. |
-
-`demo:open-round` warns when the pool price is within 5% of either range edge and refuses to open (outside `--test`) when depth is below the 2 USDC / 2% target.
-
-Transactions (2026-10-25): first position add [`0xb1e7…b28a`](https://explorer.testnet.arc.io/tx/0xb1e7898b7404085f12307fdf0ccdb268819a1171c80046d024465c0983f5b28a) (align swap [`0x504d…4600`](https://explorer.testnet.arc.io/tx/0x504dde977e9ef40292d68b2c59209ef040867f9a5373fcbc4f4b02eeecc54600)); tested `--remove` [`0x569b…3994`](https://explorer.testnet.arc.io/tx/0x569b7e2205a9652d1b3c4ab282c30cd2cf945860b2f1b7473ebf8ef34a1f3994) (returned 10.680744 USDC + 0.007488 tETH); re-add (same position, ticks unchanged); recenter with reuse: remove [`0xd91b…d0ed`](https://explorer.testnet.arc.io/tx/0xd91bd1e16e164f0329af63b84ca78dec40ea9018b2a0cf5c76f489fd2c5f35ed), add [`0x756a…df9d`](https://explorer.testnet.arc.io/tx/0x756a160d38192b0a1d8a427fae20bd673d89c37989c4f56335a02e02c39fdf9d).
