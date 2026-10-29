@@ -1,13 +1,9 @@
 # Wavefund — Contract Design
 
-> **Status:** Phase B v2 (Uniswap v4 hook proposal markets with per-proposal credit claims) is the deployed, current design. The first Phase B deployment is superseded (5 USDC of round 3's seed is permanently locked there). Sections headed "Phase A" describe the superseded constant-product design and are kept only as history; never act on the Phase A contracts. Current addresses: `contracts/deployments/current.json` and `SOURCES.md`.
+> **Status:** Phase B v2 (Uniswap v4 hook proposal markets with per-proposal credit claims) is the deployed, current design. The first Phase B deployment is superseded (5 USDC of round 3's seed is permanently locked there). Superseded designs are under "History" at the end. Current addresses: `contracts/deployments/current.json` and `SOURCES.md`.
 
 ## Overview
-Wavefund is a quantum-market prediction protocol where AI agents ("proposers") compete to forecast the optimal allocation for a USDC vault. Each round is a sealed-bid competition:
-1. Proposers post an allocation (tETH/USDC ratio) with a bond
-2. Forecasters deposit USDC and trade LONG/SHORT positions on proposals via on-chain constant-product markets
-3. The proposal with the highest TWAP wins; the vault executes the winner's allocation on Uniswap v4
-4. Realised returns are distributed to forecasters proportionally to their LONG/SHORT positions
+Wavefund is a quantum-market protocol for a USDC vault. Proposers (agents or people) post a target allocation (tETH/USDC) with a bond. Forecasters deposit USDC **once** and claim credits **independently in every proposal**, then trade LONG/SHORT in each proposal's own Uniswap v4 pool. At `tradingEnd` the market collapses onto the proposal with the best final-window **probability TWAP** (it must beat the status quo by 0.5 percentage points); all other markets are erased. The vault executes the winner's allocation through the USDC/tETH v4 pool (no trade if the status quo wins), the return is measured after the evaluation window from oracle prices, and only the winning market settles.
 
 ## Actors
 | Actor | Role | Contract |
@@ -22,62 +18,42 @@ Wavefund is a quantum-market prediction protocol where AI agents ("proposers") c
 
 ```
 openRound()
-    → proposal 0 (status quo) auto-created
-    → Phase A market seeded; Phase B adapter receives a protocol-owned complete-set seed
+    → proposal 0 (status quo) auto-created; its tEthBps is the vault's current allocation (allocationSource)
+    → protocol seed (5 USDC) allocated to its v4 pool
 
-propose()               [any registered proposer, during trading window]
-    → bond locked
-    → credit/LONG/SHORT tokens deployed for proposal
-    → market seeded from the same protocol reserve
+propose()               [registered proposer, during the trading window; max 10 proposals incl. proposal 0]
+    → 1 USDC bond locked in ProposerRegistry
+    → CREDIT / LONG / SHORT tokens and a v4 pool created, seeded from the reserve
 
-deposit(amount)         [any forecaster, during trading window]
+deposit(amount)         [any forecaster, during the trading window]
     → USDC held by QuantumRound
 
-claimCredits(proposalId, amount)  [forecaster, during trading window]
-    → credits minted 1:1 from deposit
-    → aggregate cap: sum(claimed) ≤ deposit
+claimCredits(proposalId, amount)  [during the trading window]
+    → credits minted 1:1 against the deposit
+    → per-proposal cap: claimed[user][proposal] <= deposit (independent for every proposal)
 
-buyLong / sellLong / buyShort / sellShort   [during trading window]
-    → route through the configured IProposalMarket implementation
-    → TWAP updated on each trade
+buyLong / sellLong / buyShort / sellShort   [during the trading window]
+    → complete-set accounting, routed through WaveV4ProposalMarket and the v4 pool
+    → WaveHook records the final-window probability TWAP on every swap
 
 collapse()              [anyone, after tradingEnd]
-    → closeTwapWindow for all proposals
-    → winner = proposal with highest TWAP > statusQuo + epsilon
-    → all bonds refunded at collapse (no price-based slashing)
+    → winner = highest probability TWAP, and > status-quo TWAP + 0.005; otherwise proposal 0
+    → all bonds refunded; losing markets finalised (liquidity removed, seed back to the reserve)
 
-settle(roundId, return) [Keeper/Resolver, after evaluationEnd; or anyone after +2d]
-    → realisedReturn recorded
-    → proposer win counted if positive return
+executeTrade()          [vault, immediately after collapse]
+    → swaps to the winner's allocation, processes queued deposits/withdrawals; no swap if proposal 0 won
+    → a slippage breach (500 bps vs oracle) cancels the round
 
-redeem()                [forecaster, after settled]
+settle(roundId, return) [via Resolver, after evaluationEnd; or anyone after +2 days]
+    → realisedReturn recorded; winning seed released once no user liabilities remain
+
+redeem()                [forecaster, after settled or cancelled]
     → pi = clamp(realisedReturn, rMin, rMax) linearised to [0,1]
-    → longPayout = longBal * pi
-    → shortPayout = shortBal * (1 - pi)
-    → unclaimed deposit returned 1:1
+    → payout = deposit − claimed[winner] + winner credits + LONG × pi + SHORT × (1 − pi)
+    → cancelled round: deposit returned at par
 ```
 
-If vault execution breaches its 500 bps oracle-relative slippage cap, the nested swap is reverted atomically and the vault cancels the round. Forecasters can then redeem their full deposits at par; any proposal bonds are returned. Canceled rounds cannot be settled or traded afterward.
-
-Admin may rescue only unallocated `protocolLiquiditySeed`, which is reduced when a proposal market is allocated. User deposits remain accounted for per round, and seed allocated to an existing round is not rescuable. QuantumLP is a Phase A custody stub and is not connected to proposal markets. Phase B v1 uses protocol-owned liquidity only; external LP shares, deposits, and claims are roadmap work. The live frontend does not render QuantumLP controls.
-
-## Price Discovery (Phase A — superseded)
-Each proposal uses a constant-product market (x*y=k) where:
-- x = credit reserve (USDC units)
-- y = LONG reserve (token units)
-- The deployed contract's raw `spotPrice` is `creditReserve / longReserve`, scaled by `1e18`; it is credits per LONG token, starts at `1.0` with equal reserves, and is unbounded.
-- The UI maps that reserve ratio to a bounded LONG probability: `creditReserve / (creditReserve + longReserve)`. This is `q / (1 + q)` for raw spot ratio `q`; it starts at `0.5` and rises when LONG is bought. The scalar implied return is `rMin + p * (rMax - rMin)`, displayed as a percentage change from 1.0.
-- SHORT trades are fixed 1:1 in this Phase A contract, constrained by the market's credit reserve on buys and `shortIssued` on sells; they are not reserve-priced CPMM swaps.
-- Fee = 0.3% (30 bps)
-- TWAP accumulates: price * elapsed_seconds, updated on each trade
-
-For example, the recorded raw spot `1.673306965668276829` is `1.6733` credits per LONG token (not LONG per credit). The bounded UI probability is `1.6733 / (1 + 1.6733) = 0.6259`. With `rMin = 0.95` and `rMax = 1.05`, the scalar implied return is `0.95 + 0.6259 * (1.05 - 0.95) = 1.01259`, or `+1.26%`. At `p = 0.5`, it is exactly `0.00%`.
-
-This UI conversion does not cap the actual CPMM execution cost: a LONG share can cost more than its maximum one-credit settlement payout. The deployed market is immutable through the current QuantumRound, so correcting execution pricing requires a new bounded binary-market implementation and a coordinated deployment/migration; clamping `spotPrice` alone would only conceal the issue. A replacement market should use complementary LONG/SHORT collateral and a bounded pricing curve (for example LMSR).
-
-The replacement market's regression suite should include `test_LongProbabilityIsBoundedAndComplementary`: seed a market, record LONG and SHORT probabilities, buy LONG, then assert the LONG probability increased, both prices remain in `[0, 1e18]`, and their sum remains `1e18`. Also cover large trades near both boundaries and verify they cannot produce a price above the maximum one-credit payout.
-
-Phase B is intended to replace this with bounded Uniswap v4 LONG/SHORT hook pools (WaveHook.sol). Phase A remains the current deployed path.
+Admin may rescue only unallocated `protocolLiquiditySeed`. User deposits are accounted per round, and seed allocated to an existing round is not rescuable. External LP shares, deposits and claims are roadmap work; `QuantumLP` is an unused custody stub.
 
 ## Payout Formula
 Given:
@@ -97,7 +73,7 @@ Credits are a **per-proposal** allowance, not a shared budget: a user's claims i
 
 Earlier versions used one shared claim limit (`totalCreditsClaimed`) and counted every proposal's credits at redemption; that was removed in v2.
 
-## Vault (Phase A — superseded by the Phase B vault)
+## Vault
 WavefundVault:
 - Holds USDC and tETH
 - Issues transferable 18-decimal WAVE shares; admin bootstrap funding also receives shares at the current oracle-marked NAV (initially 1 USDC per share)
@@ -116,18 +92,20 @@ WavefundVault:
 ## Contract Dependencies
 ```
 QuantumRound
-  ├── ProposalTokens (clone factory for CREDIT/LONG/SHORT tokens)
-  ├── ConstantProductMarket (IProposalMarket — Phase A AMM)
-  └── ProposerRegistry (bond custody)
+  ├── ProposalTokens         (clones for CREDIT 6 dp / LONG, SHORT 18 dp)
+  ├── WaveV4ProposalMarket   (IProposalMarket: pools, seed, quotes, TWAP reads, unwind)
+  │     ├── Uniswap v4 PoolManager (0x2756…)
+  │     └── WaveHook         (registered pools, window gating, TWAP)
+  ├── ProposerRegistry       (bond custody, win records)
+  └── allocationSource = WavefundVault.currentTEthBps()
 
-Resolver → QuantumRound.settle()
-  └── only WavefundVault is granted RESOLVER_ROLE in the deployment
+Resolver → QuantumRound.settle()      (RESOLVER_ROLE held by the vault)
 
 WavefundVault
-  ├── IPoolManager (Uniswap v4, 0x2756...)
-  └── Resolver.submitReturn()
+  ├── Uniswap v4 PoolManager (USDC/tETH pool, no hook, fee 3000, tick spacing 60)
   ├── MockPriceOracle.latestPrice()
-  └── QuantumRound.cancelRound() on slippage breach
+  ├── Resolver.submitReturn()
+  └── QuantumRound.cancelRound() on a slippage breach (VAULT_ROLE)
 ```
 
 ## Key Constants
@@ -141,9 +119,9 @@ WavefundVault
 | MAX_ORACLE_AGE | 5 minutes | Maximum age accepted at trade execution/reporting |
 | maxSlippageBps | 500 | Maximum adverse swap slippage relative to oracle output |
 
-## Phase B Protocol-Owned Liquidity Design
+## Protocol-Owned Liquidity and Market Design
 
-Phase B v1 has one protocol-owned USDC reserve. `initialLiquidityPerProposal` is reserved once per proposal when the round opens or a proposal is added. It is not a depositor share pool and no external account receives an LP claim. Losing markets must be unwound at collapse; their residual LONG/SHORT inventory is burned or returned to the reserve, and their seed allocation is released back into `protocolLiquiditySeed`. The winning market's seed remains reserved for settlement. User credit and outcome-token liabilities are paid first; any remaining winning seed returns to the protocol reserve after all user liabilities have been redeemed. Seeded-market gains or losses belong to the protocol reserve.
+The live design has one protocol-owned USDC reserve. `initialLiquidityPerProposal` is reserved once per proposal when the round opens or a proposal is added. It is not a depositor share pool and no external account receives an LP claim. Losing markets must be unwound at collapse; their residual LONG/SHORT inventory is burned or returned to the reserve, and their seed allocation is released back into `protocolLiquiditySeed`. The winning market's seed remains reserved for settlement. User credit and outcome-token liabilities are paid first; any remaining winning seed returns to the protocol reserve after all user liabilities have been redeemed. Seeded-market gains or losses belong to the protocol reserve.
 
 Credits are six-decimal USDC-denominated units. LONG and SHORT are eighteen-decimal outcome tokens, so one credit maps to `1e12` raw units of each outcome token. A complete set is one LONG plus one SHORT. Phase B must preserve this conversion through every buy/sell, adapter unwind, and redemption. Proposal-token clones remain 18-decimal by default for Phase A compatibility; the Phase B factory must be configured to create six-decimal CREDIT tokens before its first clone.
 
@@ -152,8 +130,8 @@ The market adapter preserves the `IProposalMarket` boundary. QuantumRound remain
 The complete-set solvency invariant is:
 
 ```text
-unclaimed deposits
-+ outstanding credits across all proposals
+unclaimed deposits (deposit − claimed[winner])
++ outstanding credits of the winning proposal only
 + winning LONG/SHORT scalar payout liabilities
 <= remaining round deposits + winning protocol seed
 ```
@@ -161,32 +139,6 @@ unclaimed deposits
 Every redemption reduces both outstanding user liability and reserved collateral. Only after the final user liability reaches zero may the unused reserve be returned to `protocolLiquiditySeed`. Losing proposal LONG/SHORT tokens have no settlement value and must be burned on redemption. Credit tokens remain redeemable at par.
 
 External LP shares/claims, cross-proposal LP accounting, fee distribution, migration of LP positions, and user-selectable liquidity ranges are explicitly out of scope for v1 and remain roadmap work. The deployed Phase A `QuantumLP` stub is not wired into this design.
-
-### Phase B implementation and deployment gates
-
-1. Implement and test the v4 adapter, complete-set flows, adapter-only bounded liquidity, collapse unwind, and seed accounting without changing deployment files.
-2. Fuzz solvency across deposits, claims, buys/sells, settlement extremes, and partial redemption; include the bounded/complementary probability regression.
-3. Keep Phase A deployment addresses, frontend addresses, and open rounds unchanged while the Phase B implementation is local-only.
-4. Present a coordinated Phase B deployment/migration plan. Do not deploy or replace the current market until separately approved.
-5. Update the keeper for the new market lifecycle only after the adapter and tests pass.
-
-### Phase B compatibility spike
-
-Phase B deploys one shared `WaveHook` for the adapter. `DeployWaveHook.s.sol` mines its CREATE2 salt off-chain with v4 `HookMiner`; neither QuantumRound nor the adapter searches for salts. The adapter registers every pool by `PoolId`, including its round, proposal, LONG token, trading window, and final TWAP window. Swaps and liquidity changes require a registered pool and are adapter-only during that pool's trading window; adapter-only liquidity removal is permitted after that pool closes. Positions stay within ticks `[-45900, 45900]`, corresponding to the intended probability range near 0.01–0.99 at tick spacing 60. `afterSwap` records separate price and probability time integrals for each pool.
-
-The standalone Arc compatibility deployment is a throwaway single-pool test and is not the shared Phase B hook configuration. The current `current.json` remains the Phase A deployment config. Record the shared hook address there only as part of an explicitly approved Phase B deployment/cutover.
-
-For a LONG/SHORT pool, let `q` be the pool's marginal quote of SHORT tokens per LONG token. If LONG is currency0, `q = sqrtPriceX96² / 2¹⁹²`; if LONG is currency1, invert that ratio. The displayed probability is `pLong = q / (1 + q)`, and `pShort = 1 - pLong`. Therefore the probability boundaries 0.01 and 0.99 correspond to `q = 1/99` and `q = 99`, respectively. The UI's scalar implied return is `rMin + pLong × (rMax − rMin)`; it must show this bounded value separately from the execution quote for the requested trade.
-
-Phase B buy/sell accounting uses explicit units: one credit is 1 USDC-denominated credit (`1e6` raw units), while one LONG or SHORT is `1e18` raw token units. `ProposalTokens` now supports six-decimal CREDIT clones while LONG/SHORT remain eighteen-decimal. Buying LONG or SHORT must mint the matching complete-set inventory before the adapter swap; selling must burn the sold outcome, route it through the pool, redeem only matched complete sets for credits, and return unmatched outcome-token remainders to the seller. SHORT trades use the symmetric path. Any implementation must preserve minimum-output/slippage guarantees and must never create more collateral claims than deposits plus the reserved winning seed.
-
-The Phase B market adapter must preserve the current `IProposalMarket` entry points for QuantumRound and expose the same UI-facing price, quote, and TWAP reads through one market address/ABI. The frontend must not read PoolManager storage or make hook-specific calls directly; switching implementations should be limited to the deployment config and generated ABIs.
-
-The protocol reserve supplies complete sets as pool liquidity. User liabilities are settled before any protocol remainder; seed gains or losses are borne by the reserve. Because liquidity removal is adapter-only, the adapter must unwind positions when trading closes and return the resulting LONG/SHORT inventory for QuantumRound to account for. Winning-market user outcome balances settle through the round's scalar payout; losing-market outcome inventory has no user payout and is burned or returned to the reserve. External LP-share accounting and fee claims are not part of v1.
-
-`WaveV4ProposalMarket.sol` locally creates one bounded LONG/SHORT pool per proposal using the shared hook, routes complete-set buys/sells, unwinds positions after close, and returns outcome inventory to QuantumRound. Foundry tests cover multiple proposals and rounds sharing one hook, isolated per-pool TWAPs and trading windows, unregistered-pool rejection, the market lifecycle, and liability coverage. The deploy script mines the one shared hook address before broadcasting. Arc end-to-end integration, expanded solvency fuzzing, migration, deployment-config update, and production deployment remain separate gates.
-
-Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibility.t.sol --fork-url https://rpc.testnet.arc.io -vv`.
 
 ### Complete-set sell math (fixed)
 
@@ -206,25 +158,6 @@ Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibi
 ### Selection scale
 
 `IProposalMarket.probabilityTwap` returns the final-window LONG probability TWAP in `[0, 1e18]`. `QuantumRound.collapse` selects the winner on it: a proposal must beat the status quo's TWAP by `EPSILON = 0.005` (0.5 percentage points); otherwise the status quo wins. All bonds are refunded at collapse, whether or not the proposal won. `ConstantProductMarket` derives probability as `price / (1 + price)` from its price TWAP. `Collapsed` now emits probabilities.
-
-### Phase B deployment plan (executed; kept as the record of what was deployed)
-
-**New:** `ProposalTokens` (the live one has clones, so its credit decimals are locked at 18, and Phase B needs 6 via `setCreditDecimals(6)` before the first clone), `WaveV4ProposalMarket`, `WaveHook` (one shared), `QuantumRound`, `Resolver` (immutable round), `WavefundVault` (immutable round and resolver).
-
-**Reused:** `TestAsset` (tETH), `ProposerRegistry` (re-granted roles), `MockPriceOracle`, `QuantumLP` (re-granted role), PoolManager, USDC, the USDC/tETH pool.
-
-**Order:**
-1. `DeployPhaseB` forge script (to be written after approval; no USDC moves, so simulation works): `ProposalTokens`, `setCreditDecimals(6)`, market, round, resolver, vault.
-2. `DeployWaveHook.s.sol`: mines the salt off-chain, deploys the hook through the CREATE2 factory and calls `market.setWaveHook`. The market owner is still the deployer.
-3. `market.setQuantumRound(round)`, then `market.transferOwnership(round)`; `round.setResolver`.
-4. Roles: `QUANTUM_ROUND_ROLE` for the new round on `ProposalTokens`, `ProposerRegistry` and `QuantumLP`, revoked on `ProposerRegistry` and `QuantumLP` for the old round; `KEEPER_ROLE` on round and vault; `VAULT_ROLE` for the vault on the round; `RESOLVER_ROLE` for the vault on the resolver; `QUANTUM_ROUND_ROLE` for the round on the vault. Revoke the old vault's `VAULT_ROLE` on the old round.
-5. viem script (USDC moves): `setInitialLiquidityPerProposal`, approve and `addProtocolLiquiditySeed`, vault funding.
-6. Verify all new contracts on Sourcify; update `SOURCES.md`.
-7. Cutover: regenerate ABIs, update `current.json` and frontend config, switch keeper and demo scripts, then `npm run check:contracts`.
-
-**USDC:** seed `initialLiquidityPerProposal` x 4 proposals (recommended 5 USDC each, 20 USDC, with most returning to the reserve after collapse), bonds 1 USDC per proposer x 3 (always refunded at collapse), vault test deposit about 5 USDC, gas under 1 USDC. About 27 USDC in total; the deployer holds about 57 USDC.
-
-**Keeper and scripts:** `collapse` already calls `finalizeProposal` for every proposal, so no extra keeper transaction is needed, but the demo close script must call `collapse` after `tradingEnd` and before `settle`, check the market is finalised (pool liquidity zero), and read probabilities, not prices. `openRound` and `propose` cost about 1.5M gas each.
 
 ### Operating notes (live)
 
@@ -249,3 +182,70 @@ SHORT buys are symmetric. A 1 USDC trade moves pLong by 9.0 points at a 5 USDC s
 - **Migration:** a status-quo-only round on the old contracts processed queued withdrawals for every WAVE holder (two rounds, because the old vault cannot pay a withdrawal shortfall from tETH after the 0.3% swap fee), the reserve was rescued, and the old roles were revoked. See `deployments/demo-round.md`.
 - **Redeploy:** `ProposalTokens`, `WaveV4ProposalMarket`, `QuantumRound`, `Resolver`, `WavefundVault`, `WaveHook` are new; registry, oracle, tETH, `QuantumLP`, PoolManager and the USDC/tETH pool position are reused. `WirePhaseB` also sets `allocationSource = vault` and revokes the previous round's and vault's roles.
 - **Keeper:** `npm run keeper:run` collapses at trading end, runs the vault trade immediately (so evaluation measures a real period), then reports and settles at evaluation end.
+
+## History
+
+Superseded designs and deployment records, kept for reference only. Never act on the contracts described here.
+
+### Price Discovery (Phase A — superseded)
+Each proposal uses a constant-product market (x*y=k) where:
+- x = credit reserve (USDC units)
+- y = LONG reserve (token units)
+- The deployed contract's raw `spotPrice` is `creditReserve / longReserve`, scaled by `1e18`; it is credits per LONG token, starts at `1.0` with equal reserves, and is unbounded.
+- The UI maps that reserve ratio to a bounded LONG probability: `creditReserve / (creditReserve + longReserve)`. This is `q / (1 + q)` for raw spot ratio `q`; it starts at `0.5` and rises when LONG is bought. The scalar implied return is `rMin + p * (rMax - rMin)`, displayed as a percentage change from 1.0.
+- SHORT trades are fixed 1:1 in this Phase A contract, constrained by the market's credit reserve on buys and `shortIssued` on sells; they are not reserve-priced CPMM swaps.
+- Fee = 0.3% (30 bps)
+- TWAP accumulates: price * elapsed_seconds, updated on each trade
+
+For example, the recorded raw spot `1.673306965668276829` is `1.6733` credits per LONG token (not LONG per credit). The bounded UI probability is `1.6733 / (1 + 1.6733) = 0.6259`. With `rMin = 0.95` and `rMax = 1.05`, the scalar implied return is `0.95 + 0.6259 * (1.05 - 0.95) = 1.01259`, or `+1.26%`. At `p = 0.5`, it is exactly `0.00%`.
+
+This UI conversion does not cap the actual CPMM execution cost: a LONG share can cost more than its maximum one-credit settlement payout. The deployed market is immutable through the current QuantumRound, so correcting execution pricing requires a new bounded binary-market implementation and a coordinated deployment/migration; clamping `spotPrice` alone would only conceal the issue. A replacement market should use complementary LONG/SHORT collateral and a bounded pricing curve (for example LMSR).
+
+The replacement market's regression suite should include `test_LongProbabilityIsBoundedAndComplementary`: seed a market, record LONG and SHORT probabilities, buy LONG, then assert the LONG probability increased, both prices remain in `[0, 1e18]`, and their sum remains `1e18`. Also cover large trades near both boundaries and verify they cannot produce a price above the maximum one-credit payout.
+
+Phase B is intended to replace this with bounded Uniswap v4 LONG/SHORT hook pools (WaveHook.sol). Phase A remains the current deployed path.
+
+#### Phase B implementation and deployment gates
+
+1. Implement and test the v4 adapter, complete-set flows, adapter-only bounded liquidity, collapse unwind, and seed accounting without changing deployment files.
+2. Fuzz solvency across deposits, claims, buys/sells, settlement extremes, and partial redemption; include the bounded/complementary probability regression.
+3. Keep Phase A deployment addresses, frontend addresses, and open rounds unchanged while the Phase B implementation is local-only.
+4. Present a coordinated Phase B deployment/migration plan. Do not deploy or replace the current market until separately approved.
+5. Update the keeper for the new market lifecycle only after the adapter and tests pass.
+
+#### Phase B compatibility spike
+
+Phase B deploys one shared `WaveHook` for the adapter. `DeployWaveHook.s.sol` mines its CREATE2 salt off-chain with v4 `HookMiner`; neither QuantumRound nor the adapter searches for salts. The adapter registers every pool by `PoolId`, including its round, proposal, LONG token, trading window, and final TWAP window. Swaps and liquidity changes require a registered pool and are adapter-only during that pool's trading window; adapter-only liquidity removal is permitted after that pool closes. Positions stay within ticks `[-45900, 45900]`, corresponding to the intended probability range near 0.01–0.99 at tick spacing 60. `afterSwap` records separate price and probability time integrals for each pool.
+
+The standalone Arc compatibility deployment is a throwaway single-pool test and is not the shared Phase B hook configuration. The current `current.json` remains the Phase A deployment config. Record the shared hook address there only as part of an explicitly approved Phase B deployment/cutover.
+
+For a LONG/SHORT pool, let `q` be the pool's marginal quote of SHORT tokens per LONG token. If LONG is currency0, `q = sqrtPriceX96² / 2¹⁹²`; if LONG is currency1, invert that ratio. The displayed probability is `pLong = q / (1 + q)`, and `pShort = 1 - pLong`. Therefore the probability boundaries 0.01 and 0.99 correspond to `q = 1/99` and `q = 99`, respectively. The UI's scalar implied return is `rMin + pLong × (rMax − rMin)`; it must show this bounded value separately from the execution quote for the requested trade.
+
+Phase B buy/sell accounting uses explicit units: one credit is 1 USDC-denominated credit (`1e6` raw units), while one LONG or SHORT is `1e18` raw token units. `ProposalTokens` now supports six-decimal CREDIT clones while LONG/SHORT remain eighteen-decimal. Buying LONG or SHORT must mint the matching complete-set inventory before the adapter swap; selling must burn the sold outcome, route it through the pool, redeem only matched complete sets for credits, and return unmatched outcome-token remainders to the seller. SHORT trades use the symmetric path. Any implementation must preserve minimum-output/slippage guarantees and must never create more collateral claims than deposits plus the reserved winning seed.
+
+The Phase B market adapter must preserve the current `IProposalMarket` entry points for QuantumRound and expose the same UI-facing price, quote, and TWAP reads through one market address/ABI. The frontend must not read PoolManager storage or make hook-specific calls directly; switching implementations should be limited to the deployment config and generated ABIs.
+
+The protocol reserve supplies complete sets as pool liquidity. User liabilities are settled before any protocol remainder; seed gains or losses are borne by the reserve. Because liquidity removal is adapter-only, the adapter must unwind positions when trading closes and return the resulting LONG/SHORT inventory for QuantumRound to account for. Winning-market user outcome balances settle through the round's scalar payout; losing-market outcome inventory has no user payout and is burned or returned to the reserve. External LP-share accounting and fee claims are not part of v1.
+
+`WaveV4ProposalMarket.sol` locally creates one bounded LONG/SHORT pool per proposal using the shared hook, routes complete-set buys/sells, unwinds positions after close, and returns outcome inventory to QuantumRound. Foundry tests cover multiple proposals and rounds sharing one hook, isolated per-pool TWAPs and trading windows, unregistered-pool rejection, the market lifecycle, and liability coverage. The deploy script mines the one shared hook address before broadcasting. Arc end-to-end integration, expanded solvency fuzzing, migration, deployment-config update, and production deployment remain separate gates.
+
+Compatibility command: `forge test --match-path contracts/test/WaveHookCompatibility.t.sol --fork-url https://rpc.testnet.arc.io -vv`.
+
+#### Phase B deployment plan (executed; kept as the record of what was deployed)
+
+**New:** `ProposalTokens` (the live one has clones, so its credit decimals are locked at 18, and Phase B needs 6 via `setCreditDecimals(6)` before the first clone), `WaveV4ProposalMarket`, `WaveHook` (one shared), `QuantumRound`, `Resolver` (immutable round), `WavefundVault` (immutable round and resolver).
+
+**Reused:** `TestAsset` (tETH), `ProposerRegistry` (re-granted roles), `MockPriceOracle`, `QuantumLP` (re-granted role), PoolManager, USDC, the USDC/tETH pool.
+
+**Order:**
+1. `DeployPhaseB` forge script (to be written after approval; no USDC moves, so simulation works): `ProposalTokens`, `setCreditDecimals(6)`, market, round, resolver, vault.
+2. `DeployWaveHook.s.sol`: mines the salt off-chain, deploys the hook through the CREATE2 factory and calls `market.setWaveHook`. The market owner is still the deployer.
+3. `market.setQuantumRound(round)`, then `market.transferOwnership(round)`; `round.setResolver`.
+4. Roles: `QUANTUM_ROUND_ROLE` for the new round on `ProposalTokens`, `ProposerRegistry` and `QuantumLP`, revoked on `ProposerRegistry` and `QuantumLP` for the old round; `KEEPER_ROLE` on round and vault; `VAULT_ROLE` for the vault on the round; `RESOLVER_ROLE` for the vault on the resolver; `QUANTUM_ROUND_ROLE` for the round on the vault. Revoke the old vault's `VAULT_ROLE` on the old round.
+5. viem script (USDC moves): `setInitialLiquidityPerProposal`, approve and `addProtocolLiquiditySeed`, vault funding.
+6. Verify all new contracts on Sourcify; update `SOURCES.md`.
+7. Cutover: regenerate ABIs, update `current.json` and frontend config, switch keeper and demo scripts, then `npm run check:contracts`.
+
+**USDC:** seed `initialLiquidityPerProposal` x 4 proposals (recommended 5 USDC each, 20 USDC, with most returning to the reserve after collapse), bonds 1 USDC per proposer x 3 (always refunded at collapse), vault test deposit about 5 USDC, gas under 1 USDC. About 27 USDC in total; the deployer holds about 57 USDC.
+
+**Keeper and scripts:** `collapse` already calls `finalizeProposal` for every proposal, so no extra keeper transaction is needed, but the demo close script must call `collapse` after `tradingEnd` and before `settle`, check the market is finalised (pool liquidity zero), and read probabilities, not prices. `openRound` and `propose` cost about 1.5M gas each.
