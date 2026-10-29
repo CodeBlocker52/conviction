@@ -139,7 +139,7 @@ A forecaster who never traded in the winning market ends the round with exactly 
 | $T_d$, $h$ | Decision time, and evaluation horizon |
 | $R$ | Realised vault return, $R = \mathrm{NAV}(T_d + h) / \mathrm{NAV}(T_d)$ |
 | $[R_{\min}, R_{\max}]$ | The scalar range for the round, e.g. $[0.95, 1.05]$ for a 30-minute demo round |
-| $p_i$ | Bounded LONG probability for proposal $i$, between 0 and 1; the raw CPMM spot is a separate, unbounded credits-per-LONG value |
+| $p_i$ | Bounded LONG probability for proposal $i$, between 0 and 1 |
 
 ### Credits and complete sets
 
@@ -195,7 +195,7 @@ Trades in losing proposals have no effect on PnL.
 
 ### Price impact and manipulation cost
 
-Each proposal pool is planned as a bounded Uniswap v4 LONG/SHORT pool, with protocol-owned liquidity $L$ over the price range. Moving the LONG price from $p_a$ to $p_b$ costs:
+Each proposal uses a bounded Uniswap v4 LONG/SHORT pool, with protocol-owned liquidity $L$ over the price range. Moving the LONG price from $p_a$ to $p_b$ costs:
 
 $$
 \Delta y = L \left( \sqrt{p_b} - \sqrt{p_a} \right) \ \text{credits}
@@ -424,22 +424,22 @@ function navPerShare() external view returns (uint256);
 
 ## Uniswap v4 integration
 
-Uniswap v4 does three jobs. Line numbers refer to the current commit.
+Uniswap v4 does three jobs. Source links are pinned to commit `cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37`.
 
 | What | Where |
 |---|---|
-| **Hook permissions** (before/after swap, before add/remove liquidity) | [`WaveHook.sol` L81–98](contracts/src/WaveHook.sol#L81) |
-| **Pool registration** (round, proposal, LONG token, trading window, TWAP window; required fee and tick spacing) | [`WaveHook.sol` L100–135](contracts/src/WaveHook.sol#L100) |
-| **Swap and liquidity gating** (adapter-only, trading window, probability bounds, range limits) | [`_beforeAddLiquidity` L192](contracts/src/WaveHook.sol#L192), [`_beforeRemoveLiquidity` L209](contracts/src/WaveHook.sol#L209), [`_beforeSwap` L226](contracts/src/WaveHook.sol#L226) |
-| **Final-window TWAP** (probability and price integrals updated in `afterSwap`; read as `finalWindowTwap`) | [`_afterSwap` L238–258](contracts/src/WaveHook.sol#L238), [`finalWindowTwap` L170](contracts/src/WaveHook.sol#L170) |
-| **Hook address mining** (CREATE2 salt via `HookMiner`) | [`DeployWaveHook.s.sol`](contracts/script/DeployWaveHook.s.sol) |
-| **Pool creation and seeding** (`poolManager.initialize`, then a single-range `modifyLiquidity`) | [`seedLiquidity` L441–480](contracts/src/WaveV4ProposalMarket.sol#L441) |
-| **Trades** (`unlock` → `swap` / `modifyLiquidity` → `sync` / `settle` / `take`) | [`unlockCallback` L533](contracts/src/WaveV4ProposalMarket.sol#L533), [`_settleOrTake` L618](contracts/src/WaveV4ProposalMarket.sol#L618) |
-| **Complete-set buys and sells** (swap part of the sold side so the remainder pairs with the received side, burn matched sets) | [`tradeBuyLong` L152](contracts/src/WaveV4ProposalMarket.sol#L152), [`_tradeSell` L249](contracts/src/WaveV4ProposalMarket.sol#L249) |
-| **Exact quotes** (replays `SwapMath` against the single position; the frontend uses these for minimum outputs) | [`quoteBuyLong` L214](contracts/src/WaveV4ProposalMarket.sol#L214), [`_simulate` L344](contracts/src/WaveV4ProposalMarket.sol#L344) |
-| **Unwinding losing markets** at collapse | [`finalizeProposal` L510](contracts/src/WaveV4ProposalMarket.sol#L510) |
-| **The vault's trade** (winner allocation swapped in the USDC/tETH pool, with an oracle-relative slippage cap) | [`executeTrade` L444](contracts/src/WavefundVault.sol#L444), [`performTrade` L504](contracts/src/WavefundVault.sol#L504), [`unlockCallback` L625](contracts/src/WavefundVault.sol#L625) |
-| **Pool management** (±20% concentrated position owned by the deployer) | [`pool-recenter.mjs`](contracts/script/pool-recenter.mjs) |
+| **Hook permissions** (before/after swap, before add/remove liquidity) | [`WaveHook.sol` L81–98](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveHook.sol#L81) |
+| **Pool registration** (round, proposal, LONG token, trading window, TWAP window; required fee and tick spacing) | [`WaveHook.sol` L100–135](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveHook.sol#L100) |
+| **Swap and liquidity gating** (adapter-only, trading window, probability bounds, range limits) | [`_beforeAddLiquidity` L192](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveHook.sol#L192), [`_beforeRemoveLiquidity` L209](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveHook.sol#L209), [`_beforeSwap` L226](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveHook.sol#L226) |
+| **Final-window TWAP** (probability and price integrals updated in `afterSwap`; read as `finalWindowTwap`) | [`_afterSwap` L238–258](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveHook.sol#L238), [`finalWindowTwap` L170](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveHook.sol#L170) |
+| **Hook address mining** (CREATE2 salt via `HookMiner`) | [`DeployWaveHook.s.sol`](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/script/DeployWaveHook.s.sol) |
+| **Pool creation and seeding** (`poolManager.initialize`, then a single-range `modifyLiquidity`) | [`seedLiquidity` L441–480](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveV4ProposalMarket.sol#L441) |
+| **Trades** (`unlock` → `swap` / `modifyLiquidity` → `sync` / `settle` / `take`) | [`unlockCallback` L533](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveV4ProposalMarket.sol#L533), [`_settleOrTake` L618](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveV4ProposalMarket.sol#L618) |
+| **Complete-set buys and sells** (swap part of the sold side so the remainder pairs with the received side, burn matched sets) | [`tradeBuyLong` L152](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveV4ProposalMarket.sol#L152), [`_tradeSell` L249](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveV4ProposalMarket.sol#L249) |
+| **Exact quotes** (replays `SwapMath` against the single position; the frontend uses these for minimum outputs) | [`quoteBuyLong` L214](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveV4ProposalMarket.sol#L214), [`_simulate` L344](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveV4ProposalMarket.sol#L344) |
+| **Unwinding losing markets** at collapse | [`finalizeProposal` L510](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WaveV4ProposalMarket.sol#L510) |
+| **The vault's trade** (winner allocation swapped in the USDC/tETH pool, with an oracle-relative slippage cap) | [`executeTrade` L444](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WavefundVault.sol#L444), [`performTrade` L504](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WavefundVault.sol#L504), [`unlockCallback` L625](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/src/WavefundVault.sol#L625) |
+| **Pool management** (−10% / +20% concentrated position owned by the deployer) | [`pool-recenter.mjs`](https://github.com/CodeBlocker52/conviction/blob/cdb417abd87ae4bfb8483c8b7212e78ce6a4ec37/conviction/contracts/script/pool-recenter.mjs) |
 
 Our experience building on v4 and Arc is written up in [`FEEDBACK.md`](FEEDBACK.md).
 
@@ -458,7 +458,7 @@ Arc is Circle's stablecoin-native L1. Uniswap's full v4 stack (the AMM, pools, r
 | **`PREVRANDAO` always returns 0.** | We use no on-chain randomness. |
 | **Sub-second finality.** | Collapse and execution can run in consecutive blocks with no confirmation wait. |
 
-**Tooling:** Arc Foundry (`arc-forge`, `arc-anvil --network arc`), which mirrors Arc's protocol differences locally, unlike standard Anvil.
+**Tooling:** Foundry (`forge`) builds and tests the Solidity contracts. `npm run build` runs the deployment/ABI checks and Next.js production build. Arc USDC-moving operations use the project's viem scripts against the RPC because Forge simulation does not support Arc's blocklist precompile.
 
 **Addresses:** the Uniswap v4 PoolManager and the rest of the deployment are in `contracts/deployments/current.json`; external Arc contracts are listed in `SOURCES.md`.
 
@@ -554,7 +554,7 @@ npm run e2e:live       # Playwright against production (or E2E_URL=...)
 forge test             # 218 tests (run from this folder; needs ~/.foundry/bin on PATH)
 ```
 
-`.env` (never committed) holds the deployer and keeper keys (`PRIVATE_KEY`, `KEEPER_PK`) and optional `NEXT_PUBLIC_ARC_RPC_URL`.
+`.env` (never committed) holds `DEPLOYER_PK`, `DEPLOYER_ADDR`, `KEEPER_PK`, `KEEPER_ADDR`, `ARC_TESTNET_RPC`, and `BLOCKSCOUT_API_KEY`. The frontend RPC override is `NEXT_PUBLIC_ARC_RPC_URL`.
 
 **Frontend.** `/` is the landing page. `/demo` has Markets, Vault, Portfolio, Agents and How it works. A **Use on-chain data** toggle switches from the simulated workspace (mock mode, 10,000 demo USDC, state in local storage, **Reset demo** to clear) to live mode, which reads Arc testnet through plain viem (multicall, 30 s polling, public RPC with the wallet as primary) and writes through `window.ethereum`. No wagmi.
 

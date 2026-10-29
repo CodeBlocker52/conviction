@@ -161,7 +161,7 @@ External LP shares/claims, cross-proposal LP accounting, fee distribution, migra
 
 ### Operating notes (live)
 
-- The USDC/tETH pool carries a concentrated ±20% position owned through the v4 callback (deployer-controlled); `npm run pool:recenter -- --execute` re-aligns it before each demo and `--remove` recovers the funds. `demo:open-round` refuses to open if the pool is more than 0.5% off the oracle.
+- The USDC/tETH pool carries a concentrated −10% / +20% position owned through the v4 callback (deployer-controlled); `npm run pool:recenter -- --execute` re-aligns it before each demo and `--remove` recovers the funds. `demo:open-round` refuses to open if the pool is more than 0.5% off the oracle.
 - Frontend reads go through Multicall3 (`0xcA11bde05977b3631167028862bE2a173976CA11`, deployed on Arc), a wallet-first fallback transport with exponential backoff, and 30-second visibility-aware polling.
 
 ### Bond policy (v1) and roadmap
