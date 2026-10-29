@@ -9,3 +9,8 @@ yarn-debug.log*
 pnpm-debug.log*
 .env
 .env*.local
+.env.tmp
+agents/logs/
+agents/.runtime-state.json*
+agents/.runtime.lock
+agents/agents.json.tmp

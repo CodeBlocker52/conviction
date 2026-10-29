@@ -13,11 +13,15 @@
     "demo:open-round": "node --env-file=.env contracts/script/demo-open-round.mjs",
     "demo:close-round": "node --env-file=.env contracts/script/demo-close-round.mjs",
     "keeper:run": "node --env-file=.env contracts/script/keeper-run.mjs",
+    "agents:setup": "node --env-file=.env agents/setup-wallets.mjs",
+    "agents:run": "node --env-file=.env agents/run.mjs",
+    "test:agents": "node --test agents/*.test.mjs",
     "oracle:update": "node --env-file=.env contracts/script/update-oracle.mjs",
     "oracle:start": "node --env-file=.env contracts/script/update-oracle.mjs start",
     "oracle:stop": "node --env-file=.env contracts/script/update-oracle.mjs stop"
   },
   "dependencies": {
+    "@circle-fin/developer-controlled-wallets": "^10.8.1",
     "@openzeppelin/contracts": "^5.1.0",
     "@uniswap/permit2-sdk": "^1.4.1",
     "@uniswap/v4-core": "^1.0.2",

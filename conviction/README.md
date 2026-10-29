@@ -255,7 +255,7 @@ The reference resolves outcomes with a single signer's signature. Wavefund's ret
 
 ## Agents
 
-> **Status:** the agent runtime is not built yet. Proposals are currently created by the deployer and keeper wallets (registered in `ProposerRegistry`). The table below is the planned design.
+> **Status:** Step 2 runtime scaffolding is implemented; strategy decisions and live agent actions remain deferred to Steps 3 and 4. Proposals are currently created by the deployer and keeper wallets (registered in `ProposerRegistry`).
 
 Each agent is a participant with money at stake.
 
@@ -265,9 +265,9 @@ Each agent is a participant with money at stake.
 | **Mean-reversion proposer** | Proposes allocations that fade large moves | Distance from moving average, volatility | Proposal bond |
 | **News proposer** | Proposes allocations from a short LLM read of market news | LLM summary plus a fixed rubric | Proposal bond |
 | **Quant forecaster** | Trades every proposal's market | Expected return under each allocation, from current price and volatility | Forecasting deposit |
-| **LLM forecaster** | Trades every proposal's market | LLM reasoning over proposals and rationales | Forecasting deposit |
+| **Guardian forecaster** | Trades every proposal's market | Monitors probabilities for manipulation and responds near the final TWAP window | Forecasting deposit |
 
-Each agent is planned to have its own **Circle developer-controlled wallet** on Arc (roadmap). Every proposal carries a short rationale, shown in the UI, so judges and depositors can see *why* an agent wanted a trade.
+Each agent will have its own **Circle developer-controlled wallet** on Arc. `npm run agents:setup` provisions five unfunded Arc Testnet EOAs, records public addresses in `agents/agents.json`, and stores Circle wallet IDs in the ignored `.env`. No wallets have been created or funded yet. `npm run agents:run -- --dry-run` only reports scheduled evaluations; live actions are separately gated and not implemented yet.
 
 The leaderboard tracks each agent's record: proposals won, realised return of its winning proposals, and forecasting PnL. Over time the best agents accumulate capital and influence; weak ones lose deposits. That is the paper's point about decision markets being the right substrate for AI agents, made concrete.
 
@@ -474,7 +474,7 @@ Wavefund is a trading app with USDC settlement end to end: vault, decision marke
 |---|---|
 | Built in Arc Studio | The scaffold, frontend and contracts started in Arc Studio and were extended locally. |
 | Working frontend and backend, plus an architecture diagram | Next.js app, keeper and scripts, verified contracts on Arc testnet; diagram above |
-| Circle tools | USDC as gas and settlement, Circle faucet. Circle developer-controlled wallets for agents are roadmap work. |
+| Circle tools | USDC as gas and settlement, Circle faucet, and a user-run setup command for Circle developer-controlled agent wallets. |
 
 ### Uniswap Foundation: "Build with Uniswap" ($10,000, four places)
 
@@ -537,7 +537,7 @@ If we want to reuse any reference code, we ask the authors for permission first 
 | Decision rounds, v4 hook proposal markets (0.01–0.99, complete-set mint/redeem), TWAP selection, per-proposal credits, the vault's trade through the v4 pool, settlement and redemption, all verified on the Arc explorer | tETH is a mock token and the USDC/tETH pool is funded by us |
 | ETH/USD marks are stored on chain in `MockPriceOracle` | The price comes from Coinbase's public API via our keeper; no decentralised feed (Pyth/Chainlink/Stork) and no CRE are used |
 | The vault trades through Arc's Uniswap v4 PoolManager with a 500 bps oracle-relative slippage cap; a concentrated −10% / +20% position keeps the pool near the oracle price | The pool must be re-centred (`npm run pool:recenter -- --execute`) before demos, and the position is owned by the deployer |
-| USDC deposits, payouts and gas | All proposals and trades in the demo come from our own wallets unless outsiders join; there are no AI agents yet |
+| USDC deposits, payouts and gas | Runtime scheduling exists, but no agent wallets are provisioned or funded and no live agent strategies are active |
 | Round resolution reported by the keeper from oracle-marked NAV | A trusted keeper, not a trust-minimised resolver |
 | Mock mode (frontend toggle) | Entirely simulated in the browser; nothing touches the chain |
 
@@ -551,10 +551,11 @@ npm run dev            # http://localhost:3000
 npm run build          # runs check:contracts, then next build
 npm run check:contracts   # code exists at every address, ABI selectors, roles, wiring
 npm run e2e:live       # Playwright against production (or E2E_URL=...)
+npm run test:agents    # Agent scheduling, signer safety and risk-model tests
 forge test             # 218 tests (run from this folder; needs ~/.foundry/bin on PATH)
 ```
 
-`.env` (never committed) holds `DEPLOYER_PK`, `DEPLOYER_ADDR`, `KEEPER_PK`, `KEEPER_ADDR`, `ARC_TESTNET_RPC`, and `BLOCKSCOUT_API_KEY`. The frontend RPC override is `NEXT_PUBLIC_ARC_RPC_URL`.
+`.env` (never committed) holds `DEPLOYER_PK`, `DEPLOYER_ADDR`, `KEEPER_PK`, `KEEPER_ADDR`, `ARC_RPC_URL`, `BLOCKSCOUT_API_KEY`, and (for user-run agent wallet setup) `CIRCLE_API_KEY` and `CIRCLE_ENTITY_SECRET`. The frontend RPC override is `NEXT_PUBLIC_ARC_RPC_URL`. Never print or commit credential values.
 
 **Frontend.** `/` is the landing page. `/demo` has Markets, Vault, Portfolio, Agents and How it works. A **Use on-chain data** toggle switches from the simulated workspace (mock mode, 10,000 demo USDC, state in local storage, **Reset demo** to clear) to live mode, which reads Arc testnet through plain viem (multicall, 30 s polling, public RPC with the wallet as primary) and writes through `window.ethereum`. No wagmi.
 
@@ -563,8 +564,10 @@ forge test             # 218 tests (run from this folder; needs ~/.foundry/bin o
 | Command | What it does |
 |---|---|
 | `npm run pool:recenter [-- --execute]` | Plans, then (with `--execute`) re-centres the USDC/tETH pool on the oracle price and re-adds a −10% / +20% position. `-- --remove` removes the position and returns the funds to the deployer. |
-| `npm run demo:open-round -- --minutes 30 --execute` | Checks pool depth and offset (refuses if more than 0.5% off the oracle), opens a round with three proposals, starts the oracle watcher |
-| `npm run keeper:run [-- --poll 15 --open-every <min> --window <min>]` | Collapses at trading end, **immediately** runs the vault trade, reports and settles at evaluation end; logs every tx; Ctrl+C stops cleanly |
+| `npm run agents:setup` | User-run Circle API setup: creates a wallet set and five unfunded `ARC-TESTNET` EOAs; stores public addresses in `agents/agents.json` and wallet IDs in `.env` |
+| `npm run agents:run -- --dry-run --poll 10` | Reads the current round and reports proposer/forecaster evaluation schedules; no signing or submission |
+| `npm run demo:open-round -- --minutes 30 --execute` | Checks pool depth, offset, candles and protocol seed; opens status quo only with a 10-minute evaluation horizon and fresh volatility-derived bounds. `--with-demo-proposals` opts in to legacy deployer/keeper proposals. |
+| `npm run keeper:run [-- --poll 15 --open-every <min> --window <min> --horizon 600]` | Collapses at trading end, **immediately** runs the vault trade, reports and settles at evaluation end; new rounds default to 10-minute evaluation and candle-derived bounds; logs every tx; Ctrl+C stops cleanly |
 | `npm run demo:close-round -- --execute` | Manual equivalent of the keeper (collapse, trade, settle) |
 | `npm run oracle:update` / `oracle:start` / `oracle:stop` | Push the Coinbase price on chain once, or run the 60 s watcher |
 
@@ -572,7 +575,7 @@ forge test             # 218 tests (run from this folder; needs ~/.foundry/bin o
 
 Vault: `0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137` · QuantumRound: `0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A` (full table in `SOURCES.md`).
 
-1. Operator: `npm run pool:recenter`, then `-- --execute` if needed; `npm run demo:open-round -- --minutes 30 --execute`; start `npm run keeper:run`.
+1. Operator: `npm run pool:recenter`, then `-- --execute` if needed; `npm run demo:open-round -- --minutes 30 --with-demo-proposals --execute`; start `npm run keeper:run`.
 2. Open `/demo`, switch to **Use on-chain data**, connect MetaMask (Arc Testnet, chain `5042002`, is added automatically). The header shows your ERC-20 USDC balance (6 decimals).
 3. In Markets, **deposit 1 USDC**. Claim credits: each proposal says "Up to 1.00 credits for this proposal"; claim 1 credit in **every** proposal from the one deposit. A second claim in the same proposal is refused.
 4. Buy LONG on one proposal and SHORT on another. The ticket shows amount in, expected out (from the adapter's `quote*`), average price, price impact and pLong after; minimum output is the quote less 0.5%. Sell part of each; the credits received match the quote within 0.5%.

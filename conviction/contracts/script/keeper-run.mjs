@@ -1,6 +1,6 @@
 // Keeper service: drives every round through its lifecycle automatically.
 //
-//   npm run keeper:run -- [--poll 15] [--open-every 60 --window 30 --horizon 300]
+//   npm run keeper:run -- [--poll 15] [--open-every 60 --window 30 --horizon 600]
 //
 // While a round is active it runs the oracle watcher (60 s price updates). It then
 //   (a) collapses as soon as trading ends,
@@ -24,6 +24,7 @@ import {
   usdc,
   walletClientFor,
 } from "./demo-round-common.mjs";
+import { calculateRiskModel, fetchRecentEthCandles } from "../../agents/market-data.mjs";
 
 const { contracts } = deployment;
 const args = process.argv.slice(2);
@@ -34,8 +35,20 @@ const opt = (name, fallback) => {
 const pollSeconds = opt("poll", 15);
 const openEveryMinutes = opt("open-every", 0);
 const windowMinutes = opt("window", 30);
-const horizonSeconds = opt("horizon", 300);
+const horizonSeconds = opt("horizon", 600);
 const TWAP_WINDOW = 60;
+if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
+  throw new Error("--poll must be a whole number between 1 and 300 seconds.");
+}
+if (!Number.isInteger(openEveryMinutes) || openEveryMinutes < 0) {
+  throw new Error("--open-every must be a nonnegative whole number of minutes.");
+}
+if (!Number.isInteger(windowMinutes) || windowMinutes < 3 || windowMinutes > 1_440) {
+  throw new Error("--window must be between 3 and 1440 whole minutes.");
+}
+if (!Number.isInteger(horizonSeconds) || horizonSeconds < 60 || horizonSeconds > 86_400) {
+  throw new Error("--horizon must be between 60 and 86400 whole seconds.");
+}
 
 const vaultAbi = parseAbi([
   "function executeTrade(uint256,uint16)",
@@ -144,11 +157,15 @@ async function step() {
       return;
     }
     const block = await publicClient.getBlock({ blockTag: "latest" });
+    const riskModel = calculateRiskModel(await fetchRecentEthCandles(), horizonSeconds);
+    log(
+      `Opening with ${horizonSeconds}s evaluation horizon; recent ${riskModel.sampleCount}-return 1m volatility gives ±${(riskModel.bandBps / 100).toFixed(2)}% bounds (raw 3σ ${(riskModel.rawBandBps / 100).toFixed(2)}%).`,
+    );
     await tx(`Open round ${roundCount + 1n} (${windowMinutes} min window)`, contracts.quantumRound, roundAbi, "openRound", [
       block.timestamp + BigInt(windowMinutes * 60),
       BigInt(horizonSeconds),
-      950_000_000_000_000_000n,
-      1_050_000_000_000_000_000n,
+      riskModel.rMin,
+      riskModel.rMax,
       TWAP_WINDOW,
     ]);
     log("Round opened with the status-quo market only; proposers add theirs before the window closes.");

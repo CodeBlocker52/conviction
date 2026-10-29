@@ -1,0 +1,34 @@
+{
+  "agents": [
+    {
+      "address": null,
+      "name": "Momentum",
+      "type": "proposer",
+      "description": "Proposes tETH allocations from recent price momentum."
+    },
+    {
+      "address": null,
+      "name": "Mean-reversion",
+      "type": "proposer",
+      "description": "Proposes tETH allocations from price deviations and volatility."
+    },
+    {
+      "address": null,
+      "name": "News",
+      "type": "proposer",
+      "description": "Proposes tETH allocations using recent headlines and market data."
+    },
+    {
+      "address": null,
+      "name": "Quant",
+      "type": "forecaster",
+      "description": "Estimates fair proposal probabilities from allocation and market risk."
+    },
+    {
+      "address": null,
+      "name": "Guardian",
+      "type": "forecaster",
+      "description": "Monitors proposal probabilities for material market manipulation."
+    }
+  ]
+}

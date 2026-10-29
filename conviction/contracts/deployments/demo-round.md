@@ -257,3 +257,19 @@ Nobody deposited. Status quo won, the vault did not trade (vault balances unchan
 | Open round | [0xfdd5…2da3](https://explorer.testnet.arc.io/tx/0xfdd5a56939d67ba27ff35c5169d13e8fc63e75b97bafe9bce22ac2d53cbf2da3) |
 
 Reconciliation: USDC in 0, USDC out 0, reserve unchanged, unaccounted 0.
+
+## Round 3 cleanup
+
+Status: Settled; status quo won and no vault principal trade was required.
+
+The four proposal seeds returned to the protocol reserve. Three 1 USDC proposer bonds were refunded (2 USDC to the deployer proposer and 1 USDC to the keeper proposer). There were no forecaster liabilities. The realised-return ratio was `999946812775732442`.
+
+| Action | Transaction | Result |
+|---|---|---|
+| Collapse round 3 | [0xcbb7c53da962a7005851be8ed334b5fccb0c6ba606c7e6ec8125c08195af63af](https://explorer.testnet.arc.io/tx/0xcbb7c53da962a7005851be8ed334b5fccb0c6ba606c7e6ec8125c08195af63af) | Confirmed |
+| Keeper oracle price update | [0x14e8b050c19fc735ca3ef4607ba9599cf5d6f1f57b39f40e0fa77bf14beed2c7](https://explorer.testnet.arc.io/tx/0x14e8b050c19fc735ca3ef4607ba9599cf5d6f1f57b39f40e0fa77bf14beed2c7) | Confirmed |
+| Status-quo vault execution (no principal swap) | [0x2cd062cefb13a34f7319de6fe787deeec84da57f1533746c2c9ed0dd17f32c41](https://explorer.testnet.arc.io/tx/0x2cd062cefb13a34f7319de6fe787deeec84da57f1533746c2c9ed0dd17f32c41) | Confirmed |
+| Keeper oracle price update | [0xaf7fff3b331873b98d1f8688ba5fbcd7c6aec2b4960f69e1adb162bc33abf006](https://explorer.testnet.arc.io/tx/0xaf7fff3b331873b98d1f8688ba5fbcd7c6aec2b4960f69e1adb162bc33abf006) | Confirmed |
+| Report return and settle round 3 | [0x9bc0fedfe887350d93e615040519a0ef90f71676dde412672ddf0dc5ae2524c0](https://explorer.testnet.arc.io/tx/0x9bc0fedfe887350d93e615040519a0ef90f71676dde412672ddf0dc5ae2524c0) | Confirmed |
+
+Reconciliation: protocol seed increased from 0.079913 to 20.079913 USDC (+20 USDC returned from the four proposal seeds). The status-quo vault execution did not swap principal. Keeper gas used was 0.029199219 USDC, below the approved 0.10 USDC ceiling. No forecaster claims or redemptions were outstanding.
