@@ -6,8 +6,8 @@ AI agents propose trades for a shared USDC vault. Traders forecast how the vault
 
 > **Event:** ETHGlobal Mumbai
 > **Chain:** Arc testnet (Circle's stablecoin-native L1, USDC as gas)
-> **Target prizes (ETHGlobal allows up to 3):** Arc "Best DeFi / Onchain Finance App Built End to End in Arc Studio", Uniswap Foundation "Build with Uniswap", Chainlink "Best workflow with CRE"
-> **Status:** Phase B v2 (Uniswap v4 hook proposal markets, per-proposal credit claims) is deployed, verified and smoke-tested on Arc Testnet, and the live frontend, keeper and demo scripts run against it. Phase A and the first Phase B deployment are superseded (see `contracts/deployments/SOURCES.md`).
+> **Target prizes:** Arc "Best DeFi / Onchain Finance App Built End to End in Arc Studio" and Uniswap Foundation "Build with Uniswap". Chainlink CRE is on the [roadmap](#roadmap), not built.
+> **Status:** Phase B v2 (Uniswap v4 hook proposal markets, per-proposal credit claims) is deployed, verified and smoke-tested on Arc Testnet, and the live frontend, keeper and demo scripts run against it. Earlier deployments are superseded (see `contracts/deployments/SOURCES.md`). Current vault: [`0x3AdB…e137`](https://explorer.testnet.arc.io/address/0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137#code).
 > **Based on:** "Quantum Markets" by Alpin Yukseloglu and Sofiane Larbi (Paradigm, June 2025). Implemented from scratch; see [Relationship to the reference implementation](#relationship-to-the-reference-implementation).
 
 ---
@@ -15,28 +15,31 @@ AI agents propose trades for a shared USDC vault. Traders forecast how the vault
 ## Contents
 
 1. [The pitch](#the-pitch)
-2. [The problem](#the-problem)
-3. [How Wavefund works](#how-wavefund-works)
-4. [The mechanism, step by step](#the-mechanism-step-by-step)
-5. [The maths](#the-maths)
-6. [Our improvements to the mechanism](#our-improvements-to-the-mechanism)
-7. [Agents](#agents)
-8. [Architecture](#architecture)
-9. [Round lifecycle](#round-lifecycle)
-10. [Smart contracts](#smart-contracts)
-11. [Building on Arc](#building-on-arc)
-12. [Sponsor alignment](#sponsor-alignment)
-13. [Relationship to the reference implementation](#relationship-to-the-reference-implementation)
-14. [Security and attack analysis](#security-and-attack-analysis)
-15. [What is real and what is simulated](#what-is-real-and-what-is-simulated)
-16. [Tech stack](#tech-stack)
-17. [Repository structure](#repository-structure)
-18. [Testing strategy](#testing-strategy)
-19. [Build plan](#build-plan)
-20. [Demo script](#demo-script)
-21. [Judge Q&A](#judge-qa)
-22. [Risks and open questions](#risks-and-open-questions)
-23. [References](#references)
+2. [Built and live on Arc testnet](#built-and-live-on-arc-testnet)
+3. [Roadmap](#roadmap)
+4. [The problem](#the-problem)
+5. [How Wavefund works](#how-wavefund-works)
+6. [The mechanism, step by step](#the-mechanism-step-by-step)
+7. [The maths](#the-maths)
+8. [Our improvements to the mechanism](#our-improvements-to-the-mechanism)
+9. [Agents](#agents)
+10. [Architecture](#architecture)
+11. [Round lifecycle](#round-lifecycle)
+12. [Smart contracts](#smart-contracts)
+13. [Uniswap v4 integration](#uniswap-v4-integration)
+14. [Building on Arc](#building-on-arc)
+15. [Sponsor alignment](#sponsor-alignment)
+16. [Relationship to the reference implementation](#relationship-to-the-reference-implementation)
+17. [Security and attack analysis](#security-and-attack-analysis)
+18. [What is real and what is simulated](#what-is-real-and-what-is-simulated)
+19. [Running it and testing it](#running-it-and-testing-it)
+20. [Tech stack](#tech-stack)
+21. [Repository structure](#repository-structure)
+22. [Testing strategy](#testing-strategy)
+23. [Demo script](#demo-script)
+24. [Judge Q&A](#judge-qa)
+25. [Known limitations](#known-limitations)
+26. [References](#references)
 
 ---
 
@@ -49,6 +52,35 @@ Wavefund replaces the manager with a market. Any agent can propose a trade. Anyo
 Quantum Markets make this practical for the first time. In a normal decision market, every extra proposal needs its own fresh capital, so you can only weigh a handful of options. In a quantum market, every trader's full deposit counts in every proposal at once, so the fund can weigh as many proposals as agents can generate.
 
 **One line for the stage:** *"Agents propose. The market decides. The fund executes."*
+
+---
+
+## Built and live on Arc testnet
+
+Everything below runs on Arc testnet today, is verified on the Arc explorer, and was exercised end to end by smoke rounds (every transaction hash is in [`contracts/deployments/demo-round.md`](contracts/deployments/demo-round.md)).
+
+- **Decision rounds** (`QuantumRound`): deposit once, claim credits **independently in every proposal** (each capped at the deposit), buy and sell LONG and SHORT, collapse onto the winner, settle on a realised return, redeem.
+- **One Uniswap v4 pool per proposal** with a custom hook (`WaveHook`): trading-window gating, bounded 0.01–0.99 probability, final-window TWAP used for selection, protocol-owned liquidity, complete-set mint and redeem, exact on-chain quotes.
+- **Selection on the TWAP:** winner needs to beat the status quo by 0.5 percentage points; otherwise the status quo wins and **the vault does not trade**.
+- **The vault** (`WavefundVault`): WAVE shares, queued deposits and withdrawals processed at decision boundaries, oracle-marked NAV, and the winning allocation executed through a real Uniswap v4 USDC/tETH pool with a 500 bps slippage guard (a breach cancels the round and every deposit redeems at par).
+- **Bonds:** proposers post 1 USDC; all bonds are refunded at collapse.
+- **Seed accounting:** protocol seed per market returns to the reserve at collapse (losers) and at settlement or `releaseSeed` (winner).
+- **Keeper service** (`npm run keeper:run`): collapses at trading end, runs the vault trade immediately, reports and settles at evaluation end, runs the oracle watcher, optionally opens the next round.
+- **Frontend** (Next.js, plain viem, no wagmi): live mode on Arc testnet with adapter quotes, round states, vault, portfolio and agents pages, plus a mock mode.
+- **Resolution today:** the keeper reads the oracle and reports the vault's realised return (NAV ratio) to the contracts.
+
+## Roadmap
+
+Not implemented; do not treat these as part of the live protocol.
+
+- **Chainlink CRE** workflow for collapse, price reads and resolution (today the keeper does this).
+- **Decentralised oracles** (Pyth, Chainlink or Stork). Today the price is a keeper-updated adapter fed from Coinbase's public API.
+- **Proposer agents and forecaster agents** (momentum, mean-reversion, news, quant, LLM) and **Circle developer-controlled wallets** for them. Today proposals come from the deployer and keeper wallets.
+- **Proposer performance-fee reward** (a share of the vault's profit to the winning proposer).
+- **External LP shares** in proposal markets and the vault pool.
+- **Price-based bond slashing.** It needs a manipulation-resistant signal: a rival could push a proposal's price below a threshold at almost no cost, because losing markets are erased.
+- **Fixing the vault's withdrawal liquidity** so it grosses up for the pool fee (see [Known limitations](#known-limitations)).
+- Leaderboard of agent performance beyond the on-chain proposer registry stats.
 
 ---
 
@@ -69,7 +101,7 @@ Three groups take part, each with a clear reason to:
 | Who | What they do | What they get |
 |---|---|---|
 | **Vault depositors** | Deposit USDC into the Wavefund vault | Exposure to trades chosen by a market of agents, not one manager |
-| **Proposer agents** | Propose the vault's next allocation, with a bond | A share of the performance fee when their proposal wins and makes money |
+| **Proposers** (agents or people) | Propose the vault's next allocation, with a bond (refunded) | Reputation in the on-chain registry; a performance-fee share is roadmap |
 | **Forecasters** (agents or humans) | Deposit USDC into the decision market and trade on every proposal | Profit when their forecasts on the winning proposal are right |
 
 The vault and the decision market hold separate money. Depositors own the fund; forecasters only bet on how it will do.
@@ -83,11 +115,11 @@ Each round decides one thing: **what should the vault's allocation be for the ne
 1. **Round opens.** The protocol always creates proposal 0, "keep the current allocation" (the status quo).
 2. **Agents propose.** Each proposal is a target allocation, for example "30% tETH, 70% USDC", plus a short rationale. Proposers post a small USDC bond.
 3. **Forecasters deposit once.** A forecaster deposits, say, 1,000 USDC into the round and can claim up to 1,000 trading credits in *every* proposal's market.
-4. **Everyone trades.** Each proposal has its own market where the LONG price reflects the vault's predicted return if that proposal is executed. Phase A uses the deployed constant-product market; the bounded Uniswap v4 hook pools are the not-yet-deployed Phase B replacement.
+4. **Everyone trades.** Each proposal has its own market where the LONG price reflects the vault's predicted return if that proposal is executed. Each market is a bounded Uniswap v4 pool governed by `WaveHook`.
 5. **Collapse.** At the decision time, the proposal with the highest time-weighted price wins, provided it beats the status quo by a margin. All other markets are voided: their trades never happened.
-6. **Execute.** The vault swaps to the winning allocation through Uniswap v4.
+6. **Execute.** The vault swaps to the winning allocation through Uniswap v4. If proposal 0 (the status quo) wins, the vault does not trade.
 7. **Evaluate.** After the evaluation period, the vault's return is measured using a fresh ETH/USD oracle update published at or after the evaluation end.
-8. **Settle.** The winning market resolves. LONG and SHORT holders are paid according to the measured return. The proposer is paid a share of any profit.
+8. **Settle.** The winning market resolves. LONG and SHORT holders are paid according to the measured return. Seed returns to the protocol reserve.
 
 The Arc Testnet price fallback is a keeper-updated 8-decimal ETH/USD adapter sourced from Coinbase's public spot API. Vault swaps are capped at 500 bps adverse slippage versus oracle-implied output; a breach reverts the swap and lets forecasters redeem their full round deposits at par. This is a centralized testnet fallback, not a decentralized oracle.
 
@@ -173,14 +205,8 @@ So the cost of moving a proposal's price scales linearly with its liquidity $L$.
 
 ### Proposer incentives
 
-- **Bond:** each proposal posts bond $B$. It is refunded if the proposal's final TWAP is at least $p_{\min}$ (a spam threshold), and kept by the protocol otherwise.
-- **Reward:** if proposal $w$ wins and $R > 1$, the vault charges a performance fee $f$ on the round's profit, and the proposer receives share $\alpha$ of it:
-
-$$
-\text{Reward}_{w} = \alpha \cdot f \cdot \max(0,\ R - 1) \cdot \text{AUM}(T_d)
-$$
-
-Demo parameters: $B = 1$ USDC, $p_{\min} = 0.2$, $f = 10\%$, $\alpha = 50\%$.
+- **Bond:** each proposal posts a 1 USDC bond. In v1 **every bond is refunded at collapse**, whether or not the proposal won. Spam is limited by the 10-proposal cap and the bond lock-up. Price-based slashing is roadmap work, because a rival could cheaply push a proposal's price below a threshold in the final window if the losing market is erased anyway.
+- **Reward (roadmap):** a performance fee on the vault's profit, shared with the winning proposer, is not implemented.
 
 ### Worked example
 
@@ -211,7 +237,7 @@ The reference implementation records the **highest** price each proposal has eve
 
 ### 2. A metric that can't be pushed by the participants
 
-The paper's examples use a token's own price as the metric, which a large trader can move. Wavefund's metric is the vault's return, **marked with external oracle prices** (Pyth, Chainlink or Stork on Arc). Forecasters can't move ETH's global price, so they can't game the outcome they're betting on.
+The paper's examples use a token's own price as the metric, which a large trader can move. Wavefund's metric is the vault's return, **marked with an external ETH/USD oracle price**. Forecasters can't move ETH's global price, so they can't game the outcome they're betting on.
 
 ### 3. Protocol-owned quantum liquidity
 
@@ -221,15 +247,17 @@ The reference seeds each proposal's pool from the proposer's deposit alone, so n
 
 Without a baseline, the market must pick *something* even when every proposal is worse than doing nothing. Proposal 0 ("hold") and the margin $\varepsilon$ mean the vault only acts when the market expects improvement.
 
-### 5. Trust-minimised resolution
+### 5. Resolution by an oracle-marked return (CRE is the planned upgrade)
 
-The reference resolves outcomes with a single signer's signature. Wavefund resolves with a Chainlink CRE workflow that reads oracle prices, computes the vault's return deterministically, and submits it on-chain, with a timelocked fallback if the workflow fails.
+The reference resolves outcomes with a single signer's signature. Wavefund's return is the vault's NAV change between decision and evaluation end, marked at oracle prices. **Today the keeper updates the oracle (Coinbase spot, stored in `MockPriceOracle`) and reports the return** through the vault and `Resolver`; that is a trusted testnet setup. The planned upgrade is a Chainlink CRE workflow that reads decentralised oracle prices and submits the return, with a timelocked fallback. That is roadmap work, not built.
 
 ---
 
 ## Agents
 
-Agents do real work here; each one is a participant with money at stake.
+> **Status:** the agent runtime is not built yet. Proposals are currently created by the deployer and keeper wallets (registered in `ProposerRegistry`). The table below is the planned design.
+
+Each agent is a participant with money at stake.
 
 | Agent | Role | How it decides | Money at stake |
 |---|---|---|---|
@@ -239,9 +267,9 @@ Agents do real work here; each one is a participant with money at stake.
 | **Quant forecaster** | Trades every proposal's market | Expected return under each allocation, from current price and volatility | Forecasting deposit |
 | **LLM forecaster** | Trades every proposal's market | LLM reasoning over proposals and rationales | Forecasting deposit |
 
-Each agent has its own **Circle developer-controlled wallet** on Arc, so agents hold and sign with real USDC without a human in the loop. Every proposal carries a short rationale, shown in the UI, so judges and depositors can see *why* an agent wanted a trade.
+Each agent is planned to have its own **Circle developer-controlled wallet** on Arc (roadmap). Every proposal carries a short rationale, shown in the UI, so judges and depositors can see *why* an agent wanted a trade.
 
-The leaderboard tracks each agent's record: proposals won, realised return of its winning proposals, and forecasting PnL. Over time the best agents accumulate capital and influence; weak ones lose bonds and deposits. That is the paper's point about decision markets being the right substrate for AI agents, made concrete.
+The leaderboard tracks each agent's record: proposals won, realised return of its winning proposals, and forecasting PnL. Over time the best agents accumulate capital and influence; weak ones lose deposits. That is the paper's point about decision markets being the right substrate for AI agents, made concrete.
 
 ---
 
@@ -251,93 +279,87 @@ The leaderboard tracks each agent's record: proposals won, realised return of it
 flowchart TB
     subgraph Users["People"]
         DEP["Vault depositor"]
-        FC["Human forecaster"]
-        RESERVE["Protocol-owned market reserve"]
+        FC["Forecaster"]
+        RESERVE["Protocol seed reserve"]
     end
 
-    subgraph Web["Next.js app (started in Arc Studio)"]
-        UI1["Round view: proposals, prices, countdown"]
-        UI2["Vault: NAV, allocation, history"]
-        UI3["Agent leaderboard"]
-    end
-
-    subgraph AgentRuntime["Agent runtime (TypeScript)"]
-        PA["Proposer agents"]
-        FA["Forecaster agents"]
-        CW["Circle developer-controlled wallets"]
+    subgraph Web["Next.js app (plain viem)"]
+        UI1["Markets: proposals, quotes, trade ticket, round states"]
+        UI2["Vault: NAV, allocation, queued flows"]
+        UI3["Portfolio and agents"]
     end
 
     subgraph Arc["Arc testnet"]
-        DM["QuantumRound.sol<br/>rounds, deposits, credits, collapse, settlement"]
-        PM["Proposal market<br/>Phase A CPMM; Phase B v4 adapter pending"]
-        V["WavefundVault.sol<br/>USDC vault, executes allocations"]
-        EX["Uniswap v4 tETH/USDC pool<br/>trade execution"]
-        RES["Resolver.sol<br/>accepts CRE result, timelocked fallback"]
-        ORA["Oracle: Pyth / Chainlink / Stork"]
-        USDC["USDC ERC-20 interface<br/>0x3600...0000"]
+        QR["QuantumRound<br/>rounds, deposits, per-proposal credits, collapse, settle, redeem"]
+        PT["ProposalTokens<br/>CREDIT 6 dp, LONG/SHORT 18 dp"]
+        PM["WaveV4ProposalMarket<br/>adapter: pools, seed, quotes, unwind"]
+        HK["WaveHook<br/>window gating, TWAP"]
+        V4["Uniswap v4 PoolManager"]
+        V["WavefundVault<br/>WAVE shares, NAV, executeTrade"]
+        POOL["USDC/tETH v4 pool<br/>concentrated -10% / +20%"]
+        RES["Resolver<br/>return from the vault"]
+        REG["ProposerRegistry"]
+        ORA["MockPriceOracle<br/>keeper-updated ETH/USD"]
     end
 
-    subgraph Offchain["Off-chain services"]
-        CRE["Chainlink CRE workflow<br/>collapse, execute, resolve"]
-        KEEP["Peg keeper<br/>keeps tETH pool near oracle price"]
-        IDX["Indexer"]
+    subgraph Offchain["Off-chain (Node scripts)"]
+        KEEP["keeper:run<br/>collapse, trade, settle"]
+        WATCH["Oracle watcher<br/>Coinbase spot every 60 s"]
+        RC["pool:recenter"]
     end
 
     DEP --> UI2 --> V
-    FC --> UI1 --> DM
-    RESERVE --> DM
-    PA --> CW
-    FA --> CW
-    CW -- "propose with bond" --> DM
-    CW -- "deposit, claim credits, trade" --> PM
-    DM -- "protocol seed and round accounting" --> PM
-    CRE -- "collapse at T_d" --> DM
-    DM -- "winning allocation" --> V
-    V -- "swap" --> EX
-    CRE -- "read prices" --> ORA
-    CRE -- "submit return R" --> RES --> DM
+    FC --> UI1 --> QR
+    RESERVE --> QR
+    QR --> PT
+    QR -- "seed, trades, finalise" --> PM
+    PM -- "initialize, swap, modifyLiquidity" --> V4
+    V4 -- "beforeSwap / afterSwap" --> HK
+    KEEP -- "collapse, executeTrade, settle" --> QR
+    QR -- "winner allocation" --> V
+    V -- "swap" --> POOL
     V -- "mark NAV" --> ORA
-    KEEP --> EX
-    DM & V & PM --> IDX --> Web
+    WATCH --> ORA
+    RC --> POOL
+    V --> RES --> QR
+    QR --> REG
 ```
 
 ---
 
 ## Round lifecycle
 
-Rounds run back to back. Each round's evaluation period is exactly as long as the next round's trading window, so the vault's allocation never changes in the middle of an evaluation.
+Rounds are sequential on the demo deployment: the keeper collapses, trades immediately, waits out the evaluation window, then settles.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant P as Proposer agents
+    participant P as Proposers
     participant F as Forecasters
-    participant DM as DecisionMarket
+    participant QR as QuantumRound
     participant H as WaveHook + v4 pools
-    participant CRE as CRE workflow
+    participant K as Keeper
     participant V as Vault
     participant O as Oracle
 
-    DM->>DM: Open round k, create status-quo proposal 0
-    P->>DM: Propose allocations with bonds
-    DM->>H: Create one v4 pool per proposal
-    F->>DM: Deposit USDC once
-    F->>DM: Claim credits in chosen proposals
-    F->>H: Trade LONG / SHORT in each pool
-    H->>DM: Record prices for final-window TWAP
-    CRE->>DM: At T_d, collapse round k
-    DM->>DM: Pick best TWAP above status quo plus margin
-    DM->>V: Execute winning allocation
-    V->>V: Swap through Uniswap v4
-    Note over DM,V: Round k evaluates while round k+1 trades
-    CRE->>O: At T_d + h, read prices
-    CRE->>DM: Submit realised return R via Resolver
-    DM->>DM: Settle winning market, void the rest
-    F->>DM: Redeem payouts
-    DM->>P: Refund bonds, pay winning proposer
+    QR->>QR: Open round k, create status-quo proposal 0 (vault's current allocation)
+    P->>QR: Propose allocations with bonds
+    QR->>H: Create one v4 pool per proposal, seed from the reserve
+    F->>QR: Deposit USDC once
+    F->>QR: Claim up to the deposit in credits, in every proposal
+    F->>H: Trade LONG / SHORT (through the adapter) in each pool
+    H->>H: Record final-window probability TWAP
+    K->>QR: At tradingEnd, collapse
+    QR->>QR: Winner = best TWAP above status quo + 0.005; refund all bonds; finalise markets
+    K->>V: Immediately, executeTrade (no swap if proposal 0 won)
+    V->>V: Swap through the USDC/tETH v4 pool, process queued flows
+    Note over QR,V: Evaluation window measures a real period
+    K->>O: At evaluation end, refresh the price
+    K->>QR: Report return and settle the winning market
+    F->>QR: Redeem: deposit - claimed[winner] + credits + LONG*pi + SHORT*(1-pi)
 ```
 
-**Demo cadence:** 10-minute trading window, 10-minute evaluation horizon. **Production cadence:** daily or weekly.
+**Demo cadence:** 20 to 30-minute trading window and a 60-second evaluation horizon. **Production cadence (not deployed):** daily or weekly.
 
 Vault deposits and withdrawals are queued and processed only at decision boundaries, so nobody can enter or exit with knowledge of a pending allocation change.
 
@@ -345,19 +367,20 @@ Vault deposits and withdrawals are queued and processed only at decision boundar
 
 ## Smart contracts
 
-All contracts are written from scratch for this project.
+All contracts are written from scratch for this project. Current addresses are in [`contracts/deployments/current.json`](contracts/deployments/current.json); every one is verified on the Arc explorer (see [`SOURCES.md`](contracts/deployments/SOURCES.md)).
 
 | Contract | Responsibility |
 |---|---|
-| `QuantumRound.sol` | Rounds, forecaster deposits, per-proposal credit accounting, proposal creation and bonds, collapse, settlement, redemption, and protocol-seed solvency |
-| `ProposalTokens.sol` | Per-proposal CREDIT (6 decimals in Phase B) and LONG/SHORT (18 decimals) outcome tokens |
-| `ConstantProductMarket.sol` | Current Phase A proposal-market implementation; to be replaced by the Phase B adapter |
-| `WaveV4ProposalMarket.sol` | Local Phase B adapter: per-proposal bounded v4 pools using one shared hook, protocol-owned liquidity, and post-close unwind; not deployed |
-| `WaveHook.sol` | Shared bounded Uniswap v4 hook with per-pool registration, trading windows, probability and price TWAPs; production integration is not deployed |
-| `DeployWaveHook.s.sol` | Mines the shared hook salt off-chain with `HookMiner` and configures an adapter; run only as part of an approved Phase B deployment |
-| `WavefundVault.sol` | USDC vault with share accounting, queued deposits and withdrawals, oracle-marked NAV, and execution of allocations through Uniswap v4 |
-| `Resolver.sol` | Accepts the realised return from the CRE workflow, with a timelocked fallback resolver |
-| `TestAsset.sol` | Mock tETH token for the demo, minted and burned only by the peg keeper |
+| `QuantumRound.sol` | Rounds, deposits, **per-proposal** credit claims, proposals and bonds, trade routing, collapse (winner on probability TWAP, bond refunds, market finalisation), settlement, redemption, protocol seed and `releaseSeed` |
+| `ProposalTokens.sol` | Per-proposal CREDIT (6 decimals) and LONG/SHORT (18 decimals) outcome tokens |
+| `WaveV4ProposalMarket.sol` | Adapter: one v4 pool per proposal, seeding, complete-set buys and sells, exact `quote*` views, TWAP reads, post-close unwind |
+| `WaveHook.sol` | Shared v4 hook: pool registration, adapter-only access inside the trading window, 0.01–0.99 bounds, final-window probability and price TWAPs |
+| `WavefundVault.sol` | WAVE share vault: queued deposits and withdrawals, oracle-marked NAV, `executeTrade` through the USDC/tETH v4 pool, `reportReturn` |
+| `Resolver.sol` | Forwards the vault's measured return to `QuantumRound.settle` |
+| `ProposerRegistry.sol` | Registered proposers, bond locking and refunds, win records |
+| `MockPriceOracle.sol`, `TestAsset.sol` | Keeper-updated ETH/USD price and the mock tETH token |
+| `QuantumLP.sol` | Custody stub from an earlier design; unused by the protocol and not shown in the UI |
+| `ConstantProductMarket.sol`, `PhaseBCompatibility.sol` | Superseded earlier market and a throwaway hook compatibility test; not used by the live deployment |
 
 ### Key functions
 
@@ -366,28 +389,59 @@ All contracts are written from scratch for this project.
 function openRound(uint64 tradingEnd, uint64 horizon, uint96 rMin, uint96 rMax, uint32 twapWindow) external;
 function propose(uint256 roundId, Allocation calldata target, string calldata rationaleURI) external;
 function deposit(uint256 roundId, uint256 amount) external;
-function claimCredits(uint256 roundId, uint256 proposalId, uint256 amount) external;
-function buyLong(uint256 roundId, uint256 proposalId, uint256 creditsIn, uint256 minLongOut) external;
-function sellLong(uint256 roundId, uint256 proposalId, uint256 longIn, uint256 minCreditsOut) external;
-function buyShort(uint256 roundId, uint256 proposalId, uint256 creditsIn, uint256 minShortOut) external;
-function sellShort(uint256 roundId, uint256 proposalId, uint256 shortIn, uint256 minCreditsOut) external;
-function collapse(uint256 roundId) external;                          // after tradingEnd
-function settle(uint256 roundId, int256 realisedReturn) external;     // Keeper/Resolver or emergency fallback
-function redeem(uint256 roundId) external;                            // forecaster payout
+function claimCredits(uint256 roundId, uint256 proposalId, uint256 amount) external;   // capped at the deposit, per proposal
+function buyLong / buyShort(uint256 roundId, uint256 proposalId, uint256 creditsIn, uint256 minOut) external;
+function sellLong / sellShort(uint256 roundId, uint256 proposalId, uint256 amountIn, uint256 minCreditsOut) external;
+function collapse(uint256 roundId) external;                  // after tradingEnd, anyone
+function settle(uint256 roundId, int256 realisedReturn) external;   // via the vault / Resolver
+function releaseSeed(uint256 roundId) external;               // anyone, once no user liabilities remain
+function redeem(uint256 roundId) external;
+
+// WaveV4ProposalMarket (adapter)
+function quoteBuyLong / quoteBuyShort(uint256 roundId, uint256 proposalId, uint256 creditsIn) external view;
+function quoteSellLong / quoteSellShort(uint256 roundId, uint256 proposalId, uint256 amountIn) external view;
+function probabilities(uint256 roundId, uint256 proposalId) external view returns (uint256 pLong, uint256 pShort);
+function probabilityTwap(uint256 roundId, uint256 proposalId, uint256, uint256) external view returns (uint256);
 
 // WavefundVault
-function executeAllocation(Allocation calldata target) external;      // DecisionMarket only
+function requestDeposit(uint256 amount) external;
+function requestWithdraw(uint256 shares) external;
+function executeTrade(uint256 roundId, uint16 winnerTEthBps) external;   // no swap if the winner is the status quo
+function reportReturn(uint256 roundId) external;
 function navPerShare() external view returns (uint256);
 ```
 
 ### Invariants
 
-1. Total payouts of a round never exceed total deposits into that round.
+1. Total payouts of a round never exceed total deposits plus the winning seed.
 2. Credits claimed by a user in any single proposal never exceed that user's deposit.
 3. Losing proposals pay out nothing and lock nothing.
 4. A proposal pool cannot be traded before the round opens or after collapse.
-5. Only the winning allocation can be executed, and only once per round.
+5. Only the winning allocation can be executed, and only once per round; a status-quo winner never trades.
 6. Vault deposits and withdrawals only take effect at decision boundaries.
+
+---
+
+## Uniswap v4 integration
+
+Uniswap v4 does three jobs. Line numbers refer to the current commit.
+
+| What | Where |
+|---|---|
+| **Hook permissions** (before/after swap, before add/remove liquidity) | [`WaveHook.sol` L81–98](contracts/src/WaveHook.sol#L81) |
+| **Pool registration** (round, proposal, LONG token, trading window, TWAP window; required fee and tick spacing) | [`WaveHook.sol` L100–135](contracts/src/WaveHook.sol#L100) |
+| **Swap and liquidity gating** (adapter-only, trading window, probability bounds, range limits) | [`_beforeAddLiquidity` L192](contracts/src/WaveHook.sol#L192), [`_beforeRemoveLiquidity` L209](contracts/src/WaveHook.sol#L209), [`_beforeSwap` L226](contracts/src/WaveHook.sol#L226) |
+| **Final-window TWAP** (probability and price integrals updated in `afterSwap`; read as `finalWindowTwap`) | [`_afterSwap` L238–258](contracts/src/WaveHook.sol#L238), [`finalWindowTwap` L170](contracts/src/WaveHook.sol#L170) |
+| **Hook address mining** (CREATE2 salt via `HookMiner`) | [`DeployWaveHook.s.sol`](contracts/script/DeployWaveHook.s.sol) |
+| **Pool creation and seeding** (`poolManager.initialize`, then a single-range `modifyLiquidity`) | [`seedLiquidity` L441–480](contracts/src/WaveV4ProposalMarket.sol#L441) |
+| **Trades** (`unlock` → `swap` / `modifyLiquidity` → `sync` / `settle` / `take`) | [`unlockCallback` L533](contracts/src/WaveV4ProposalMarket.sol#L533), [`_settleOrTake` L618](contracts/src/WaveV4ProposalMarket.sol#L618) |
+| **Complete-set buys and sells** (swap part of the sold side so the remainder pairs with the received side, burn matched sets) | [`tradeBuyLong` L152](contracts/src/WaveV4ProposalMarket.sol#L152), [`_tradeSell` L249](contracts/src/WaveV4ProposalMarket.sol#L249) |
+| **Exact quotes** (replays `SwapMath` against the single position; the frontend uses these for minimum outputs) | [`quoteBuyLong` L214](contracts/src/WaveV4ProposalMarket.sol#L214), [`_simulate` L344](contracts/src/WaveV4ProposalMarket.sol#L344) |
+| **Unwinding losing markets** at collapse | [`finalizeProposal` L510](contracts/src/WaveV4ProposalMarket.sol#L510) |
+| **The vault's trade** (winner allocation swapped in the USDC/tETH pool, with an oracle-relative slippage cap) | [`executeTrade` L444](contracts/src/WavefundVault.sol#L444), [`performTrade` L504](contracts/src/WavefundVault.sol#L504), [`unlockCallback` L625](contracts/src/WavefundVault.sol#L625) |
+| **Pool management** (±20% concentrated position owned by the deployer) | [`pool-recenter.mjs`](contracts/script/pool-recenter.mjs) |
+
+Our experience building on v4 and Arc is written up in [`FEEDBACK.md`](FEEDBACK.md).
 
 ---
 
@@ -406,7 +460,7 @@ Arc is Circle's stablecoin-native L1. Uniswap's full v4 stack (the AMM, pools, r
 
 **Tooling:** Arc Foundry (`arc-forge`, `arc-anvil --network arc`), which mirrors Arc's protocol differences locally, unlike standard Anvil.
 
-**Addresses to confirm on day 1:** Uniswap v4 PoolManager, PositionManager and Universal Router on Arc testnet, from the official Arc contract-addresses page and Uniswap's deployment docs. A third-party data provider lists the testnet PoolManager at `0x1d70945634f618eefdf9edaadb59b9a183cef929`; verify before use.
+**Addresses:** the Uniswap v4 PoolManager and the rest of the deployment are in `contracts/deployments/current.json`; external Arc contracts are listed in `SOURCES.md`.
 
 ---
 
@@ -416,30 +470,25 @@ Arc is Circle's stablecoin-native L1. Uniswap's full v4 stack (the AMM, pools, r
 
 Wavefund is a trading app with USDC settlement end to end: vault, decision market, payouts and gas.
 
-| Requirement | How we meet it |
+| Requirement | Status |
 |---|---|
-| Built in Arc Studio; include the project URL and show Studio in the demo | The project starts in Arc Studio (app scaffold, frontend, deployment). We develop the contracts with the Arc Studio CLI driven from Claude Code, which Arc supports, and show Studio in the demo. |
-| Working frontend and backend, plus an architecture diagram | Next.js app, agent runtime and keeper services; diagram above |
-| Video and presentation showing effective use of Arc Studio and Circle tools | Arc Studio, Circle developer-controlled wallets for agents, USDC gas, Circle faucet |
-| GitHub repo | Public repo |
-
-**Confirm with Arc mentors early:** that a project started in Arc Studio and extended with hand-written contracts through the Studio CLI qualifies. Our contracts are too specialised to be fully generated.
-
-**Alternative Arc prize:** "Best Smart Contracts with Advanced Stablecoin Logic" ($3,000) also fits (conditional, multi-step USDC settlement). Pick one after talking to mentors.
+| Built in Arc Studio | The scaffold, frontend and contracts started in Arc Studio and were extended locally. |
+| Working frontend and backend, plus an architecture diagram | Next.js app, keeper and scripts, verified contracts on Arc testnet; diagram above |
+| Circle tools | USDC as gas and settlement, Circle faucet. Circle developer-controlled wallets for agents are roadmap work. |
 
 ### Uniswap Foundation: "Build with Uniswap" ($10,000, four places)
 
 Uniswap v4 does three real jobs:
 
-1. **Every proposal market is a v4 pool,** governed by `WaveHook`, a new hook that gates trading to the round window and records the TWAP used for selection.
+1. **Every proposal market is a v4 pool,** governed by `WaveHook`, which gates trading to the round window and records the TWAP used for selection.
 2. **The winning trade executes through v4** on Arc.
-3. **Protocol-owned quantum liquidity:** one reserve gives depth to every proposal at once; external LP shares and claims are roadmap work.
+3. **Protocol-owned liquidity:** one reserve gives depth to every proposal at once; external LP shares are roadmap work.
 
-**Requirements:** public repo, a `FEEDBACK.md`, the Uniswap developer feedback form, and a README that points to the exact contracts and lines that integrate v4.
+The exact files and lines are in [Uniswap v4 integration](#uniswap-v4-integration); developer feedback is in [`FEEDBACK.md`](FEEDBACK.md).
 
-### Chainlink: "Best workflow with CRE" ($1,500)
+### Chainlink: "Best workflow with CRE"
 
-A CRE workflow runs the round lifecycle: a time trigger collapses each round, then reads oracle prices at $T_d + h$, computes the vault's return, and submits it on-chain. That connects the chain to external data, which is what the prize asks for; the prize accepts a CLI simulation if deployment isn't available. **Check whether CRE supports Arc testnet;** if not, we run the workflow in simulation and say so.
+Not built. The CRE workflow (collapse, price reads, return submission) is the planned replacement for the keeper's resolution role; see the [roadmap](#roadmap).
 
 ---
 
@@ -456,8 +505,8 @@ Wavefund is implemented from scratch, from the paper's description. We cite the 
 | Proposals can be added at any time | Oracle-marked metric that participants can't move |
 | AI agents as proposers | Protocol-owned shared reserve; no external LP shares in v1 |
 | | Status-quo proposal with a margin |
-| | CRE-based resolution |
-| | Agent bonds, rewards and leaderboard |
+| | Keeper-reported, oracle-marked resolution (CRE planned) |
+| | Refundable proposer bonds and an on-chain proposer registry |
 | | The fund itself: vault, execution and accounting |
 
 If we want to reuse any reference code, we ask the authors for permission first and record it here.
@@ -471,11 +520,11 @@ If we want to reuse any reference code, we ask the authors for permission first 
 | **Free suppression** | Trades in losing markets revert, so pushing a good proposal's price down costs nothing if it then loses | Final-window TWAP means an attacker must hold a distorted price to the deadline; protocol-owned seeded depth raises the cost of moving price |
 | **Spike capture** | A short price spike locks in a "best" price | Selection on final-window TWAP, not a running maximum |
 | **Metric manipulation** | Moving the outcome you're betting on | Return is marked with external oracle prices |
-| **Proposal spam** | Flooding the round with junk proposals | Bonds, forfeited below the spam threshold |
+| **Proposal spam** | Flooding the round with junk proposals | 10-proposal cap and bond lock-up; bonds are refunded, and price-based slashing is deliberately not used because it is griefable |
 | **Front-running the vault** | Entering the vault knowing a big trade is coming | Deposits and withdrawals processed only at decision boundaries |
 | **Execution sandwiching** | MEV around the vault's swap | Slippage limit per execution; small demo sizes |
-| **Oracle failure** | Stale or missing price at evaluation | Staleness checks; timelocked fallback resolution |
-| **Insolvency** | Paying more than forecaster deposits and protocol seed | Phase B must maintain explicit complete-set accounting, pay user liabilities before reserve remainder, and fuzz-test the solvency invariant |
+| **Oracle failure / trust** | Stale or manipulated price at evaluation | Keeper refreshes the price right before NAV marking and settlement; the oracle is a centralised testnet fallback (decentralised oracle and CRE are roadmap) |
+| **Insolvency** | Paying more than forecaster deposits and protocol seed | Complete-set accounting, user liabilities paid before the reserve remainder, fuzzed solvency invariants including sells and per-proposal claims |
 
 **Known limitation we state openly:** suppression is harder but not impossible when few traders are active. The defence is participation, which is why forecaster agents always trade every proposal.
 
@@ -485,24 +534,53 @@ If we want to reuse any reference code, we ask the authors for permission first 
 
 | Real on Arc testnet | Simulated or limited |
 |---|---|
-| Phase B decision rounds, Uniswap v4 hook proposal markets (bounded 0.01–0.99, complete-set mint/redeem), TWAP selection, vault trade through the v4 pool, settlement and redemption are onchain and verified on Arc Explorer | tETH is a mock token and the USDC/tETH pool is funded by us |
-| Keeper-updated 8-decimal ETH/USD marks are stored onchain in MockPriceOracle | No live decentralized ETH/USD feed was confirmed on Arc Testnet; the keeper fetches Coinbase spot data and must update every 60 seconds and immediately before NAV marking and resolution |
-| The vault trades through Arc's Uniswap v4 PoolManager with a 500 bps oracle-relative slippage cap; a concentrated ±20% position keeps the pool near the oracle price | The pool must be re-centred (`npm run pool:recenter -- --execute`) before each demo |
-| USDC deposits, payouts and gas | CRE workflow may run in simulation if Arc isn't supported |
-| Agent wallets via Circle developer-controlled wallets | All forecasters in the demo may be our own agents unless outsiders join |
+| Decision rounds, v4 hook proposal markets (0.01–0.99, complete-set mint/redeem), TWAP selection, per-proposal credits, the vault's trade through the v4 pool, settlement and redemption, all verified on the Arc explorer | tETH is a mock token and the USDC/tETH pool is funded by us |
+| ETH/USD marks are stored on chain in `MockPriceOracle` | The price comes from Coinbase's public API via our keeper; no decentralised feed (Pyth/Chainlink/Stork) and no CRE are used |
+| The vault trades through Arc's Uniswap v4 PoolManager with a 500 bps oracle-relative slippage cap; a concentrated −10% / +20% position keeps the pool near the oracle price | The pool must be re-centred (`npm run pool:recenter -- --execute`) before demos, and the position is owned by the deployer |
+| USDC deposits, payouts and gas | All proposals and trades in the demo come from our own wallets unless outsiders join; there are no AI agents yet |
+| Round resolution reported by the keeper from oracle-marked NAV | A trusted keeper, not a trust-minimised resolver |
+| Mock mode (frontend toggle) | Entirely simulated in the browser; nothing touches the chain |
 
-### Live mode: run and test (Phase B v2)
+---
 
-**Automatic (recommended):** `npm run keeper:run` (needs `KEEPER_PK` in `.env`). The keeper collapses a round when trading ends, **immediately** runs the vault's trade (so the evaluation window measures a real period), then reports and settles when evaluation ends. It runs the oracle watcher while a round is active, logs every transaction with its explorer link, and stops cleanly on Ctrl+C. Optional: `--open-every <minutes> --window <minutes>` opens the next round that long after the previous one settled; `--poll <seconds>` sets the check interval (default 15).
+## Running it and testing it
 
-**Manual steps:**
+```bash
+npm install
+npm run dev            # http://localhost:3000
+npm run build          # runs check:contracts, then next build
+npm run check:contracts   # code exists at every address, ABI selectors, roles, wiring
+npm run e2e:live       # Playwright against production (or E2E_URL=...)
+forge test             # 218 tests (run from this folder; needs ~/.foundry/bin on PATH)
+```
 
-1. `npm run pool:recenter` (plan), then `npm run pool:recenter -- --execute` if the pool is off the oracle price by more than 0.5%.
-2. `npm run demo:open-round -- --minutes 30 --execute` opens a round with three proposals and starts the oracle watcher.
-3. On the site, switch to **Live**, connect MetaMask (Arc Testnet is added automatically). Deposit 1 USDC. Credits are capped **per proposal**: claim up to 1 credit in every proposal from that one deposit. Buy LONG on one proposal and SHORT on another; the ticket shows the adapter quote, average price, impact and pLong after (minimum output = quote less 0.5%). Sell part of each; the received credits match the sell quote within 0.5%. Check Portfolio.
-4. After trading ends, press **Collapse** (anyone can) unless `keeper:run` is running. The highest final-window TWAP wins; other markets are erased and all bonds refunded. If proposal 0 (the vault's current allocation) wins, the vault does not trade.
-5. `npm run demo:close-round -- --execute` (or the keeper) executes the vault trade, waits for the evaluation window and settles. Then **Redeem**: you receive `deposit − claimed[winner] + winner credits + LONG × π + SHORT × (1 − π)`, where π = (return − rMin) / (rMax − rMin). Credits and tokens in erased proposals do not reduce it. A vault deposit request on the Vault page is processed at the next decision.
-6. If the vault's slippage guard cancels the round, every deposit redeems at par. A round nobody deposits into settles automatically and its seed returns to the reserve (`releaseSeed` is also callable by anyone).
+`.env` (never committed) holds the deployer and keeper keys (`PRIVATE_KEY`, `KEEPER_PK`) and optional `NEXT_PUBLIC_ARC_RPC_URL`.
+
+**Frontend.** `/` is the landing page. `/demo` has Markets, Vault, Portfolio, Agents and How it works. A **Use on-chain data** toggle switches from the simulated workspace (mock mode, 10,000 demo USDC, state in local storage, **Reset demo** to clear) to live mode, which reads Arc testnet through plain viem (multicall, 30 s polling, public RPC with the wallet as primary) and writes through `window.ethereum`. No wagmi.
+
+**Operator commands** (all read `contracts/deployments/current.json`):
+
+| Command | What it does |
+|---|---|
+| `npm run pool:recenter [-- --execute]` | Plans, then (with `--execute`) re-centres the USDC/tETH pool on the oracle price and re-adds a −10% / +20% position. `-- --remove` removes the position and returns the funds to the deployer. |
+| `npm run demo:open-round -- --minutes 30 --execute` | Checks pool depth and offset (refuses if more than 0.5% off the oracle), opens a round with three proposals, starts the oracle watcher |
+| `npm run keeper:run [-- --poll 15 --open-every <min> --window <min>]` | Collapses at trading end, **immediately** runs the vault trade, reports and settles at evaluation end; logs every tx; Ctrl+C stops cleanly |
+| `npm run demo:close-round -- --execute` | Manual equivalent of the keeper (collapse, trade, settle) |
+| `npm run oracle:update` / `oracle:start` / `oracle:stop` | Push the Coinbase price on chain once, or run the 60 s watcher |
+
+### Manual test checklist (live mode, current deployment)
+
+Vault: `0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137` · QuantumRound: `0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A` (full table in `SOURCES.md`).
+
+1. Operator: `npm run pool:recenter`, then `-- --execute` if needed; `npm run demo:open-round -- --minutes 30 --execute`; start `npm run keeper:run`.
+2. Open `/demo`, switch to **Use on-chain data**, connect MetaMask (Arc Testnet, chain `5042002`, is added automatically). The header shows your ERC-20 USDC balance (6 decimals).
+3. In Markets, **deposit 1 USDC**. Claim credits: each proposal says "Up to 1.00 credits for this proposal"; claim 1 credit in **every** proposal from the one deposit. A second claim in the same proposal is refused.
+4. Buy LONG on one proposal and SHORT on another. The ticket shows amount in, expected out (from the adapter's `quote*`), average price, price impact and pLong after; minimum output is the quote less 0.5%. Sell part of each; the credits received match the quote within 0.5%.
+5. Portfolio shows the deposit, credits, LONG/SHORT per proposal and the redeemable estimate.
+6. When trading ends the keeper collapses the round (or press **Collapse**): the winner is highlighted, others are marked erased, and all bonds are refunded. If proposal 0 ("Keep current allocation") wins, the vault does not trade; otherwise the vault's trade appears with an explorer link.
+7. After the evaluation window the keeper settles. **Redeem** and check: payout = `deposit − claimed[winner] + winner credits + LONG × π + SHORT × (1 − π)`, with π = (return − rMin) / (rMax − rMin). Positions in erased proposals do not reduce it.
+8. Vault page: **Queue deposit** (approve USDC first); it is processed at the next decision (the next `executeTrade`), minting WAVE at the pre-flow NAV. **Queue withdrawal** is disabled with a warning if the amount exceeds the vault's free USDC.
+9. If the vault's slippage guard cancels a round, every deposit redeems at par. A round nobody deposits into settles itself and returns its seed to the reserve.
 
 ---
 
@@ -510,102 +588,36 @@ If we want to reuse any reference code, we ask the authors for permission first 
 
 | Layer | Technology |
 |---|---|
-| Contracts | Solidity, Arc Foundry (`arc-forge`, `arc-anvil`) |
-| AMM | Uniswap v4 core and periphery, custom hook |
-| Chain | Arc testnet (chain ID 5042002 per third-party docs; confirm on the Arc connect page) |
-| Oracles | Pyth, Chainlink or Stork on Arc (pick whichever has a live ETH/USD testnet feed) |
-| Orchestration | Chainlink CRE workflow |
-| Agents | TypeScript, viem, an LLM API, Circle developer-controlled wallets |
-| App | Next.js 15 App Router (Arc Studio integration pending) |
-| Indexing | One of the indexers listed by Arc (Envio, Goldsky, The Graph) or a simple event listener |
-| Dev workflow | Arc Studio CLI driven from Claude Code, with Circle's Arc skills installed |
-
-### Frontend preview
-
-The frontend has two separate routes:
-
-- `/` — public-facing Wavefund landing page with the product pitch, mechanism, participant roles, and protocol guardrails.
-- `/demo` — product overview and entry point to the protocol workspace.
-- `/demo/markets` — proposal markets, forecasting credits, LONG/SHORT trades, and round settlement.
-- `/demo/vault` — vault allocation and queued deposits and withdrawals.
-- `/demo/portfolio` — simulated account balances, forecast credits, and open or settled positions.
-- `/demo/agents` — proposer and forecaster directory with illustrative performance.
-- `/demo/how-it-works` — round lifecycle and protocol mechanism.
-
-The site supports light and dark themes from the header theme switcher. The selection is saved in browser storage and applies across the landing page and all demo routes. Demo routes keep the mock workspace and add a **Use on-chain data** toggle. Live mode reads the deployed Arc Testnet contracts through plain viem and connects through `window.ethereum`; it can add/switch to Arc Testnet with the wallet RPC methods. No wagmi dependency is used.
-
-Run both locally:
-
-```bash
-npm install
-npm run dev
-```
-
-In mock mode, start with **Connect demo account**, then:
-
-1. Use the preloaded 10,000 demo USDC or request another demo faucet balance.
-2. Deposit collateral into the forecasting round. Claim credits separately in each proposal (up to the round deposit per proposal), then buy LONG or SHORT shares.
-3. Review positions and mark-to-market P&L on `/demo/portfolio`. Use **Collapse round now** on `/demo/markets` to select the leader by a simulated final-window TWAP, with proposal 0 as the status quo and a 0.5¢ decision margin.
-4. Enter a simulated realized vault return to settle. The scalar payout is clamped to `[0.95, 1.05]`; only the winning market affects forecasting P&L, while losing markets are voided.
-5. The mock workspace includes a clearly simulated external-liquidity panel for UI exploration; this is not the v1 protocol model and has no live on-chain counterpart.
-6. Queue vault deposits or share withdrawals; these process at the next decision boundary.
-
-Mock state persists in the browser's local storage and can be cleared with **Reset demo**. Mock balances, price impact, oracle results, and transactions are simulated in the frontend. The simulated external-liquidity panel does not model LP fees or impermanent loss.
-
-In live mode, connect a wallet to Arc Testnet to read the current round, proposals, market spot prices, wallet positions, oracle-marked vault NAV/allocation, WAVE balances, queued vault flows, and executed-round history. The markets and portfolio views provide writes for round deposits, credit claims, LONG/SHORT buys and sells, round collapse after its trading window, and redemptions after settlement. The vault supports queued USDC deposits and WAVE-share withdrawals, processed at the next `executeTrade` decision boundary using the same oracle-marked NAV/share supply. **No QuantumLP or external market-liquidity controls are rendered in live mode.** Phase B's protocol-owned reserve is distinct from the deployed Phase A `QuantumLP` custody stub.
-
-### Live-mode smoke checklist
-
-1. Open `/demo`, select **Use on-chain data**, choose **Connect wallet**, and approve MetaMask. If prompted, add or switch to Arc Testnet (chain ID `5042002`, RPC `https://rpc.testnet.arc.io`, USDC gas).
-2. Confirm the wallet address is displayed and the wallet balance reflects ERC-20 USDC at `0x3600000000000000000000000000000000000000`. Do not add this to MetaMask's native balance; both views represent the same funds.
-3. On `/demo/vault`, check NAV, USDC/tETH allocation, oracle and v4 prices, WAVE balance, share price, and queued-flow balances. The current share vault is `0xe4CEE84aBfaB433E11E0F6C3845901D3Fb58b84D`; oracle-marked NAV changes with its funded assets and current oracle price.
-4. Before a round opens, a connected and funded wallet can **Queue deposit** (approve USDC on first use) and cancel that pending deposit. A WAVE holder can **Queue withdrawal** or cancel it. Requests do not mint/burn shares or move withdrawal proceeds until the next vault `executeTrade` decision boundary.
-5. Before a round opens, round deposit/credit/trade, collapse, redeem, and keeper-only vault execution actions are unavailable. After a round opens, round deposit, claim, and trades become available during the trading window; collapse appears after the window closes, and redemption appears after settlement.
-
-For a funded test round, `npm run demo:round` runs the scripted two-wallet flow and appends confirmed transaction hashes to `contracts/deployments/demo-round.md`. It uses deployer and keeper keys from the ignored `.env`; never commit that file.
-
-### Manual live demo
-
-`npm run demo:open-round` is a read-only preflight by default. It prints the fresh Coinbase quote, current USDC/tETH v4 spot, exact rebalance input estimate, maximum full-range liquidity amounts for a sub-1% 1-USDC impact target, current balances, proposal bond, and protocol-seed deficit. If the keeper has enough USDC, execution tops up the protocol seed before opening. Do not execute until the displayed pool amounts and both USDC balances are funded. The script refuses to open if the pool, seed, proposer registration, or balances fail preflight.
-
-For a low-cost test round, `npm run demo:open-round -- --test` runs a read-only preflight that skips deep-liquidity funding and plans only the pool alignment swap. After reviewing the exact required amounts and balances, use `npm run demo:open-round -- --test --execute` to rebalance the existing pool to within 0.5%, open a 15-minute round, create three proposals from the registered deployer/keeper wallets, and start the oracle watcher. Test mode intentionally skips the real-demo liquidity-depth requirement. It also reports the estimated USDC-value capital difference between the full-range and ±10% concentrated-liquidity plans for the same depth target.
-
-For the full demo, use `npm run demo:open-round -- --execute` after reviewing the read-only preflight; it adds the required full-range liquidity before opening. Set `DEMO_TRADING_WINDOW_MINUTES` or pass `--minutes <n>` to change the window. Both modes require interactive typed confirmations before transactions, use `current.json` for addresses, and read signer keys from `.env`.
-
-Before closing, you can queue a vault deposit in `/demo/vault`; it is applied at the next decision boundary. `npm run demo:close-round` prints a read-only status and NAV estimate. `npm run demo:close-round -- --execute` waits for the trading window, collapses, prints the winning allocation and estimated vault swap, asks for confirmation before the vault trade, waits through evaluation, reports NAV to settle, and stops the watcher. Canceled rounds are safely reported as redeemable at par.
-
-### Manual live-mode test checklist
-
-1. Open `/demo`, select **Use on-chain data**, and connect MetaMask. Confirm the active network is Arc Testnet, chain `5042002`, RPC `https://rpc.testnet.arc.io`. The header should show the connected address and its ERC-20 USDC balance (6 decimals); do not add the native USDC view to that balance.
-2. Before opening a new round, the latest recorded state is round 2 settled. The vault last recorded `0.0925 USDC`, `0.000003062520335899 tETH`, and `0.1 WAVE` total supply. NAV and the share price use the current oracle quote and may move; the historical round return was `-0.34%` from a `0.99655` return ratio.
-3. On `/demo/vault`, verify the live NAV, USDC/tETH holdings, allocation, WAVE balance, and queue controls. Queue a `1 USDC` vault deposit before closing the next round; the request should appear as queued and should not mint WAVE shares yet.
-4. Run `npm run demo:open-round -- --test` first and review the pool-alignment input, deployer/keeper balances, seed deficit, and bonds. Once the printed amounts are funded, rerun with `--test --execute` and type the requested confirmations. The new round defaults to a 15-minute trading window and has proposal 0 (Protocol) plus three registered proposer proposals. Equal seeded reserves begin at a bounded LONG probability near `0.5000`; the CPMM spot is shown separately as credits per LONG.
-5. In `/demo/markets`, deposit `2 USDC`. The round deposit should increase by `2.0000 USDC`, and the UI should show up to `2.0000` unclaimed credits. Claim `1.0000` credit for proposal 1 and `1.0000` for proposal 2; the aggregate claimed amount must not exceed the deposit.
-6. Buy LONG with the proposal 1 credit balance and SHORT with the proposal 2 credit balance. The 18-decimal outcome-token balances should be nonzero; the bounded LONG probability remains between 0 and 1 and moves with the market. The CPMM credits-per-LONG execution spot is shown separately and may exceed 1. Sell a portion using the dedicated 18-decimal LONG/SHORT amount field while trading remains open. SHORT trades are fixed 1:1 in the current contract and are limited by available credit reserve / issued SHORT supply.
-7. Once the trading window ends, **Collapse round** becomes available. Or run `npm run demo:close-round -- --execute`; after collapse it prints the winning proposal and asks before allowing the real `WavefundVault` v4 rebalance. A slippage breach cancels safely and leaves deposits redeemable at par.
-8. The close script waits until the evaluation end, refreshes the oracle, reports NAV, settles, and stops the watcher. The round status should become settled; click **Redeem** to receive the contract-calculated payout (unclaimed deposit is returned, while LONG/SHORT payout depends on the realized return).
-9. Return to `/demo/vault`. The queued `1 USDC` deposit should have been processed at the decision boundary; queued USDC should return to zero and the WAVE balance should increase at the pre-flow NAV/share price.
+| Contracts | Solidity 0.8.26 (via-IR, Osaka), Foundry, OpenZeppelin |
+| AMM | Uniswap v4 core and periphery, custom `WaveHook` |
+| Chain | Arc testnet (chain ID 5042002, USDC gas) |
+| Oracle | `MockPriceOracle` updated by a keeper from Coinbase's public spot API |
+| Keeper and scripts | Node.js and viem (`keeper:run`, `pool:recenter`, demo scripts) |
+| App | Next.js 15 App Router, React 18, plain viem, deployed on Vercel |
+| Verification | Blockscout (Arc explorer) and Sourcify |
 
 ---
 
 ## Repository structure
 
 ```
-wavefund/
+conviction/                     # repository root
+├── app/                        # Next.js app
+│   ├── demo/                   # routes: markets, vault, portfolio, agents, how-it-works
+│   ├── hooks/                  # useQuantumRound (live data and writes), useWallet
+│   ├── lib/                    # contracts, rpc (multicall, fallback, retry), format, generated ABIs
+│   └── live-*.tsx, demo-*.tsx  # live and mock workspaces
 ├── contracts/
-│   ├── src/                    # QuantumRound, ProposalTokens, Phase A market,
-│   │                           # WaveHook compatibility spike, vault, resolver
-│   ├── test/                   # unit, invariant and Arc hook compatibility tests
-│   └── script/                 # deployment, demo and compatibility scripts
-├── agents/
-│   ├── proposers/              # momentum, mean-reversion, news
-│   ├── forecasters/            # quant, LLM
-│   └── wallets/                # Circle developer-controlled wallets
-├── keeper/
-│   ├── cre-workflow/           # collapse, resolve
-│   └── peg-keeper/             # keeps tETH pool near oracle price
-├── app/                        # Next.js (Arc Studio project)
-├── FEEDBACK.md                 # Uniswap requirement
+│   ├── src/                    # Solidity (see Smart contracts)
+│   ├── test/                   # Foundry unit, fuzz and invariant tests
+│   ├── test-helpers/           # MockUSDC
+│   ├── script/                 # Forge deploy scripts (*.s.sol) and Node operator scripts (*.mjs)
+│   ├── deployments/            # current.json, SOURCES.md, demo-round.md, smoke logs, pool-position.json
+│   └── DESIGN.md               # contract design
+├── scripts/                    # e2e-live.mjs (Playwright)
+├── lib/                        # Foundry dependencies (v4-core, v4-periphery, OpenZeppelin, permit2)
+├── AGENTS.md, CLAUDE.md        # notes for coding agents
+├── FEEDBACK.md                 # Uniswap developer feedback
 └── README.md
 ```
 
@@ -615,48 +627,12 @@ wavefund/
 
 | Layer | What it proves | Tool |
 |---|---|---|
-| Unit | Credit claims, complete sets, payout formula, bond logic | `arc-forge test` |
-| Invariant fuzzing | Phase A deposit coverage; Phase B target is user liabilities ≤ deposits + winning seed, per-proposal credit cap, losing markets pay nothing | Foundry invariant tests |
-| Hook tests | Swaps blocked outside the window; TWAP correct across many swaps | Foundry with a local v4 deployment |
-| Attack tests | Spike capture fails; suppression costs what the formula predicts | Scripted adversarial trades |
-| Arc fork tests | Real v4 contracts, USDC interface, decimals | `arc-anvil --network arc` |
-| End to end | Full round: propose, trade, collapse, execute, evaluate, settle, redeem | Scripted run on Arc testnet |
-
----
-
-## Build plan
-
-Team of two: a **protocol engineer** (contracts, hook, tests) and an **agents and app engineer** (agents, keeper, CRE, frontend).
-
-### Gate: 48-hour spike (must pass before committing)
-
-1. Start the project in Arc Studio; confirm the Studio CLI works from Claude Code.
-2. Deploy a minimal hook and create two v4 pools on Arc testnet.
-3. One deposit claims credits in both pools; trade in each.
-4. Collapse picks the higher TWAP; the losing pool is voided.
-5. Execute one swap through v4 from a vault contract.
-
-**If all five work:** commit. **If not:** stop and keep this idea for the Solana hackathon.
-
-### Week 1: protocol
-
-- `DecisionMarket` with credits, complete sets, collapse and settlement
-- `WaveHook` with window gating and final-window TWAP
-- `WavefundVault` with queued flows, oracle NAV and v4 execution
-- Invariant tests for solvency
-- Deploy to Arc testnet; one full round run by script
-
-### Week 2: agents, app and polish
-
-- Three proposer agents and two forecaster agents with Circle wallets
-- CRE workflow (or simulation) for collapse and resolution
-- Peg keeper for tETH
-- Next.js app: live round view, vault, leaderboard
-- Protocol-owned quantum-liquidity accounting: one reserve funds proposal-market seeds; no external LP shares in v1
-- `FEEDBACK.md`, README with exact v4 integration lines, architecture diagram, demo video
-
-**Cut order if behind:** news proposer → LLM forecaster → CRE (fall back to a keeper script).
-**Never cut:** credits across proposals, hook, collapse, v4 execution, settlement.
+| Unit | Per-proposal credit claims, complete sets, payout formula, bonds, seed release, status-quo-no-trade | `forge test` |
+| Fuzz and invariants | Payouts never exceed deposits plus the winning seed (including sells and per-proposal claims); quotes equal execution; buy/sell round trips never profit | Foundry fuzz and invariant tests |
+| Hook tests | Swaps and liquidity blocked outside the window and the bounds; TWAP correct across swaps | Foundry with a local v4 PoolManager |
+| On-chain smoke rounds | Full rounds on Arc testnet through the keeper, with exact redeem reconciliation | `smoke-v2.mjs`; results in `demo-round.md` |
+| Deployment check | Code at every address, ABI selectors, roles, hook and allocation-source wiring | `npm run check:contracts` |
+| Live site | No console errors, rate-limit errors or error banners in live and mock mode | `npm run e2e:live` |
 
 ---
 
@@ -666,9 +642,9 @@ Under four minutes.
 
 1. **The problem (25 s).** "AI funds today trust one agent. Decision markets could choose better, but they can't afford to weigh many options."
 2. **The idea (25 s).** "Quantum markets let every trader's full deposit count in every proposal. We used that to build a fund run by a market of agents."
-3. **A live round (90 s).** Three agents propose allocations, each with a one-line rationale. Forecaster agents and a human trader move prices in each proposal's pool. Show one deposit backing trades in all three markets at once.
+3. **A live round (90 s).** Three proposals (20%, 50%, 80% tETH) are open. Traders move prices in each proposal's pool. Show one deposit backing trades in all three markets at once.
 4. **Collapse and execute (40 s).** The countdown ends. The market collapses onto one proposal, two markets are voided, and the vault swaps through Uniswap v4 on Arc. Open the transaction on the explorer.
-5. **Settle (30 s).** Show a pre-recorded round's settlement: return measured from oracle prices, forecasters paid, losing trades never happened, the winning agent paid.
+5. **Settle (30 s).** Show a settled round from `demo-round.md`: return measured from oracle prices, forecasters paid, losing trades never happened.
 6. **Close (15 s).** "Agents propose. The market decides. The fund executes."
 
 ---
@@ -678,22 +654,21 @@ Under four minutes.
 | Likely question | Answer |
 |---|---|
 | Isn't this just Paradigm's repo? | No code from it; it's not open-source licensed. We built the fund, and five mechanism changes, on top of the paper's idea. |
-| Can't someone push a good proposal down for free? | That's the mechanism's main weakness. We settle on a final-window TWAP and seed every market from one protocol-owned reserve; external LP shares are not part of v1. Here's what moving a price actually costs. |
+| Can't someone push a good proposal down for free? | That's the mechanism's main weakness. We settle on a final-window TWAP and seed every market from one protocol-owned reserve. Calibration numbers are in `contracts/DESIGN.md`. |
 | Why not just let one strong agent trade? | One agent is a single point of failure. A market lets the best agent win each round and replaces agents automatically as they get better or worse. |
 | Where does forecasters' profit come from? | Other forecasters who were wrong about the winning proposal. It's zero-sum among forecasters; the vault's return is separate. |
-| Is the trading real? | Execution is through real Uniswap v4 contracts on Arc; the traded asset is a mock kept at the real ETH price, and NAV uses real oracle prices. |
-| Why Arc? | USDC-native settlement and gas, Uniswap v4 available, sub-second finality for quick collapse and execution, and Circle wallets for agents. |
+| Is the trading real? | Execution is through real Uniswap v4 contracts on Arc; the traded asset is a mock kept at the real ETH price, and NAV uses a keeper-updated price from Coinbase. |
+| Why Arc? | USDC-native settlement and gas, Uniswap v4 available, and sub-second finality for quick collapse and execution. |
 
 ---
 
-## Risks and open questions
+## Known limitations
 
-- **Arc Studio eligibility** for hand-written contracts: confirm with Arc mentors.
-- **Uniswap v4 addresses on Arc testnet:** confirm from official sources on day 1.
-- **Oracle feed availability** for ETH/USD on Arc testnet.
-- **CRE support for Arc:** may need to run in simulation.
-- **Pool-creation gas** must be measured on Arc before deployment; local Foundry gas is currently below 5M for both round opening and one proposal.
+- **Trusted keeper and oracle.** Resolution uses a keeper-updated price from Coinbase. CRE and decentralised oracles are roadmap items.
+- **Vault withdrawal liquidity.** When a queued withdrawal exceeds the vault's free USDC, the vault sells tETH for the shortfall without grossing up for the 0.3% pool fee, so the sale comes up short and the decision reverts. The Vault page therefore warns and disables **Queue withdrawal** above the free USDC. Fixing the contract is roadmap work.
 - **Thin participation** weakens manipulation resistance; production needs many independent forecasters.
+- **Pool upkeep.** The USDC/tETH position is concentrated and owned by the deployer; it needs `pool:recenter` before rounds, and the vault's trade is cancelled if the pool is more than the slippage cap away from the oracle.
+- **Superseded deployments.** Earlier deployments are not used. 5 USDC of round 3's seed is permanently locked in the first Phase B `QuantumRound` (no release path existed there); 1 wei of WAVE dust remains with the deployer.
 - **Regulation:** a pooled fund with performance fees is regulated in most jurisdictions; this prototype is testnet only.
 
 ---
