@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { DemoWorkspaceView } from "./demo-workspace";
 import { addresses, arcTestnet } from "./lib/contracts";
 import { explorerAddress, explorerTx } from "./lib/explorer";
-import { fmtMoney, fmtPercentChange, fmtReturn, fmtToken, fmtUsdc } from "./lib/format";
+import { fmtMoney, fmtPercentChange, fmtReturn, fmtToken, fmtUsdc, parseToken } from "./lib/format";
 import {
   toShareAmount,
   toUsdc,
@@ -95,6 +95,18 @@ export default function LiveWorkspace({
   const vaultShareCount = toShareAmount(snapshot?.vault.shareSupply ?? 0n);
   const vaultSharePrice = vaultShareCount > 0 ? toUsdc(snapshot?.vault.navUsdc ?? 0n) / vaultShareCount : 1;
 
+  // The vault sells tETH to cover a withdrawal shortfall without grossing up for the 0.3% pool fee, so a withdrawal only succeeds if it fits in the vault's free USDC.
+  const withdrawEstimate = useMemo(() => {
+    if (!snapshot || snapshot.vault.shareSupply === 0n) return null;
+    try {
+      const shares = parseToken(vaultWithdrawAmount);
+      return { shares, usdc: (shares * snapshot.vault.navUsdc) / snapshot.vault.shareSupply };
+    } catch {
+      return null;
+    }
+  }, [snapshot, vaultWithdrawAmount]);
+  const withdrawExceedsFreeUsdc = Boolean(withdrawEstimate && snapshot && withdrawEstimate.usdc > snapshot.vault.usdcBalance);
+
   async function perform(label: string, operation: () => Promise<`0x${string}`>) {
     try {
       const hash = await operation();
@@ -168,7 +180,12 @@ export default function LiveWorkspace({
             <label className="inline-money-input"><input aria-label="Vault deposit amount in USDC" type="number" min="0.000001" step="0.1" value={vaultDepositAmount} onChange={(event) => setVaultDepositAmount(event.target.value)} placeholder="USDC" /><span>USDC</span></label>
             <button className="button button-outline" type="button" disabled={!canTransact} onClick={() => perform("Queue vault deposit", () => live.depositToVault(vaultDepositAmount))}>Queue deposit</button>
             <label className="inline-money-input"><input aria-label="Vault shares to withdraw" type="number" min="0.000000000000000001" step="0.1" value={vaultWithdrawAmount} onChange={(event) => setVaultWithdrawAmount(event.target.value)} placeholder="Shares to withdraw" /><span>WAVE</span></label>
-            <button className="button button-outline" type="button" disabled={!canTransact || snapshot.vault.shareBalance === 0n} onClick={() => perform("Queue vault withdrawal", () => live.withdrawFromVault(vaultWithdrawAmount))}>Queue withdrawal</button>
+            <button className="button button-outline" type="button" disabled={!canTransact || snapshot.vault.shareBalance === 0n || withdrawExceedsFreeUsdc} onClick={() => perform("Queue vault withdrawal", () => live.withdrawFromVault(vaultWithdrawAmount))}>Queue withdrawal</button>
+            {withdrawExceedsFreeUsdc && withdrawEstimate && (
+              <p className="storage-warning" role="status">
+                This withdrawal is worth about {fmtMoney(withdrawEstimate.usdc)} USDC, but the vault only holds {fmtMoney(snapshot.vault.usdcBalance)} free USDC. Withdrawals are paid from free USDC (selling tETH would lose the 0.3% pool fee and fail), so reduce the amount.
+              </p>
+            )}
             {snapshot.vault.queuedDeposit > 0n && <button className="button button-outline" type="button" disabled={!canTransact} onClick={() => perform("Cancel vault deposit", live.cancelVaultDeposit)}>Cancel deposit</button>}
             {snapshot.vault.queuedWithdrawal > 0n && <button className="button button-outline" type="button" disabled={!canTransact} onClick={() => perform("Cancel vault withdrawal", live.cancelVaultWithdrawal)}>Cancel withdrawal</button>}
           </div>
