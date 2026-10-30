@@ -22,6 +22,7 @@ test("forecasters schedule periodically and once in the final TWAP window", () =
 });
 
 test("closed rounds and rounds past trading end are not scheduled", () => {
+  assert.equal(nextAgentEvaluation(proposer, { ...round, collapsed: true }, 900), null);
   assert.equal(nextAgentEvaluation(proposer, { ...round, settled: true }, 900), null);
   assert.equal(nextAgentEvaluation(forecaster, round, 1_000), null);
 });

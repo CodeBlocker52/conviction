@@ -57,6 +57,7 @@ const upperPct = option("--upper", 20); // range above the oracle price
 const targetUsdc = option("--impact-usdc", 2);
 const targetBps = option("--impact-bps", 200);
 const maxUsdcBudget = BigInt(Math.round(option("--max-usdc", 11) * 1_000_000));
+const maxNewUsdcBudget = BigInt(Math.round(option("--max-new-usdc", 1) * 1_000_000));
 const alignToleranceBps = 20n;
 
 await assertArcTestnet();
@@ -189,7 +190,10 @@ const recovered = existingLiquidity > 0n
     sqrtPriceAtTick(priorPosition.tickLower),
     sqrtPriceAtTick(priorPosition.tickUpper),
   )
-  : { amount0: 0n, amount1: 0n };
+  : {
+    amount0: BigInt(priorPosition?.recoveredAmount0 ?? 0),
+    amount1: BigInt(priorPosition?.recoveredAmount1 ?? 0),
+  };
 
 if (removeOnly) {
   if (existingLiquidity === 0n) throw new Error("No managed concentrated position to remove.");
@@ -224,17 +228,27 @@ if (!removeOnly) {
   console.log(`Range: -${lowerPct}% / +${upperPct}% of oracle => $${usdcPerTEthAtTick(range.tickUpper).toFixed(2)} .. $${usdcPerTEthAtTick(range.tickLower).toFixed(2)} (ticks ${range.tickLower}..${range.tickUpper})`);
   console.log(`Target depth: ${targetUsdc} USDC moves spot < ${targetBps / 100}%  =>  total liquidity ${totalTarget}`);
   console.log(`Position needs ${usdc(needed.amount0)} USDC + ${usdc(needed.amount1, 18)} tETH (caps ${usdc(capUsdc)} / ${usdc(capTEth, 18)})`);
-  console.log(`Reused from the old position: ${usdc(recovered.amount0)} USDC + ${usdc(recovered.amount1, 18)} tETH`);
+  console.log(`${existingLiquidity > 0n ? "Current position holds" : "Reused from the recovered position"}: ${usdc(recovered.amount0)} USDC + ${usdc(recovered.amount1, 18)} tETH`);
   if (align) console.log(`Alignment swap: up to ${usdc(align.amountIn, align.token === "USDC" ? 6 : 18)} ${align.token} (unused input is not taken)`);
   const [usdcBalance, tEthBalance] = await Promise.all([
     publicClient.readContract({ address: contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [deployerAddress] }),
     publicClient.readContract({ address: contracts.testAsset, abi: erc20Abi, functionName: "balanceOf", args: [deployerAddress] }),
   ]);
+  const positionStillOnChain = existingLiquidity > 0n;
   const freshUsdc = capUsdc > recovered.amount0 ? capUsdc - recovered.amount0 : 0n;
-  console.log(`New USDC required from the deployer wallet: ${usdc(freshUsdc)} (budget ${usdc(maxUsdcBudget)}; balance ${usdc(usdcBalance)})`);
+  const alignmentUsdc = align?.token === "USDC" ? align.amountIn : 0n;
+  const newUsdcRequired = freshUsdc + alignmentUsdc;
+  console.log(`New USDC required beyond the recovered position: ${usdc(newUsdcRequired)} (limit ${usdc(maxNewUsdcBudget)}; position cap ${usdc(maxUsdcBudget)}; wallet balance ${usdc(usdcBalance)})`);
+  const freshTEth = capTEth > recovered.amount1 ? capTEth - recovered.amount1 : 0n;
+  console.log(`New tETH required beyond the recovered position: ${usdc(freshTEth, 18)} (wallet balance ${usdc(tEthBalance, 18)})`);
   if (capUsdc > maxUsdcBudget) throw new Error(`Position needs ${usdc(capUsdc)} USDC, above the ${usdc(maxUsdcBudget)} budget.`);
-  if (usdcBalance + recovered.amount0 < capUsdc + (align?.token === "USDC" ? align.amountIn : 0n)) throw new Error("Deployer USDC is insufficient.");
-  if (tEthBalance + recovered.amount1 < capTEth) throw new Error("Deployer tETH is insufficient.");
+  if (newUsdcRequired > maxNewUsdcBudget) {
+    throw new Error(`Recenter needs ${usdc(newUsdcRequired)} new USDC, above the ${usdc(maxNewUsdcBudget)} limit.`);
+  }
+  if (usdcBalance + (positionStillOnChain ? recovered.amount0 : 0n) < capUsdc + alignmentUsdc) throw new Error("Deployer USDC is insufficient.");
+  if (tEthBalance + (positionStillOnChain ? recovered.amount1 : 0n) < capTEth + (align?.token === "tETH" ? align.amountIn : 0n)) {
+    throw new Error("Deployer tETH is insufficient.");
+  }
   measure(newLiquidity + fullRangeLiquidity, oracleSqrt, oracleUsdc);
   if (!execute) {
     console.log("Read-only plan complete. Re-run with --execute to send transactions.");
@@ -254,9 +268,16 @@ if (existingLiquidity > 0n) {
     [2, poolKey, deployer.address, priorPosition.tickLower, priorPosition.tickUpper, existingLiquidity],
   );
   const [d0, d1] = await callCallback(deployer.address, payload);
+  if (d0 < 0n || d1 < 0n) throw new Error("Removing the managed position did not return both pool tokens.");
   console.log(`Simulated removal returns ${usdc(d0)} USDC and ${usdc(d1, 18)} tETH`);
   await sendCallback("Remove managed position", client, payload);
-  savePosition({ ...priorPosition, liquidity: "0", removedAt: new Date().toISOString() });
+  savePosition({
+    ...priorPosition,
+    liquidity: "0",
+    recoveredAmount0: d0.toString(),
+    recoveredAmount1: d1.toString(),
+    removedAt: new Date().toISOString(),
+  });
 }
 if (removeOnly) {
   console.log("Position removed.");
@@ -282,16 +303,30 @@ const finalNeeded = amountsForLiquidity(newLiquidity, aligned.sqrtPriceX96, rang
 const finalCapUsdc = finalNeeded.amount0 * 1_010n / 1_000n + 1n;
 const finalCapTEth = finalNeeded.amount1 * 1_010n / 1_000n + 1n;
 if (finalCapUsdc > maxUsdcBudget) throw new Error("Aligned position would exceed the USDC budget.");
-await approve(client, contracts.usdc, usdcAbi, finalCapUsdc, "USDC (liquidity)");
-await approve(client, contracts.testAsset, erc20Abi, finalCapTEth, "tETH (liquidity)");
+const finalFreshUsdc = finalCapUsdc > recovered.amount0 ? finalCapUsdc - recovered.amount0 : 0n;
+const plannedNewUsdc = finalFreshUsdc + (align?.token === "USDC" ? align.amountIn : 0n);
+if (plannedNewUsdc > maxNewUsdcBudget) {
+  throw new Error(`Aligned position needs ${usdc(plannedNewUsdc)} new USDC, above the ${usdc(maxNewUsdcBudget)} limit.`);
+}
+const addUsdcCap = maxUsdcBudget < recovered.amount0 + maxNewUsdcBudget
+  ? maxUsdcBudget
+  : recovered.amount0 + maxNewUsdcBudget;
+const addTEthCap = finalCapTEth > recovered.amount1 ? finalCapTEth : recovered.amount1;
+await approve(client, contracts.usdc, usdcAbi, addUsdcCap, "USDC (liquidity)");
+await approve(client, contracts.testAsset, erc20Abi, addTEthCap, "tETH (liquidity)");
 const addPayload = encodeAbiParameters(
   [
     { type: "uint8" }, poolKeyType, { type: "address" }, { type: "int24" }, { type: "int24" },
     { type: "int256" }, { type: "uint256" }, { type: "uint256" },
   ],
-  [0, poolKey, deployer.address, range.tickLower, range.tickUpper, newLiquidity, finalCapUsdc, finalCapTEth],
+  [0, poolKey, deployer.address, range.tickLower, range.tickUpper, newLiquidity, addUsdcCap, addTEthCap],
 );
 const [a0, a1] = await callCallback(deployer.address, addPayload);
+const actualNewUsdc = (a0 < 0n && -a0 > recovered.amount0 ? -a0 - recovered.amount0 : 0n)
+  + (align?.token === "USDC" ? align.amountIn : 0n);
+if (actualNewUsdc > maxNewUsdcBudget) {
+  throw new Error(`Simulated add needs ${usdc(actualNewUsdc)} new USDC, above the ${usdc(maxNewUsdcBudget)} limit.`);
+}
 console.log(`Simulated add costs ${usdc(-a0)} USDC and ${usdc(-a1, 18)} tETH`);
 const hash = await sendCallback("Add concentrated position", client, addPayload);
 

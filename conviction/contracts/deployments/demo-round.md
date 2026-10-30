@@ -273,3 +273,44 @@ The four proposal seeds returned to the protocol reserve. Three 1 USDC proposer 
 | Report return and settle round 3 | [0x9bc0fedfe887350d93e615040519a0ef90f71676dde412672ddf0dc5ae2524c0](https://explorer.testnet.arc.io/tx/0x9bc0fedfe887350d93e615040519a0ef90f71676dde412672ddf0dc5ae2524c0) | Confirmed |
 
 Reconciliation: protocol seed increased from 0.079913 to 20.079913 USDC (+20 USDC returned from the four proposal seeds). The status-quo vault execution did not swap principal. Keeper gas used was 0.029199219 USDC, below the approved 0.10 USDC ceiling. No forecaster claims or redemptions were outstanding.
+
+## Agent wallet funding
+
+Date: 2026-10-30. Network: Arc Testnet (chain ID 5042002). Source: Wavefund Deployer `0xDA026fbF1F9a98632F52AA23F92c0041d6Ef3ac2`. Each approved ERC-20 USDC transfer was 1.25 USDC: 1.00 USDC principal (proposer bond or forecaster deposit) plus 0.25 USDC reserved for Arc gas. Total sent: 6.25 USDC. All five receipts succeeded, and each wallet's on-chain ERC-20 USDC balance was verified at 1.25 USDC immediately after its transfer.
+
+| Agent | Role | Address | Amount | Transaction | Verified balance |
+|---|---|---|---:|---|---:|
+| Momentum | Proposer | `0x927751387951b69390151f34f3dd756a624abc0d` | 1.25 USDC | [0x383e24378a8f5fd66073cc928ef211620c38ebd50a4ec322f0122e7c17095298](https://explorer.testnet.arc.io/tx/0x383e24378a8f5fd66073cc928ef211620c38ebd50a4ec322f0122e7c17095298) | 1.25 USDC |
+| Mean-reversion | Proposer | `0x2901ab7721217a1733b744009847dfe3d9f70e25` | 1.25 USDC | [0xf900033cbaa8355df0f0e57c0cb9fe0a59ba562ae1907a86ce1c08228b16c37a](https://explorer.testnet.arc.io/tx/0xf900033cbaa8355df0f0e57c0cb9fe0a59ba562ae1907a86ce1c08228b16c37a) | 1.25 USDC |
+| News | Proposer | `0x324ec3c47f7c28c254977a14ca0ecec05524c455` | 1.25 USDC | [0x5a2b912a17f9a9c4feadefb705d0d71182cbca7c911b6d22c2efe91d6e01fc96](https://explorer.testnet.arc.io/tx/0x5a2b912a17f9a9c4feadefb705d0d71182cbca7c911b6d22c2efe91d6e01fc96) | 1.25 USDC |
+| Quant | Forecaster | `0x66617018c7d91e1345ea9f51b44a062aad2d439e` | 1.25 USDC | [0xd56b7c3f313e298113398de92a31c631ea5366fc2978f6f97f1e493c7e356d5d](https://explorer.testnet.arc.io/tx/0xd56b7c3f313e298113398de92a31c631ea5366fc2978f6f97f1e493c7e356d5d) | 1.25 USDC |
+| Guardian | Forecaster | `0x4a1ba43da2b795d68f63f34fba185d92a08f1d5f` | 1.25 USDC | [0x2f1c6d4d9d87d3d4bf9aecbce61b5b10fb8a4006ea1ff8d8b1231da56880f6ee](https://explorer.testnet.arc.io/tx/0x2f1c6d4d9d87d3d4bf9aecbce61b5b10fb8a4006ea1ff8d8b1231da56880f6ee) | 1.25 USDC |
+
+Funding reconciliation: 5 × 1.25 USDC = 6.25 USDC transferred; recipient ERC-20 balances total 6.25 USDC. The native gas and ERC-20 USDC balance views are not added together.
+
+## Pool recenter before round 4
+
+The original position was outside the oracle-alignment tolerance: pool spot was $2,349.24 versus a $2,236.30 Coinbase quote (5.05% deviation). Its range was $2,104.89–$2,824.27 (ticks 196860–199800); removal returned approximately 10.683967 USDC and 0.007486886353817853 tETH.
+
+| Action | Transaction | Result |
+|---|---|---|
+| Remove old managed position | [0x5d6d48b4934ac092c0b46958a9fe58f8491a6e2a670a3d822c9a4be3dd000956](https://explorer.testnet.arc.io/tx/0x5d6d48b4934ac092c0b46958a9fe58f8491a6e2a670a3d822c9a4be3dd000956) | Confirmed |
+| Align pool to oracle | [0xd5db075aada5d73e6a068e71aecca0a88897d0db393595f6c15575ffcb2dd3ea](https://explorer.testnet.arc.io/tx/0xd5db075aada5d73e6a068e71aecca0a88897d0db393595f6c15575ffcb2dd3ea) | Confirmed |
+| Add recentered position | [0x1d867ee0139f73ca29dc29a9045d6ce7a19239732f3328c76bcacf0b44b9add2](https://explorer.testnet.arc.io/tx/0x1d867ee0139f73ca29dc29a9045d6ce7a19239732f3328c76bcacf0b44b9add2) | Confirmed |
+
+The new position uses ticks 197340–200280 ($2,006.25–$2,691.91). Its verified inventory is approximately 10.553430 USDC and 0.007909724853585232 tETH. At add time the pool was $2,236.30 versus a $2,240.66 oracle quote (0.20% deviation). No new USDC principal beyond the recovered position was used; gas was paid separately. The recenter script now enforces a configurable new-USDC cap and persists recovered assets across an interrupted run. Its TickMath constant was corrected after a read-only add simulation caught the error; no failed liquidity-add transaction was sent.
+
+## Round 4
+
+Status: Settled; status quo won, with one on-chain proposal and no deposits.
+
+| Action | Transaction | Result |
+|---|---|---|
+| Open status-quo-only round (20-minute trading, 600-second evaluation) | [0x5d566bc463f9e40d1a1d398d8c32c7d766bb4610388716608e14c1bac10c2c73](https://explorer.testnet.arc.io/tx/0x5d566bc463f9e40d1a1d398d8c32c7d766bb4610388716608e14c1bac10c2c73) | Confirmed |
+| Collapse round 4 | [0xecd341a1bedead0bfae785d802a9c849c191577bac7e648dcc6f1288bebf6f9e](https://explorer.testnet.arc.io/tx/0xecd341a1bedead0bfae785d802a9c849c191577bac7e648dcc6f1288bebf6f9e) | Confirmed |
+| Status-quo vault execution (no principal swap) | [0xe5526bb8bc283b92d59e5faf5ed6272d86e56cee3b2c150384a626efad37df9a](https://explorer.testnet.arc.io/tx/0xe5526bb8bc283b92d59e5faf5ed6272d86e56cee3b2c150384a626efad37df9a) | Confirmed |
+| Report return and settle round 4 | [0x61bfdc58b4547e613a0c6bef41d9b4081320bf6981db6063bcc0854a9cee0460](https://explorer.testnet.arc.io/tx/0x61bfdc58b4547e613a0c6bef41d9b4081320bf6981db6063bcc0854a9cee0460) | Confirmed |
+
+The protocol seed was 20.079913 USDC before opening, 15.079913 USDC while the 5 USDC status-quo market was active, and 20.079913 USDC after settlement. Vault inventory was unchanged: 2.5 USDC and 0.001054719528886627 tETH before and after. All five agent wallets still held 1.25 USDC.
+
+The proposer dry-run ran during the open window only. Momentum recommended 4100 bps (not a duplicate); Mean-reversion recommended 4900 bps (suppressed within 500 bps of status quo); News recommended 4100 bps (suppressed as a duplicate of Momentum). All decisions were logged as `dryRun: true` and `submitted: false`; no live agent proposal was sent.

@@ -255,7 +255,7 @@ The reference resolves outcomes with a single signer's signature. Wavefund's ret
 
 ## Agents
 
-> **Status:** Step 2 runtime scaffolding is implemented; strategy decisions and live agent actions remain deferred to Steps 3 and 4. Proposals are currently created by the deployer and keeper wallets (registered in `ProposerRegistry`).
+> **Status:** Step 2 runtime and Step 3 proposer strategies are implemented. Proposal submission remains disabled; no agent has proposed on-chain. The forecaster strategies remain deferred to Step 4.
 
 Each agent is a participant with money at stake.
 
@@ -267,7 +267,7 @@ Each agent is a participant with money at stake.
 | **Quant forecaster** | Trades every proposal's market | Expected return under each allocation, from current price and volatility | Forecasting deposit |
 | **Guardian forecaster** | Trades every proposal's market | Monitors probabilities for manipulation and responds near the final TWAP window | Forecasting deposit |
 
-Each agent will have its own **Circle developer-controlled wallet** on Arc. `npm run agents:setup` provisions five unfunded Arc Testnet EOAs, records public addresses in `agents/agents.json`, and stores Circle wallet IDs in the ignored `.env`. No wallets have been created or funded yet. `npm run agents:run -- --dry-run` only reports scheduled evaluations; live actions are separately gated and not implemented yet.
+Each agent has its own **Circle developer-controlled wallet** on Arc. `npm run agents:setup` provisions five Arc Testnet EOAs, records public addresses in `agents/agents.json`, and stores Circle wallet IDs in the ignored `.env`. Momentum and mean-reversion use bounded candle signals; News uses recent RSS headlines and an optional Claude JSON decision with deterministic fallback. `npm run agents:run -- --dry-run` computes proposer decisions only during an open round and never signs or submits; live agent actions remain disabled.
 
 The leaderboard tracks each agent's record: proposals won, realised return of its winning proposals, and forecasting PnL. Over time the best agents accumulate capital and influence; weak ones lose deposits. That is the paper's point about decision markets being the right substrate for AI agents, made concrete.
 
@@ -563,9 +563,9 @@ forge test             # 218 tests (run from this folder; needs ~/.foundry/bin o
 
 | Command | What it does |
 |---|---|
-| `npm run pool:recenter [-- --execute]` | Plans, then (with `--execute`) re-centres the USDC/tETH pool on the oracle price and re-adds a −10% / +20% position. `-- --remove` removes the position and returns the funds to the deployer. |
+| `npm run pool:recenter [-- --execute]` | Plans, then (with `--execute`) re-centres the USDC/tETH pool on the oracle price and re-adds a −10% / +20% position. `-- --max-new-usdc 1` caps new USDC beyond recovered position assets at 1 USDC (default); `-- --remove` removes the position and returns the funds to the deployer. |
 | `npm run agents:setup` | User-run Circle API setup: creates a wallet set and five unfunded `ARC-TESTNET` EOAs; stores public addresses in `agents/agents.json` and wallet IDs in `.env` |
-| `npm run agents:run -- --dry-run --poll 10` | Reads the current round and reports proposer/forecaster evaluation schedules; no signing or submission |
+| `npm run agents:run -- --dry-run --poll 10` | Computes Momentum, Mean-reversion and News proposal decisions while a real round is open; no signing or submission. `--execute` is disabled. |
 | `npm run demo:open-round -- --minutes 30 --execute` | Checks pool depth, offset, candles and protocol seed; opens status quo only with a 10-minute evaluation horizon and fresh volatility-derived bounds. `--with-demo-proposals` opts in to legacy deployer/keeper proposals. |
 | `npm run keeper:run [-- --poll 15 --open-every <min> --window <min> --horizon 600]` | Collapses at trading end, **immediately** runs the vault trade, reports and settles at evaluation end; new rounds default to 10-minute evaluation and candle-derived bounds; skips opening unless seed covers status quo plus all proposer markets; logs every tx; Ctrl+C stops cleanly |
 | `npm run demo:close-round -- --execute` | Manual equivalent of the keeper (collapse, trade, settle) |

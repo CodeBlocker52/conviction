@@ -1,6 +1,6 @@
 # Wavefund agent plan
 
-**Status:** Step 2 runtime scaffolding only. The deployed Phase B v2 contracts remain unchanged. No agent wallet has been created or funded by this implementation; no agent transaction has been submitted.
+**Status:** Steps 2 and 3 are implemented. The deployed Phase B v2 contracts remain unchanged. Agent wallets are funded under explicit approval; no agent proposal has been submitted.
 
 ## 1. Wallets and custody
 
@@ -30,7 +30,7 @@ All proposals target tETH allocation in basis points (`0..10_000`) and submit a 
 |---|---|---|
 | Momentum | Proposer | Coinbase ETH/USD candles at fixed recent intervals; calculate short-horizon trend and map its bounded signal to a target tETH allocation. |
 | Mean-reversion | Proposer | Coinbase ETH/USD history; compare price with a moving average and scale the deviation by realized volatility before selecting allocation. |
-| News | Proposer | Recent crypto headlines from a public RSS feed plus Coinbase price/candle data; ask Claude for strict JSON matching a validated schema. If the API fails or output is invalid, use a deterministic price-only fallback and state that in the rationale. |
+| News | Proposer | Recent crypto headlines from a public RSS feed plus Coinbase price/candle data; ask Claude for strict JSON matching a validated schema. If the API fails or output is invalid, use deterministic headline scoring and state that fallback in the rationale. |
 | Quant | Forecaster | For each proposal, use current price, drift, volatility, the proposal allocation, and the round evaluation horizon to estimate vault simple return. Convert to fair probability with `pFair = clamp((1 + E[return] - rMin) / (rMax - rMin), 0, 1)`. Trade only when the market probability differs by more than the configured threshold. |
 | Guardian | Forecaster | Compare each proposal's on-chain probability with Quant's fair value; trade toward fair value only when the deviation breaches the manipulation threshold, with stricter attention near the final TWAP window. Log the signal, threshold, and intervention. |
 
@@ -71,3 +71,7 @@ The operator `demo:open-round` path opens status quo only; legacy deployer/keepe
 - Before any live round, report wallet addresses, proposed budgets, fees, round state, available protocol seed, and exact USDC transfers; wait for approval. A live test only proceeds after separate approval of funding and actions.
 - Step 5 must include a testnet manipulation scenario: a test wallet pushes one proposal's `pLong`, then Guardian trades it back toward fair value. Report the injected and restored prices, threshold decision, trade amounts, and fees; obtain approval before any live agent transaction.
 - Do not alter deployed contracts, addresses, `current.json`, or an existing open/unsettled round. On a revert or any balance/reconciliation mismatch, stop and report. After a successful round, reconcile deposits, winner-only claims, redemptions, returned bonds, reserve, and ERC-20 USDC balances without summing the native balance view.
+
+### Step 3 implementation
+
+Momentum standardizes the ten-minute log return by recent one-minute realized volatility; mean-reversion standardizes the latest price's deviation from its 30-minute average. Both target a neutral 50% tETH allocation, move by 15 percentage points per signal z-score, clamp to 20–80%, and round to whole percentage points. News uses up to ten recent CoinDesk RSS headlines and, when `ANTHROPIC_API_KEY` is configured, asks Claude for a strict `{ tEthBps, rationale }` JSON response. Any feed/model/schema failure is recorded and uses bounded deterministic headline scoring (neutral if no headlines are available). Dry-run evaluates these strategies only while a real round is in its trading window; live proposal submission remains disabled.

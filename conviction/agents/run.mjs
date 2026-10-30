@@ -9,8 +9,15 @@ import {
 } from "../contracts/script/demo-round-common.mjs";
 import { readAgents } from "./config.mjs";
 import { writeAgentEvent } from "./logging.mjs";
+import { fetchRecentEthCandles } from "./market-data.mjs";
+import {
+  calculateMeanReversionProposal,
+  calculateMomentumProposal,
+  calculateNewsProposal,
+  fetchCryptoHeadlines,
+  findProposalDuplicate,
+} from "./proposer-strategies.mjs";
 import { nextAgentEvaluation } from "./scheduler.mjs";
-import { createAgentSigner } from "./signers.mjs";
 import { loadRuntimeState, saveRuntimeState } from "./runtime-state.mjs";
 import { assertProposalCountWithinCap } from "./safety.mjs";
 
@@ -37,19 +44,13 @@ if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
   throw new Error("--poll must be a whole number between 1 and 300 seconds.");
 }
 if (dryRunRequested && execute) throw new Error("Choose either --dry-run or --execute, not both.");
-if (execute && process.env.AGENT_LIVE_TRANSACTIONS_APPROVED !== "true") {
-  throw new Error("Agent transactions are disabled until AGENT_LIVE_TRANSACTIONS_APPROVED=true is explicitly approved.");
-}
+if (execute) throw new Error("Live proposer submissions are not enabled in Step 3; run with --dry-run.");
 
 const log = (event) => writeAgentEvent(event);
 const agents = readAgents();
 const statePath = resolve(dirname(scriptPath), ".runtime-state.json");
 const lockPath = resolve(dirname(scriptPath), ".runtime.lock");
 const state = dryRun ? { version: 1, rounds: {} } : loadRuntimeState(statePath);
-const signers = new Map();
-if (execute) {
-  for (const agent of agents) signers.set(agent.id, createAgentSigner(agent, process.env, log));
-}
 
 function saveState() {
   if (!dryRun) saveRuntimeState(state, statePath);
@@ -113,14 +114,101 @@ async function observeRound() {
 
   const chainTimestamp = Number(block.timestamp);
   const roundState = state.rounds[round.id] ?? {};
+  const existingProposals = await Promise.all(
+    Array.from({ length: round.proposalCount }, (_, proposalIndex) =>
+      publicClient.readContract({
+        address: deployment.contracts.quantumRound,
+        abi: roundAbi,
+        functionName: "proposals",
+        args: [roundCount, BigInt(proposalIndex)],
+      }),
+    ),
+  );
+  const consideredProposals = existingProposals.map((proposal, proposalIndex) => ({
+    id: proposalIndex,
+    tEthBps: Number(proposal[2]),
+    source: proposal[6] ? "status-quo" : "on-chain",
+  }));
   let changed = false;
+  const evaluations = [];
   for (const agent of agents) {
     const previous = roundState[agent.id] ?? {};
     const evaluation = nextAgentEvaluation(agent, round, chainTimestamp, previous);
     if (!evaluation) continue;
 
-    roundState[agent.id] = evaluation.nextState;
-    changed = true;
+    evaluations.push({ agent, evaluation });
+  }
+
+  const proposerEvaluations = evaluations.filter(({ agent }) => agent.type === "proposer");
+  if (proposerEvaluations.length > 0) {
+    const candles = await fetchRecentEthCandles();
+    const momentumDecision = calculateMomentumProposal(candles);
+    let headlines;
+    let rssError;
+    if (proposerEvaluations.some(({ agent }) => agent.name === "News")) {
+      try {
+        headlines = await fetchCryptoHeadlines();
+      } catch (error) {
+        headlines = [];
+        rssError = safeErrorMessage(error);
+      }
+    }
+
+    for (const { agent, evaluation } of proposerEvaluations) {
+      let decision;
+      if (agent.name === "Momentum") decision = momentumDecision;
+      else if (agent.name === "Mean-reversion") decision = calculateMeanReversionProposal(candles);
+      else if (agent.name === "News") {
+        decision = await calculateNewsProposal({
+          headlines,
+          marketSignal: momentumDecision.signal,
+          apiKey: process.env.ANTHROPIC_API_KEY,
+        });
+        if (rssError) {
+          decision = {
+            ...decision,
+            rationale: `${decision.rationale} RSS unavailable; fallback used.`,
+            fallbackReason: rssError,
+            source: "fallback",
+          };
+        }
+      } else {
+        throw new Error(`No proposer strategy is configured for ${agent.name}.`);
+      }
+      const duplicate = findProposalDuplicate(decision.tEthBps, consideredProposals);
+      if (!duplicate) {
+        consideredProposals.push({
+          id: `dry-run-${agent.id}`,
+          tEthBps: decision.tEthBps,
+          source: "earlier-dry-run-agent",
+        });
+      }
+      log({
+        type: "proposer_decision",
+        roundId: round.id,
+        agentId: agent.id,
+        agentName: agent.name,
+        publicAddress: agent.address,
+        cadence: evaluation.cadence,
+        tEthBps: decision.tEthBps,
+        rationale: decision.rationale,
+        source: decision.source ?? "market-data",
+        fallbackReason: decision.fallbackReason,
+        signal: decision.signal,
+        duplicateCheck: {
+          skip: Boolean(duplicate),
+          thresholdBps: 500,
+          duplicateOf: duplicate ? { id: duplicate.id, source: duplicate.source, tEthBps: duplicate.tEthBps } : null,
+        },
+        dryRun: true,
+        submitted: false,
+      });
+      roundState[agent.id] = evaluation.nextState;
+      changed = true;
+    }
+  }
+
+  for (const { agent, evaluation } of evaluations.filter(({ agent }) => agent.type !== "proposer")) {
     log({
       type: "evaluation",
       roundId: round.id,
@@ -128,13 +216,13 @@ async function observeRound() {
       agentName: agent.name,
       agentType: agent.type,
       cadence: evaluation.cadence,
-      intendedAction: agent.type === "proposer" ? "evaluate-and-propose" : "evaluate-markets",
-      publicAddress: agent.address,
-      status: agent.address ? "strategy_pending" : "wallet_not_provisioned",
-      reason: "Decision strategies are deferred to Steps 3 and 4; no agent action is submitted in Step 2.",
-      dryRun,
-      signerBackend: execute ? (process.env.AGENT_SIGNER_BACKEND ?? "circle") : undefined,
+      intendedAction: "evaluate-markets",
+      status: "strategy_deferred_until_step_4",
+      reason: "Forecaster decision strategies are deferred to Step 4.",
+      dryRun: true,
     });
+    roundState[agent.id] = evaluation.nextState;
+    changed = true;
   }
   if (changed) {
     state.rounds[round.id] = roundState;
@@ -149,7 +237,7 @@ async function main() {
     chain: deployment.chainName,
     mode: dryRun ? "dry-run" : "execute",
     pollSeconds,
-    configuredSigners: signers.size,
+    liveSubmissionsEnabled: false,
     agents: agents.map(({ id, name, type, address }) => ({ id, name, type, address })),
     signerBackend: execute ? (process.env.AGENT_SIGNER_BACKEND ?? "circle") : "not initialized in dry-run",
   });

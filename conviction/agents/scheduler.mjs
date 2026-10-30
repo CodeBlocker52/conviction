@@ -1,6 +1,6 @@
 export function nextAgentEvaluation(agent, round, chainTimestamp, previous = {}) {
   const tradingEnd = Number(round.tradingEnd);
-  if (round.settled || round.cancelled || chainTimestamp >= tradingEnd) return null;
+  if (round.collapsed || round.settled || round.cancelled || chainTimestamp >= tradingEnd) return null;
 
   if (agent.type === "proposer") {
     if (previous.proposerEvaluated) return null;
