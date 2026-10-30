@@ -51,6 +51,12 @@ export function circleWalletIdEnvKey(agent) {
   return `AGENT_${agent.id}_CIRCLE_WALLET_ID`;
 }
 
+export function walletSetupIsComplete(agents, env) {
+  return agents.length === 5 && agents.every((agent) =>
+    typeof agent.address === "string" && Boolean(env[circleWalletIdEnvKey(agent)]),
+  );
+}
+
 export function localPrivateKeyEnvKey(agent) {
   return `AGENT_${agent.id}_PRIVATE_KEY`;
 }

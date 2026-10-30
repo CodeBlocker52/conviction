@@ -567,7 +567,7 @@ forge test             # 218 tests (run from this folder; needs ~/.foundry/bin o
 | `npm run agents:setup` | User-run Circle API setup: creates a wallet set and five unfunded `ARC-TESTNET` EOAs; stores public addresses in `agents/agents.json` and wallet IDs in `.env` |
 | `npm run agents:run -- --dry-run --poll 10` | Reads the current round and reports proposer/forecaster evaluation schedules; no signing or submission |
 | `npm run demo:open-round -- --minutes 30 --execute` | Checks pool depth, offset, candles and protocol seed; opens status quo only with a 10-minute evaluation horizon and fresh volatility-derived bounds. `--with-demo-proposals` opts in to legacy deployer/keeper proposals. |
-| `npm run keeper:run [-- --poll 15 --open-every <min> --window <min> --horizon 600]` | Collapses at trading end, **immediately** runs the vault trade, reports and settles at evaluation end; new rounds default to 10-minute evaluation and candle-derived bounds; logs every tx; Ctrl+C stops cleanly |
+| `npm run keeper:run [-- --poll 15 --open-every <min> --window <min> --horizon 600]` | Collapses at trading end, **immediately** runs the vault trade, reports and settles at evaluation end; new rounds default to 10-minute evaluation and candle-derived bounds; skips opening unless seed covers status quo plus all proposer markets; logs every tx; Ctrl+C stops cleanly |
 | `npm run demo:close-round -- --execute` | Manual equivalent of the keeper (collapse, trade, settle) |
 | `npm run oracle:update` / `oracle:start` / `oracle:stop` | Push the Coinbase price on chain once, or run the 60 s watcher |
 

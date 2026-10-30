@@ -6,6 +6,7 @@ import {
   assertProposalCountWithinCap,
   assertTradeWithinCap,
   PER_AGENT_GAS_CAP_WEI,
+  requiredProtocolSeed,
 } from "./safety.mjs";
 
 test("agent budgets reject principal, gas, trade, and proposal overages", () => {
@@ -18,4 +19,10 @@ test("agent budgets reject principal, gas, trade, and proposal overages", () => 
   assert.throws(() => assertProposalCountWithinCap(11), /between zero and 10/);
   assertGasWithinCap(0n, PER_AGENT_GAS_CAP_WEI);
   assert.throws(() => assertGasWithinCap(1n, PER_AGENT_GAS_CAP_WEI), /0.25 USDC/);
+});
+
+test("protocol reserve requirement covers status quo and every proposer market", () => {
+  assert.equal(requiredProtocolSeed(5_000_000n, 3), 20_000_000n);
+  assert.throws(() => requiredProtocolSeed(5_000_000, 3), /nonnegative bigint/);
+  assert.throws(() => requiredProtocolSeed(5_000_000n, -1), /nonnegative whole number/);
 });

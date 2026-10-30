@@ -25,8 +25,11 @@ import {
   walletClientFor,
 } from "./demo-round-common.mjs";
 import { calculateRiskModel, fetchRecentEthCandles } from "../../agents/market-data.mjs";
+import { readAgents } from "../../agents/config.mjs";
+import { requiredProtocolSeed } from "../../agents/safety.mjs";
 
 const { contracts } = deployment;
+const proposerCount = readAgents().filter((agent) => agent.type === "proposer").length;
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
@@ -151,8 +154,9 @@ async function step() {
       publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "protocolLiquiditySeed" }),
       publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "initialLiquidityPerProposal" }),
     ]);
-    if (seed < perProposal) {
-      log(`Cannot open the next round: reserve ${usdc(seed)} USDC is below the ${usdc(perProposal)} USDC seed.`);
+    const requiredSeed = requiredProtocolSeed(perProposal, proposerCount);
+    if (seed < requiredSeed) {
+      log(`Cannot open the next round: reserve ${usdc(seed)} USDC is below the ${usdc(requiredSeed)} USDC required for status quo plus ${proposerCount} proposer markets; skipping this opening.`);
       lastSettledAt = Date.now();
       return;
     }

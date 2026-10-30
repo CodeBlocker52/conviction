@@ -6,6 +6,16 @@ export const FORECASTER_DEPOSIT_CAP_USDC = 1_000_000n;
 export const TRADE_CAP_USDC = 500_000n;
 export const MAX_PROPOSALS_PER_ROUND = 10;
 
+export function requiredProtocolSeed(perProposal, proposerCount) {
+  if (typeof perProposal !== "bigint" || perProposal < 0n) {
+    throw new Error("Per-proposal seed must be a nonnegative bigint.");
+  }
+  if (!Number.isInteger(proposerCount) || proposerCount < 0) {
+    throw new Error("Proposer count must be a nonnegative whole number.");
+  }
+  return perProposal * BigInt(1 + proposerCount);
+}
+
 export function assertGasWithinCap(spentWei, estimatedWei, capWei = PER_AGENT_GAS_CAP_WEI) {
   if (spentWei < 0n || estimatedWei < 0n || capWei < 0n) {
     throw new Error("Gas budget values must be nonnegative.");

@@ -1,31 +1,31 @@
 {
   "agents": [
     {
-      "address": null,
+      "address": "0x927751387951b69390151f34f3dd756a624abc0d",
       "name": "Momentum",
       "type": "proposer",
       "description": "Proposes tETH allocations from recent price momentum."
     },
     {
-      "address": null,
+      "address": "0x2901ab7721217a1733b744009847dfe3d9f70e25",
       "name": "Mean-reversion",
       "type": "proposer",
       "description": "Proposes tETH allocations from price deviations and volatility."
     },
     {
-      "address": null,
+      "address": "0x324ec3c47f7c28c254977a14ca0ecec05524c455",
       "name": "News",
       "type": "proposer",
       "description": "Proposes tETH allocations using recent headlines and market data."
     },
     {
-      "address": null,
+      "address": "0x66617018c7d91e1345ea9f51b44a062aad2d439e",
       "name": "Quant",
       "type": "forecaster",
       "description": "Estimates fair proposal probabilities from allocation and market risk."
     },
     {
-      "address": null,
+      "address": "0x4a1ba43da2b795d68f63f34fba185d92a08f1d5f",
       "name": "Guardian",
       "type": "forecaster",
       "description": "Monitors proposal probabilities for material market manipulation."

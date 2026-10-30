@@ -17,6 +17,8 @@ import {
   walletClientFor,
 } from "./demo-round-common.mjs";
 import { calculateRiskModel, fetchRecentEthCandles } from "../../agents/market-data.mjs";
+import { readAgents } from "../../agents/config.mjs";
+import { requiredProtocolSeed } from "../../agents/safety.mjs";
 import {
   liquidityForBuyImpact,
   readPool,
@@ -92,7 +94,8 @@ const saved = readSavedPosition();
 const managedLiquidity = saved ? await readPositionLiquidity(saved.tickLower, saved.tickUpper) : 0n;
 const edgeWarnings = warnNearEdge(managedLiquidity > 0n ? saved : null, spot);
 const needed = liquidityForBuyImpact(pool.sqrtPriceX96, 2_000_000n, 200);
-const marketsNeeded = perProposal * 4n;
+const proposerCount = readAgents().filter((agent) => agent.type === "proposer").length;
+const marketsNeeded = requiredProtocolSeed(perProposal, proposerCount);
 const keeperNeed = gasReserveUsdc + (withDemoProposals ? bond : 0n);
 const deployerNeed = withDemoProposals ? bond * 2n + gasReserveUsdc : 0n;
 

@@ -3,7 +3,12 @@ import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isAddress } from "viem";
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
-import { agentsPath, circleWalletIdEnvKey, readAgents } from "./config.mjs";
+import {
+  agentsPath,
+  circleWalletIdEnvKey,
+  readAgents,
+  walletSetupIsComplete,
+} from "./config.mjs";
 
 const envPath = fileURLToPath(new URL("../.env", import.meta.url));
 let envText = readFileSync(envPath, "utf8");
@@ -13,16 +18,15 @@ const walletSetIdKey = "AGENT_CIRCLE_WALLET_SET_ID";
 const walletSetIdempotencyKey = "AGENT_CIRCLE_WALLET_SET_IDEMPOTENCY_KEY";
 const walletsIdempotencyKey = "AGENT_CIRCLE_WALLETS_IDEMPOTENCY_KEY";
 
-if (!env.CIRCLE_API_KEY || !env.CIRCLE_ENTITY_SECRET) {
-  throw new Error("Set CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET in .env before provisioning Circle wallets.");
-}
-const walletIdsConfigured = agents.filter((agent) => env[circleWalletIdEnvKey(agent)]).length;
-const fullyConfigured = agents.every((agent) => agent.address && env[circleWalletIdEnvKey(agent)]);
-if (fullyConfigured) {
+if (walletSetupIsComplete(agents, env)) {
   console.log("All five agent Circle wallets are already configured:");
   for (const agent of agents) console.log(`${agent.name}: ${agent.address}`);
   process.exit(0);
 }
+if (!env.CIRCLE_API_KEY || !env.CIRCLE_ENTITY_SECRET) {
+  throw new Error("Set CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET in .env before provisioning Circle wallets.");
+}
+const walletIdsConfigured = agents.filter((agent) => env[circleWalletIdEnvKey(agent)]).length;
 if (
   (agents.some((agent) => agent.address) || walletIdsConfigured > 0)
   && !env[walletsIdempotencyKey]
