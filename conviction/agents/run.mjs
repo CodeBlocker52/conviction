@@ -15,7 +15,8 @@ import {
   calculateMomentumProposal,
   calculateNewsProposal,
   fetchCryptoHeadlines,
-  findProposalDuplicate,
+  MIN_PROPOSAL_GAP_BPS,
+  resolveDistinctProposal,
 } from "./proposer-strategies.mjs";
 import { nextAgentEvaluation } from "./scheduler.mjs";
 import { loadRuntimeState, saveRuntimeState } from "./runtime-state.mjs";
@@ -175,11 +176,11 @@ async function observeRound() {
       } else {
         throw new Error(`No proposer strategy is configured for ${agent.name}.`);
       }
-      const duplicate = findProposalDuplicate(decision.tEthBps, consideredProposals);
-      if (!duplicate) {
+      const resolved = resolveDistinctProposal(decision, consideredProposals, MIN_PROPOSAL_GAP_BPS);
+      if (!resolved.skip) {
         consideredProposals.push({
           id: `dry-run-${agent.id}`,
-          tEthBps: decision.tEthBps,
+          tEthBps: resolved.tEthBps,
           source: "earlier-dry-run-agent",
         });
       }
@@ -190,15 +191,19 @@ async function observeRound() {
         agentName: agent.name,
         publicAddress: agent.address,
         cadence: evaluation.cadence,
-        tEthBps: decision.tEthBps,
-        rationale: decision.rationale,
+        rawTEthBps: resolved.rawTEthBps,
+        tEthBps: resolved.tEthBps,
+        shifted: resolved.shifted,
+        shiftReason: resolved.reason,
+        rationale: resolved.rationale,
         source: decision.source ?? "market-data",
         fallbackReason: decision.fallbackReason,
         signal: decision.signal,
-        duplicateCheck: {
-          skip: Boolean(duplicate),
-          thresholdBps: 500,
-          duplicateOf: duplicate ? { id: duplicate.id, source: duplicate.source, tEthBps: duplicate.tEthBps } : null,
+        distinctCheck: {
+          skip: resolved.skip,
+          minGapBps: MIN_PROPOSAL_GAP_BPS,
+          comparedAgainst: consideredProposals.filter((proposal) => proposal.id !== `dry-run-${agent.id}`)
+            .map(({ id, source, tEthBps }) => ({ id, source, tEthBps })),
         },
         dryRun: true,
         submitted: false,

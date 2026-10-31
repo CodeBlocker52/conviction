@@ -7,6 +7,7 @@ import {
   calculateNewsProposal,
   findProposalDuplicate,
   parseRssHeadlines,
+  resolveDistinctProposal,
 } from "./proposer-strategies.mjs";
 
 function candlesFromReturns(returns, initialPrice = 2_500) {
@@ -30,8 +31,8 @@ test("momentum proposer follows bounded positive and negative 10-minute trends",
   const negativeDecision = calculateMomentumProposal(negative);
   assert.ok(positiveDecision.tEthBps > 5_000);
   assert.ok(negativeDecision.tEthBps < 5_000);
-  assert.ok(positiveDecision.tEthBps <= 8_000);
-  assert.ok(negativeDecision.tEthBps >= 2_000);
+  assert.ok(positiveDecision.tEthBps <= 9_000);
+  assert.ok(negativeDecision.tEthBps >= 1_000);
 });
 
 test("mean-reversion proposer reduces exposure after a positive price deviation", () => {
@@ -69,8 +70,8 @@ test("news fallback is deterministic, bounded, and reports empty-source fallback
   assert.ok(bearish.tEthBps < 5_000);
   assert.equal(empty.tEthBps, 5_000);
   assert.equal(empty.source, "fallback");
-  assert.ok(bullish.tEthBps <= 8_000);
-  assert.ok(bearish.tEthBps >= 2_000);
+  assert.ok(bullish.tEthBps <= 9_000);
+  assert.ok(bearish.tEthBps >= 1_000);
 });
 
 test("news price-only fallback uses market drift and includes its input signal", () => {
@@ -127,4 +128,78 @@ test("news model accepts only the strict decision schema and falls back on inval
   });
   assert.equal(invalid.source, "fallback");
   assert.match(invalid.fallbackReason, /valid JSON/);
+});
+
+const statusQuo = { id: 0, tEthBps: 4_900, source: "status-quo" };
+
+function applyAgents(decisions, existing) {
+  const considered = [...existing];
+  return decisions.map((decision) => {
+    const result = resolveDistinctProposal(decision, considered);
+    if (!result.skip) considered.push({ tEthBps: result.tEthBps });
+    return result;
+  });
+}
+
+test("three near-identical signals yield three distinct proposals away from the status quo", () => {
+  const decisions = [
+    { tEthBps: 4_100, direction: -1, rationale: "Momentum: z=-0.5; target 4100 bps tETH." },
+    { tEthBps: 4_100, direction: 1, rationale: "Mean reversion: z=-0.5; target 4100 bps tETH." },
+    { tEthBps: 4_200, direction: -1, rationale: "News: score; target 4200 bps tETH." },
+  ];
+  const results = applyAgents(decisions, [statusQuo]);
+  const all = [statusQuo.tEthBps, ...results.map((result) => result.tEthBps)];
+  assert.ok(results.every((result) => !result.skip));
+  for (let left = 0; left < all.length; left += 1) {
+    for (let right = left + 1; right < all.length; right += 1) {
+      assert.ok(Math.abs(all[left] - all[right]) >= 500, `${all[left]} vs ${all[right]}`);
+    }
+  }
+});
+
+test("shift direction follows the agent's signal and the rationale states the shift", () => {
+  const down = resolveDistinctProposal({ tEthBps: 4_900, direction: -1, rationale: "Momentum: z=-0.1; target 4900 bps tETH." }, [statusQuo]);
+  const up = resolveDistinctProposal({ tEthBps: 4_900, direction: 1, rationale: "Mean reversion: z=-0.1; target 4900 bps tETH." }, [statusQuo]);
+  assert.equal(down.tEthBps, 4_400);
+  assert.equal(up.tEthBps, 5_400);
+  assert.ok(down.shifted && up.shifted);
+  assert.match(down.rationale, /Signal suggests 49%; shifted to 44% to stay distinct from existing proposals\./);
+  assert.ok(up.rationale.length <= 280);
+  const long = resolveDistinctProposal({ tEthBps: 4_900, direction: 1, rationale: "x".repeat(400) }, [statusQuo]);
+  assert.ok(long.rationale.length <= 280);
+  assert.match(long.rationale, /shifted to 54%/);
+});
+
+test("unshifted proposals are left alone", () => {
+  const result = resolveDistinctProposal({ tEthBps: 2_000, direction: -1, rationale: "ok" }, [statusQuo]);
+  assert.deepEqual([result.tEthBps, result.shifted, result.skip], [2_000, false, false]);
+});
+
+test("shifted allocations never leave the 1000-9000 bps bounds", () => {
+  const edgeHigh = resolveDistinctProposal({ tEthBps: 9_000, direction: 1, rationale: "x" }, [{ tEthBps: 8_800 }]);
+  assert.equal(edgeHigh.tEthBps, 8_300);
+  const edgeLow = resolveDistinctProposal({ tEthBps: 1_000, direction: -1, rationale: "x" }, [{ tEthBps: 1_200 }]);
+  assert.equal(edgeLow.tEthBps, 1_700);
+  const outOfRange = resolveDistinctProposal({ tEthBps: 10_000, direction: 1, rationale: "x" }, [{ tEthBps: 5_000 }]);
+  assert.equal(outOfRange.tEthBps, 9_000);
+  for (const direction of [-1, 1]) {
+    for (let bps = 0; bps <= 10_000; bps += 100) {
+      const result = resolveDistinctProposal({ tEthBps: bps, direction, rationale: "x" }, [{ tEthBps: 5_000 }, { tEthBps: 3_000 }]);
+      assert.ok(result.skip || (result.tEthBps >= 1_000 && result.tEthBps <= 9_000));
+    }
+  }
+});
+
+test("a proposal with no valid slot on either side is skipped with a reason", () => {
+  const crowded = [1_000, 1_900, 2_800, 3_700, 4_600, 5_500, 6_400, 7_300, 8_200, 9_000].map((tEthBps) => ({ tEthBps }));
+  const result = resolveDistinctProposal({ tEthBps: 5_000, direction: 1, rationale: "x" }, crowded);
+  assert.equal(result.skip, true);
+  assert.equal(result.tEthBps, null);
+  assert.match(result.reason, /No allocation/);
+});
+
+test("opposite side is tried once when the signal direction is exhausted", () => {
+  const result = resolveDistinctProposal({ tEthBps: 8_800, direction: 1, rationale: "x" }, [{ tEthBps: 8_700 }]);
+  assert.equal(result.tEthBps, 8_200);
+  assert.match(result.reason, /opposite side/);
 });
