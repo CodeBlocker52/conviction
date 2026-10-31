@@ -9,7 +9,9 @@ import {
   guardianThreshold,
   planGuardianAction,
   planQuantAction,
+  prioritizeByProjectedTwap,
   quantFairProbability,
+  sizeSell,
   sizeTrade,
   tooCloseToTradingEnd,
 } from "./forecaster-strategies.mjs";
@@ -84,10 +86,12 @@ test("trade sizing moves price all the way toward pFair and uses quote views", a
 test("per-trade and per-proposal caps are enforced", async () => {
   const deep = mockQuote(0.2, 0.0001)("long");
   const big = await sizeTrade({ direction: "long", pMarket: 0.2, pFair: 0.9, quote: deep });
-  assert.equal(big.creditsIn, 500_000n);
-  const partial = await sizeTrade({ direction: "long", pMarket: 0.2, pFair: 0.9, quote: deep, spentCredits: 800_000n });
+  assert.equal(big.creditsIn, 1_000_000n);
+  const partial = await sizeTrade({ direction: "long", pMarket: 0.2, pFair: 0.9, quote: deep, spentCredits: 1_800_000n });
   assert.equal(partial.creditsIn, 200_000n);
-  const exhausted = await sizeTrade({ direction: "long", pMarket: 0.2, pFair: 0.9, quote: deep, spentCredits: 1_000_000n });
+  const second = await sizeTrade({ direction: "long", pMarket: 0.2, pFair: 0.9, quote: deep, spentCredits: 1_000_000n });
+  assert.equal(second.creditsIn, 1_000_000n);
+  const exhausted = await sizeTrade({ direction: "long", pMarket: 0.2, pFair: 0.9, quote: deep, spentCredits: 2_000_000n });
   assert.equal(exhausted.action, "none");
 });
 
@@ -105,26 +109,108 @@ test("quant takes no action within threshold and plans claim plus buy otherwise"
 });
 
 test("guardian thresholds differ in the final TWAP window", () => {
-  assert.deepEqual(guardianThreshold({ nowSeconds: 100, tradingEnd: 1_000, twapWindow: 300 }), { inFinalWindow: false, threshold: 0.08 });
-  assert.deepEqual(guardianThreshold({ nowSeconds: 700, tradingEnd: 1_000, twapWindow: 300 }), { inFinalWindow: true, threshold: 0.05 });
+  assert.deepEqual(guardianThreshold({ nowSeconds: 100, tradingEnd: 1_000, twapWindow: 300 }), { inFinalWindow: false, threshold: 0.03 });
+  assert.deepEqual(guardianThreshold({ nowSeconds: 700, tradingEnd: 1_000, twapWindow: 300 }), { inFinalWindow: true, threshold: 0.01 });
 });
 
 test("guardian acts only beyond its threshold, tighter in the final window", async () => {
-  const quoteFor = mockQuote(0.44, 0.05);
   const normal = guardianThreshold({ nowSeconds: 0, tradingEnd: 1_000, twapWindow: 300 });
   const final = guardianThreshold({ nowSeconds: 900, tradingEnd: 1_000, twapWindow: 300 });
-  const inNormal = await planGuardianAction({ proposalId: 1, pMarket: 0.44, pFair: 0.5, window: normal, quoteFor });
-  const inFinal = await planGuardianAction({ proposalId: 1, pMarket: 0.44, pFair: 0.5, window: final, quoteFor });
+  const quoteFor = mockQuote(0.48, 0.05);
+  const inNormal = await planGuardianAction({ proposalId: 1, pMarket: 0.48, pFair: 0.5, window: normal, quoteFor });
+  const inFinal = await planGuardianAction({ proposalId: 1, pMarket: 0.48, pFair: 0.5, window: final, quoteFor });
   assert.equal(inNormal.action, "none");
   assert.equal(inFinal.action, "buy");
   assert.match(inFinal.reason, /Intervention on proposal 1/);
-  assert.equal(inFinal.threshold, 0.05);
+  assert.equal(inFinal.threshold, 0.01);
+});
+
+test("guardian ignores a 0.008 deviation and acts on a 0.02 overshoot in the final window", async () => {
+  const final = guardianThreshold({ nowSeconds: 950, tradingEnd: 1_000, twapWindow: 60 });
+  const small = await planGuardianAction({ proposalId: 2, pMarket: 0.508, pFair: 0.5, window: final, quoteFor: mockQuote(0.508, 0.05) });
+  assert.equal(small.action, "none");
+  const overshoot = await planGuardianAction({ proposalId: 2, pMarket: 0.52, pFair: 0.5, window: final, quoteFor: mockQuote(0.52, 0.05) });
+  assert.equal(overshoot.action, "buy");
+  assert.equal(overshoot.side, "short");
+  assert.ok(overshoot.creditsIn <= 1_000_000n);
+});
+
+test("guardian handles the projected-TWAP leader first", async () => {
+  const order = prioritizeByProjectedTwap([
+    { proposalId: 0, projectedTwap: 0.5 },
+    { proposalId: 1, projectedTwap: 0.505 },
+    { proposalId: 2, projectedTwap: 0.55 },
+    { proposalId: 3, projectedTwap: 0.5 },
+  ]);
+  assert.deepEqual(order.map(({ proposalId }) => proposalId), [2, 1, 0, 3]);
+  const final = guardianThreshold({ nowSeconds: 950, tradingEnd: 1_000, twapWindow: 60 });
+  const leader = await planGuardianAction({ proposalId: 2, pMarket: 0.59, pFair: 0.5, window: final, quoteFor: mockQuote(0.59, 0.05), isLeader: true, projectedTwap: 0.55 });
+  assert.equal(leader.action, "buy");
+  assert.equal(leader.isLeader, true);
+  assert.match(leader.reason, /leading on projected TWAP/);
+});
+
+test("guardian respects the per-trade and per-proposal caps", async () => {
+  const final = guardianThreshold({ nowSeconds: 950, tradingEnd: 1_000, twapWindow: 60 });
+  const deep = mockQuote(0.7, 0.0001);
+  const first = await planGuardianAction({ proposalId: 1, pMarket: 0.7, pFair: 0.4, window: final, quoteFor: deep });
+  assert.equal(first.creditsIn, 1_000_000n);
+  const partial = await planGuardianAction({ proposalId: 1, pMarket: 0.7, pFair: 0.4, window: final, quoteFor: deep, spentCredits: 1_700_000n });
+  assert.equal(partial.creditsIn, 300_000n);
+  const none = await planGuardianAction({ proposalId: 1, pMarket: 0.7, pFair: 0.4, window: final, quoteFor: deep, spentCredits: 2_000_000n });
+  assert.equal(none.action, "none");
+});
+
+// Mocked sell quote: selling `t` tokens of a side priced at `price` returns t * (price - slope * credits / 2).
+function mockSellQuote(price, slope = 0.02) {
+  return () => async (tokensIn) => {
+    const tokens = Number(tokensIn) / 1e18;
+    const average = Math.max(price - (slope * tokens) / 2, 0.001);
+    return BigInt(Math.round(tokens * average * 1e6));
+  };
+}
+
+test("selling an existing position moves the price toward pFair within the holding", async () => {
+  const sold = await sizeSell({ sellSide: "long", pMarket: 0.6, pFair: 0.5, held: 2_000_000_000_000_000_000n, quote: mockSellQuote(0.6, 0.2)("long") });
+  assert.equal(sold.action, "sell");
+  assert.ok(sold.expectedPMarketAfter >= 0.5 - 1e-6);
+  assert.ok(sold.tokensIn <= 1_000_000_000_000_000_000n);
+  assert.equal(sold.minOut, applySlippage(sold.quotedOut));
+  const holdingCap = await sizeSell({ sellSide: "long", pMarket: 0.9, pFair: 0.1, held: 300_000_000_000_000_000n, quote: mockSellQuote(0.9, 0.0001)("long") });
+  assert.equal(holdingCap.tokensIn, 300_000_000_000_000_000n);
+  const none = await sizeSell({ sellSide: "short", pMarket: 0.4, pFair: 0.5, held: 0n, quote: mockSellQuote(0.6)("short") });
+  assert.equal(none.action, "none");
+});
+
+test("quant trims an opposite position with a sell instead of opening a new one", async () => {
+  const holdings = { long: 400_000_000_000_000_000n, short: 0n };
+  const plan = await planQuantAction({
+    proposalId: 2, pMarket: 0.56, pFair: 0.5, quoteFor: mockQuote(0.56, 0.05), holdings, sellQuoteFor: mockSellQuote(0.56, 0.05),
+  });
+  assert.equal(plan.action, "sell");
+  assert.equal(plan.side, "long");
+  assert.match(plan.reason, /selling LONG/);
+  const calls = buildForecasterCalls({ roundContract: "0xRound", roundId: 7n, plan, needsDeposit: false });
+  assert.deepEqual(calls.map((call) => call.signature.split("(")[0]), ["sellLong"]);
+  assert.equal(calls[0].args[3], plan.minOut);
+  const fresh = await planQuantAction({
+    proposalId: 2, pMarket: 0.56, pFair: 0.5, quoteFor: mockQuote(0.56, 0.05), holdings: { long: 0n, short: 0n }, sellQuoteFor: mockSellQuote(0.56, 0.05),
+  });
+  assert.equal(fresh.action, "buy");
+  assert.equal(fresh.side, "short");
+});
+
+test("pre-claimed credits remove the claim call", async () => {
+  const plan = await planQuantAction({ proposalId: 1, pMarket: 0.4, pFair: 0.5, quoteFor: mockQuote(0.4, 0.05), creditBalance: 2_000_000n });
+  assert.equal(plan.claimCredits, 0n);
+  const calls = buildForecasterCalls({ roundContract: "0xRound", roundId: 7n, plan, needsDeposit: false });
+  assert.deepEqual(calls.map((call) => call.signature.split("(")[0]), ["buyLong"]);
 });
 
 test("guardian stands down when the quant already brought the price within threshold", async () => {
   const quoteFor = mockQuote(0.3, 0.05);
   const window = guardianThreshold({ nowSeconds: 0, tradingEnd: 1_000, twapWindow: 300 });
-  const quantPlan = { action: "buy", expectedPMarketAfter: 0.46 };
+  const quantPlan = { action: "buy", expectedPMarketAfter: 0.49 };
   const plan = await planGuardianAction({ proposalId: 0, pMarket: 0.3, pFair: 0.5, window, quantPlan, quoteFor });
   assert.equal(plan.action, "none");
   assert.match(plan.reason, /Quant/);

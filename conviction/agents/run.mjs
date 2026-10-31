@@ -16,6 +16,8 @@ import {
   guardianThreshold,
   planGuardianAction,
   planQuantAction,
+  PER_PROPOSAL_CAP_CREDITS,
+  prioritizeByProjectedTwap,
   tooCloseToTradingEnd,
   QUANT_THRESHOLD,
   quantFairProbability,
@@ -39,12 +41,22 @@ const marketAbi = parseAbi([
   "function probabilities(uint256,uint256) view returns (uint256 longProbability, uint256 shortProbability)",
   "function quoteBuyLong(uint256,uint256,uint256) view returns (uint256)",
   "function quoteBuyShort(uint256,uint256,uint256) view returns (uint256)",
+  "function quoteSellLong(uint256,uint256,uint256) view returns (uint256 creditsOut, uint256 longDust, uint256 shortDust)",
+  "function quoteSellShort(uint256,uint256,uint256) view returns (uint256 creditsOut, uint256 longDust, uint256 shortDust)",
+  "function probabilityTwap(uint256,uint256,uint256,uint256) view returns (uint256)",
 ]);
+const proposalTokensAbi = parseAbi([
+  "function creditToken(uint256,uint256) view returns (address)",
+  "function longToken(uint256,uint256) view returns (address)",
+  "function shortToken(uint256,uint256) view returns (address)",
+]);
+const erc20BalanceAbi = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 
 const quantumAbi = parseAbi([
   "function deposits(uint256,address) view returns (uint256)",
   "function creditsClaimed(uint256,uint256,address) view returns (uint256)",
   "function DEFAULT_BOND() view returns (uint256)",
+  "function proposalTokens() view returns (address)",
 ]);
 const registryAbi = parseAbi([
   "function agents(address) view returns (string name, address wallet, bool active, uint256 proposalCount, uint256 winCount, int256 cumulativeReturn)",
@@ -54,7 +66,7 @@ const usdcAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
 ]);
 const EXPLORER_TX = "https://explorer.testnet.arc.io/tx/";
-const FORECASTER_DEPOSIT_USDC = 1_000_000n;
+const FORECASTER_DEPOSIT_USDC = 2_000_000n;
 
 const jsonSafe = (value) => JSON.parse(JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item)));
 
@@ -193,7 +205,7 @@ async function ensureForecasterDeposit(agent, roundCount) {
     address: deployment.contracts.quantumRound,
     signature: "deposit(uint256,uint256)",
     args: [roundCount, FORECASTER_DEPOSIT_USDC],
-    label: "deposit 1 USDC",
+    label: "deposit 2 USDC",
   }));
   return transactions;
 }
@@ -420,10 +432,15 @@ async function observeRound() {
 
 let lastGoodCandles = null;
 const MAX_CACHED_CANDLE_AGE_MS = 10 * 60_000;
+const FINAL_WINDOW_CACHE_MS = 120_000;
 
 // Forecasters reuse the last good candles for up to 10 minutes if Coinbase is briefly stale, so a
-// transient outage cannot silence them inside the final TWAP window. Drift is shrunk, so this is safe.
-async function forecasterCandles() {
+// transient outage cannot silence them inside the final TWAP window. Inside that window a candle set
+// under 2 minutes old is used without refetching, because every second counts. Drift is shrunk, so this is safe.
+async function forecasterCandles({ inFinalWindow = false } = {}) {
+  if (inFinalWindow && lastGoodCandles && Date.now() - lastGoodCandles.at <= FINAL_WINDOW_CACHE_MS) {
+    return lastGoodCandles.candles;
+  }
   try {
     const candles = await fetchRecentEthCandles();
     lastGoodCandles = { candles, at: Date.now() };
@@ -437,14 +454,56 @@ async function forecasterCandles() {
   }
 }
 
+const tokenAddressCache = new Map();
+async function proposalTokenAddresses(roundCount, proposalId) {
+  const key = `${roundCount}:${proposalId}`;
+  if (tokenAddressCache.has(key)) return tokenAddressCache.get(key);
+  const tokens = await publicClient.readContract({ address: deployment.contracts.quantumRound, abi: quantumAbi, functionName: "proposalTokens" });
+  const read = (functionName) => publicClient.readContract({ address: tokens, abi: proposalTokensAbi, functionName, args: [roundCount, BigInt(proposalId)] });
+  const [credit, long, short] = await Promise.all([read("creditToken"), read("longToken"), read("shortToken")]);
+  const addresses = { credit, long, short };
+  tokenAddressCache.set(key, addresses);
+  return addresses;
+}
+
+async function readHoldings(agent, roundCount, proposalId) {
+  const addresses = await proposalTokenAddresses(roundCount, proposalId);
+  const balance = (address) => publicClient.readContract({ address, abi: erc20BalanceAbi, functionName: "balanceOf", args: [agent.address] });
+  const [credit, long, short] = await Promise.all([balance(addresses.credit), balance(addresses.long), balance(addresses.short)]);
+  return { credit, long, short };
+}
+
+// Claims credits in every proposal up to the per-proposal cap right after the deposit, so a later trade is
+// a single transaction. Claims cost only gas: credits in losing proposals carry no value and a claim never
+// reduces a deposit's redeemable value in a proposal that does not win.
+async function ensurePreClaims(agent, roundCount, proposalCount) {
+  const transactions = [];
+  for (let proposalId = 0; proposalId < proposalCount; proposalId += 1) {
+    const claimed = await publicClient.readContract({
+      address: deployment.contracts.quantumRound,
+      abi: quantumAbi,
+      functionName: "creditsClaimed",
+      args: [roundCount, BigInt(proposalId), agent.address],
+    });
+    const room = PER_PROPOSAL_CAP_CREDITS - claimed;
+    if (room > 0n) {
+      transactions.push(await submit(agent, {
+        address: deployment.contracts.quantumRound,
+        signature: "claimCredits(uint256,uint256,uint256)",
+        args: [roundCount, BigInt(proposalId), room],
+        label: `pre-claim ${room} credit units proposal ${proposalId}`,
+      }));
+    }
+  }
+  return transactions;
+}
+
 async function runForecasters({ round, roundCount, roundState, forecasterEvaluations, existingProposals, chainTimestamp }) {
+  const cycleStartMs = Date.now();
+  const chainNow = () => chainTimestamp + Math.floor((Date.now() - cycleStartMs) / 1000);
   const horizonSeconds = Number(round.evaluationEnd - round.tradingEnd);
-  const candles = await forecasterCandles();
-  const window = guardianThreshold({
-    nowSeconds: chainTimestamp,
-    tradingEnd: round.tradingEnd,
-    twapWindow: round.twapWindow,
-  });
+  const windowAt = () => guardianThreshold({ nowSeconds: chainNow(), tradingEnd: round.tradingEnd, twapWindow: round.twapWindow });
+  const candles = await forecasterCandles({ inFinalWindow: windowAt().inFinalWindow });
   const spent = roundState.forecasterSpent ??= {};
   const deposited = roundState.forecasterDeposited ??= {};
   const quantPlans = new Map();
@@ -457,12 +516,24 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
     });
     return Number(longProbability) / 1e18;
   };
+  const readProjectedTwap = async (proposalId) => Number(await publicClient.readContract({
+    address: deployment.contracts.market,
+    abi: marketAbi,
+    functionName: "probabilityTwap",
+    args: [roundCount, BigInt(proposalId), 0n, 0n],
+  })) / 1e18;
   const quoteFor = (proposalId) => (direction) => (creditsIn) => publicClient.readContract({
     address: deployment.contracts.market,
     abi: marketAbi,
     functionName: direction === "long" ? "quoteBuyLong" : "quoteBuyShort",
     args: [roundCount, BigInt(proposalId), creditsIn],
   });
+  const sellQuoteFor = (proposalId) => (side) => async (tokensIn) => (await publicClient.readContract({
+    address: deployment.contracts.market,
+    abi: marketAbi,
+    functionName: side === "long" ? "quoteSellLong" : "quoteSellShort",
+    args: [roundCount, BigInt(proposalId), tokensIn],
+  }))[0];
 
   for (const { agent, evaluation } of forecasterEvaluations) {
     const agentSpent = spent[agent.id] ??= {};
@@ -472,77 +543,91 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
       if (depositTransactions.length > 0) {
         log({ type: "forecaster_deposit", roundId: round.id, agentId: agent.id, agentName: agent.name, transactions: depositTransactions });
       }
+      if (!roundState.preClaimed?.[agent.id] && !tooCloseToTradingEnd({ nowSeconds: chainNow(), tradingEnd: round.tradingEnd, buffer: 45 })) {
+        const claims = await ensurePreClaims(agent, roundCount, existingProposals.length);
+        (roundState.preClaimed ??= {})[agent.id] = existingProposals.length;
+        state.rounds[round.id] = roundState;
+        saveState();
+        if (claims.length > 0) log({ type: "forecaster_preclaim", roundId: round.id, agentId: agent.id, agentName: agent.name, transactions: claims });
+      }
     }
-    for (let proposalId = 0; proposalId < existingProposals.length; proposalId += 1) {
+
+    // Fresh snapshot per agent so Guardian sees prices after any Quant trade; the leader on projected TWAP goes first.
+    const snapshot = await Promise.all(existingProposals.map(async (proposal, proposalId) => ({
+      proposalId,
+      pMarket: await readMarket(proposalId),
+      projectedTwap: await readProjectedTwap(proposalId),
+    })));
+    const ordered = prioritizeByProjectedTwap(snapshot);
+    const leaderId = ordered.find(({ proposalId }) => proposalId > 0)?.proposalId;
+
+    for (const { proposalId, pMarket: snapshotMarket, projectedTwap } of ordered) {
       const proposal = existingProposals[proposalId];
       const tEthBps = Number(proposal[2]);
-      const fair = quantFairProbability({
-        tEthBps,
-        rMin: round.rMin,
-        rMax: round.rMax,
-        horizonSeconds,
-        candles,
-      });
-      const pMarket = await readMarket(proposalId);
-      const claimedOnChain = await publicClient.readContract({
-        address: deployment.contracts.quantumRound,
-        abi: quantumAbi,
-        functionName: "creditsClaimed",
-        args: [roundCount, BigInt(proposalId), agent.address],
-      });
-      const remembered = BigInt(agentSpent[proposalId] ?? "0");
-      const spentCredits = claimedOnChain > remembered ? claimedOnChain : remembered;
+      const fair = quantFairProbability({ tEthBps, rMin: round.rMin, rMax: round.rMax, horizonSeconds, candles });
+      const window = windowAt();
+      // Re-read the price right before deciding: an earlier trade in this cycle may have moved it.
+      const pMarket = proposalId === ordered[0].proposalId ? snapshotMarket : await readMarket(proposalId);
+      const holdings = execute ? await readHoldings(agent, roundCount, proposalId) : { credit: 0n, long: 0n, short: 0n };
+      const spentCredits = BigInt(agentSpent[proposalId] ?? "0");
+      const common = {
+        proposalId,
+        pMarket,
+        pFair: fair.pFair,
+        quoteFor: quoteFor(proposalId),
+        sellQuoteFor: execute ? sellQuoteFor(proposalId) : undefined,
+        spentCredits,
+        holdings,
+        creditBalance: holdings.credit,
+      };
       const plan = agent.name === "Quant"
-        ? await planQuantAction({
-          proposalId,
-          pMarket,
-          pFair: fair.pFair,
-          threshold: Number(process.env.QUANT_THRESHOLD ?? QUANT_THRESHOLD),
-          quoteFor: quoteFor(proposalId),
-          spentCredits,
-        })
+        ? await planQuantAction({ ...common, threshold: Number(process.env.QUANT_THRESHOLD ?? QUANT_THRESHOLD) })
         : await planGuardianAction({
-          proposalId,
-          pMarket,
-          pFair: fair.pFair,
+          ...common,
           window,
           quantPlan: quantPlans.get(proposalId) ?? null,
-          quoteFor: quoteFor(proposalId),
-          spentCredits,
+          isLeader: proposalId === leaderId,
+          projectedTwap,
         });
       const needsDeposit = plan.action === "buy" && !deposited[agent.id] && !execute;
       let transactions = [];
       let executedQuote;
       let pMarketAfter;
-      const blockedByDeadline = execute && plan.action === "buy"
-        && tooCloseToTradingEnd({ nowSeconds: chainTimestamp, tradingEnd: round.tradingEnd });
+      const blockedByDeadline = execute && plan.action !== "none"
+        && tooCloseToTradingEnd({ nowSeconds: chainNow(), tradingEnd: round.tradingEnd });
       if (blockedByDeadline) {
         plan.reason = `${plan.reason} Not submitted: under 15 s of trading left, too close to the deadline for Circle to confirm.`;
         plan.action = "none";
       }
-      if (plan.action === "buy") {
+      if (plan.action === "buy" || plan.action === "sell") {
         if (!execute) {
-          agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
+          if (plan.action === "buy") agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
           deposited[agent.id] = true;
         } else {
-          const [claim, buy] = buildForecasterCalls({
+          const calls = buildForecasterCalls({
             roundContract: deployment.contracts.quantumRound,
             marketContract: deployment.contracts.market,
             roundId: roundCount,
             plan,
             needsDeposit: false,
           });
-          transactions.push(await submit(agent, claim));
-          // Re-quote after the claim so the minimum output reflects the live market, then apply 0.5% slippage.
-          executedQuote = await quoteFor(proposalId)(plan.side)(plan.creditsIn);
+          const trade = calls.pop();
+          for (const call of calls) transactions.push(await submit(agent, call));
+          // Re-quote right before trading so the minimum output reflects the live market, then apply 0.5% slippage.
+          executedQuote = plan.action === "buy"
+            ? await quoteFor(proposalId)(plan.side)(plan.creditsIn)
+            : await sellQuoteFor(proposalId)(plan.side)(plan.tokensIn);
           if (executedQuote <= 0n) throw Object.assign(new Error(`${agent.name}: adapter quote returned zero output.`), { fatal: true });
-          buy.args[3] = applySlippage(executedQuote);
-          transactions.push(await submit(agent, buy));
+          trade.args[3] = applySlippage(executedQuote);
+          transactions.push(await submit(agent, trade));
+          if (plan.action === "buy") agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
+          state.rounds[round.id] = roundState;
+          saveState();
           pMarketAfter = await readMarket(proposalId);
         }
       }
-      // After a live Quant trade the market read above already reflects it, so Guardian uses real prices.
-      if (agent.name === "Quant") quantPlans.set(proposalId, execute && plan.action === "buy" ? null : plan);
+      // After a live Quant trade Guardian re-reads real prices; in dry-run it reasons over the Quant's planned price.
+      if (agent.name === "Quant") quantPlans.set(proposalId, execute && plan.action !== "none" ? null : plan);
       log(jsonSafe({
         type: agent.name === "Guardian" && plan.action !== "none" ? "guardian_intervention" : "forecaster_decision",
         roundId: round.id,
@@ -557,10 +642,14 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
         gap: plan.gap,
         threshold: plan.threshold,
         inFinalWindow: window.inFinalWindow,
+        projectedTwap,
+        leadingOnProjectedTwap: proposalId === leaderId,
+        holdings: execute ? { credit: holdings.credit, long: holdings.long, short: holdings.short } : undefined,
         intendedAction: plan.action === "buy"
-          ? [needsDeposit ? "deposit 1 USDC (once per round)" : null, `claim ${plan.claimCredits} credit units for proposal ${proposalId}`, `buy ${plan.side}`].filter(Boolean)
-          : ["none"],
+          ? [needsDeposit ? "deposit 2 USDC (once per round)" : null, plan.claimCredits > 0n ? `claim ${plan.claimCredits} credit units for proposal ${proposalId}` : "use pre-claimed credits", `buy ${plan.side}`].filter(Boolean)
+          : plan.action === "sell" ? [`sell ${plan.side} (trim position)`] : ["none"],
         creditsIn: plan.creditsIn,
+        tokensIn: plan.tokensIn,
         quotedOut: plan.quotedOut,
         minOut: plan.minOut,
         expectedPMarketAfter: plan.expectedPMarketAfter,

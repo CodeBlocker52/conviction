@@ -2,8 +2,8 @@ import { parseUnits } from "viem";
 
 export const PER_AGENT_GAS_CAP_WEI = parseUnits("0.25", 18);
 export const PROPOSER_BOND_CAP_USDC = 1_000_000n;
-export const FORECASTER_DEPOSIT_CAP_USDC = 1_000_000n;
-export const TRADE_CAP_USDC = 500_000n;
+export const FORECASTER_DEPOSIT_CAP_USDC = 2_000_000n;
+export const TRADE_CAP_USDC = 1_000_000n;
 export const MAX_PROPOSALS_PER_ROUND = 10;
 
 export function requiredProtocolSeed(perProposal, proposerCount) {
@@ -33,12 +33,12 @@ export function assertPrincipalWithinCap(kind, amountUsdc) {
       ? FORECASTER_DEPOSIT_CAP_USDC
       : null;
   if (cap === null) throw new Error(`Unsupported principal type: ${kind}.`);
-  if (amountUsdc > cap) throw new Error(`${kind} principal exceeds the approved 1 USDC cap.`);
+  if (amountUsdc > cap) throw new Error(`${kind} principal exceeds the approved ${kind === "proposer" ? 1 : 2} USDC cap.`);
 }
 
 export function assertTradeWithinCap(amountUsdc) {
   if (amountUsdc < 0n || amountUsdc > TRADE_CAP_USDC) {
-    throw new Error("Trade amount must be between zero and the 0.50 USDC per-trade cap.");
+    throw new Error("Trade amount must be between zero and the 1 credit per-trade cap.");
   }
 }
 

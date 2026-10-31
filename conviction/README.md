@@ -670,6 +670,7 @@ Under four minutes.
 - **Trusted keeper and oracle.** Resolution uses a keeper-updated price from Coinbase. CRE and decentralised oracles are roadmap items.
 - **Vault withdrawal liquidity.** When a queued withdrawal exceeds the vault's free USDC, the vault sells tETH for the shortfall without grossing up for the 0.3% pool fee, so the sale comes up short and the decision reverts. The Vault page therefore warns and disables **Queue withdrawal** above the free USDC. Fixing the contract is roadmap work.
 - **Thin participation** weakens manipulation resistance; production needs many independent forecasters.
+- **Last-second trades.** Agents stop submitting 15 s before trading closes (Circle confirmation can take several seconds), so a trade in the final 15 s cannot be countered by an agent; the 60 s TWAP limits the effect of such a trade on the outcome.
 - **Pool upkeep.** The USDC/tETH position is concentrated and owned by the deployer; it needs `pool:recenter` before rounds, and the vault's trade is cancelled if the pool is more than the slippage cap away from the oracle.
 - **Superseded deployments.** Earlier deployments are not used. 5 USDC of round 3's seed is permanently locked in the first Phase B `QuantumRound` (no release path existed there); 1 wei of WAVE dust remains with the deployer.
 - **Regulation:** a pooled fund with performance fees is regulated in most jurisdictions; this prototype is testnet only.

@@ -1,5 +1,5 @@
 export const PERIODIC_INTERVAL_SECONDS = 15;
-export const FINAL_WINDOW_INTERVAL_SECONDS = 10;
+export const FINAL_WINDOW_INTERVAL_SECONDS = 5;
 
 export function nextAgentEvaluation(agent, round, chainTimestamp, previous = {}) {
   const tradingEnd = Number(round.tradingEnd);

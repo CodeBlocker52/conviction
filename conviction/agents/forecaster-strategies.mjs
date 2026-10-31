@@ -2,10 +2,10 @@ import { calculateRiskModel, estimateQuantFairProbability } from "./market-data.
 import { assertTradeWithinCap, TRADE_CAP_USDC } from "./safety.mjs";
 
 export const QUANT_THRESHOLD = 0.005;
-export const GUARDIAN_THRESHOLD = 0.08;
-export const GUARDIAN_FINAL_WINDOW_THRESHOLD = 0.05;
+export const GUARDIAN_THRESHOLD = 0.03;
+export const GUARDIAN_FINAL_WINDOW_THRESHOLD = 0.01;
 export const PER_TRADE_CAP_CREDITS = TRADE_CAP_USDC;
-export const PER_PROPOSAL_CAP_CREDITS = 1_000_000n;
+export const PER_PROPOSAL_CAP_CREDITS = 2_000_000n;
 export const MIN_TRADE_CREDITS = 10_000n;
 export const SLIPPAGE_BPS = 50n;
 export const FAIR_PROBABILITY_MIN = 0.02;
@@ -66,6 +66,26 @@ function averageLongPrice(direction, creditsIn, quotedOut) {
   return direction === "long" ? price : 1 - price;
 }
 
+// Shared bisection: the largest size in [MIN, max] whose implied post-trade price still does not overshoot the target.
+async function searchLargestWithinTarget({ min, max, evaluate }) {
+  let best = await evaluate(max);
+  if (best.withinTarget) return best;
+  let low = min;
+  let high = max;
+  const smallest = await evaluate(low);
+  if (!smallest.withinTarget) return null;
+  best = smallest;
+  for (let step = 0; step < SEARCH_STEPS && high - low > 1n; step += 1) {
+    const middle = (low + high) / 2n;
+    const candidate = await evaluate(middle);
+    if (candidate.withinTarget) {
+      best = candidate;
+      low = middle;
+    } else high = middle;
+  }
+  return best;
+}
+
 // Sizes a buy so the marginal price moves all the way to pFair (fraction 1). Quotes give the average
 // execution price; for a locally linear curve the marginal price moves about twice as far.
 export async function sizeTrade({ direction, pMarket, pFair, quote, spentCredits = 0n, fraction = 1 }) {
@@ -73,7 +93,7 @@ export async function sizeTrade({ direction, pMarket, pFair, quote, spentCredits
   const proposalRoom = PER_PROPOSAL_CAP_CREDITS - spentCredits;
   const available = proposalRoom < PER_TRADE_CAP_CREDITS ? proposalRoom : PER_TRADE_CAP_CREDITS;
   if (available < MIN_TRADE_CREDITS) {
-    return { action: "none", reason: "Per-proposal cap of 1 credit is exhausted." };
+    return { action: "none", reason: `Per-proposal cap of ${Number(PER_PROPOSAL_CAP_CREDITS) / 1e6} credits is exhausted.` };
   }
   const target = pMarket + (pFair - pMarket) * fraction;
   const evaluate = async (creditsIn) => {
@@ -83,25 +103,8 @@ export async function sizeTrade({ direction, pMarket, pFair, quote, spentCredits
     const withinTarget = direction === "long" ? impliedAfter <= target : impliedAfter >= target;
     return { creditsIn, quotedOut, withinTarget, impliedAfter };
   };
-
-  let best = await evaluate(available);
-  if (!best.withinTarget) {
-    let low = MIN_TRADE_CREDITS;
-    let high = available;
-    const smallest = await evaluate(low);
-    if (!smallest.withinTarget) {
-      return { action: "none", reason: "Even the smallest trade would overshoot the pFair target." };
-    }
-    best = smallest;
-    for (let step = 0; step < SEARCH_STEPS && high - low > 1n; step += 1) {
-      const middle = (low + high) / 2n;
-      const candidate = await evaluate(middle);
-      if (candidate.withinTarget) {
-        best = candidate;
-        low = middle;
-      } else high = middle;
-    }
-  }
+  const best = await searchLargestWithinTarget({ min: MIN_TRADE_CREDITS, max: available, evaluate });
+  if (!best) return { action: "none", reason: "Even the smallest trade would overshoot the pFair target." };
   assertTradeWithinCap(best.creditsIn);
   return {
     action: "buy",
@@ -114,20 +117,75 @@ export async function sizeTrade({ direction, pMarket, pFair, quote, spentCredits
   };
 }
 
-export async function planQuantAction({ proposalId, pMarket, pFair, threshold = QUANT_THRESHOLD, quoteFor, spentCredits = 0n }) {
+// Sizes a sell of an existing position (LONG sold when the market is above fair, SHORT sold when below).
+// Same all-the-way-to-pFair target, capped by the holding and by the 1 credit per-trade cap in token terms.
+export async function sizeSell({ sellSide, pMarket, pFair, held, quote, fraction = 1 }) {
+  if (sellSide !== "long" && sellSide !== "short") throw new Error("Sell side must be long or short.");
+  const minTokens = MIN_TRADE_CREDITS * CREDIT_TO_TOKEN_SCALE;
+  const capTokens = PER_TRADE_CAP_CREDITS * CREDIT_TO_TOKEN_SCALE;
+  const available = held < capTokens ? held : capTokens;
+  if (available < minTokens) return { action: "none", reason: `No ${sellSide.toUpperCase()} position large enough to sell.` };
+  const target = pMarket + (pFair - pMarket) * fraction;
+  const evaluate = async (tokensIn) => {
+    const creditsOut = await quote(tokensIn);
+    if (creditsOut <= 0n) return { tokensIn, creditsOut, withinTarget: false, impliedAfter: Number.NaN };
+    const averagePrice = Number(creditsOut * CREDIT_TO_TOKEN_SCALE) / Number(tokensIn);
+    // Selling LONG pushes the LONG price down; selling SHORT pushes the LONG price up.
+    const impliedAfter = sellSide === "long"
+      ? pMarket - 2 * (pMarket - averagePrice)
+      : pMarket + 2 * ((1 - pMarket) - averagePrice);
+    const withinTarget = sellSide === "long" ? impliedAfter >= target : impliedAfter <= target;
+    return { tokensIn, creditsOut, withinTarget, impliedAfter };
+  };
+  const best = await searchLargestWithinTarget({ min: minTokens, max: available, evaluate });
+  if (!best) return { action: "none", reason: "Even the smallest sale would overshoot the pFair target." };
+  return {
+    action: "sell",
+    side: sellSide,
+    tokensIn: best.tokensIn,
+    quotedOut: best.creditsOut,
+    minOut: applySlippage(best.creditsOut),
+    expectedPMarketAfter: best.impliedAfter,
+    targetPMarket: target,
+  };
+}
+
+// Trims an existing opposite position first (sell), otherwise opens a new one (buy).
+async function chooseTrade({ direction, pMarket, pFair, quoteFor, spentCredits, holdings, sellQuoteFor, creditBalance }) {
+  const opposite = direction === "short" ? "long" : "short";
+  const held = holdings?.[opposite] ?? 0n;
+  if (sellQuoteFor && held > 0n) {
+    const sold = await sizeSell({ sellSide: opposite, pMarket, pFair, held, quote: sellQuoteFor(opposite) });
+    if (sold.action === "sell") return sold;
+  }
+  const sized = await sizeTrade({ direction, pMarket, pFair, quote: quoteFor(direction), spentCredits });
+  if (sized.action !== "buy") return sized;
+  const shortfall = sized.creditsIn - (creditBalance ?? 0n);
+  return { ...sized, claimCredits: shortfall > 0n ? shortfall : 0n };
+}
+
+const describeTrade = (plan) => (plan.action === "sell" ? `selling ${plan.side.toUpperCase()}` : `buying ${plan.side.toUpperCase()}`);
+
+export async function planQuantAction({
+  proposalId, pMarket, pFair, threshold = QUANT_THRESHOLD, quoteFor, spentCredits = 0n, holdings, sellQuoteFor, creditBalance = 0n,
+}) {
   const { direction, gap } = decideDirection({ pMarket, pFair, threshold });
   const base = { agent: "Quant", proposalId, pMarket, pFair, gap, threshold };
   if (direction === "none") {
     return { ...base, action: "none", reason: `|pMarket - pFair| = ${Math.abs(gap).toFixed(4)} is within ${threshold}.` };
   }
-  const sized = await sizeTrade({ direction, pMarket, pFair, quote: quoteFor(direction), spentCredits });
+  const sized = await chooseTrade({ direction, pMarket, pFair, quoteFor, spentCredits, holdings, sellQuoteFor, creditBalance });
   if (sized.action === "none") return { ...base, ...sized };
   return {
     ...base,
     ...sized,
-    claimCredits: sized.creditsIn,
-    reason: `Market ${direction === "long" ? "below" : "above"} fair value by ${Math.abs(gap).toFixed(4)}; buying ${direction.toUpperCase()}.`,
+    reason: `Market ${direction === "long" ? "below" : "above"} fair value by ${Math.abs(gap).toFixed(4)}; ${describeTrade(sized)}.`,
   };
+}
+
+// Orders proposals so the one currently leading on projected final-window TWAP is handled first.
+export function prioritizeByProjectedTwap(entries) {
+  return [...entries].sort((left, right) => (right.projectedTwap - left.projectedTwap) || (left.proposalId - right.proposalId));
 }
 
 export async function planGuardianAction({
@@ -138,9 +196,14 @@ export async function planGuardianAction({
   quantPlan = null,
   quoteFor,
   spentCredits = 0n,
+  holdings,
+  sellQuoteFor,
+  creditBalance = 0n,
+  isLeader = false,
+  projectedTwap,
 }) {
   const { inFinalWindow, threshold } = window;
-  const quantTraded = quantPlan?.action === "buy";
+  const quantTraded = quantPlan?.action === "buy" || quantPlan?.action === "sell";
   const effectiveMarket = quantTraded ? quantPlan.expectedPMarketAfter : pMarket;
   const { direction, gap } = decideDirection({ pMarket: effectiveMarket, pFair, threshold });
   const base = {
@@ -152,6 +215,8 @@ export async function planGuardianAction({
     threshold,
     inFinalWindow,
     effectivePMarket: effectiveMarket,
+    isLeader,
+    projectedTwap,
   };
   if (direction === "none") {
     return {
@@ -162,28 +227,32 @@ export async function planGuardianAction({
         : `Deviation ${Math.abs(gap).toFixed(4)} is within the ${inFinalWindow ? "final-window" : "normal"} threshold ${threshold}.`,
     };
   }
-  const sized = await sizeTrade({ direction, pMarket: effectiveMarket, pFair, quote: quoteFor(direction), spentCredits });
+  const sized = await chooseTrade({
+    direction, pMarket: effectiveMarket, pFair, quoteFor, spentCredits, holdings, sellQuoteFor, creditBalance,
+  });
   if (sized.action === "none") return { ...base, ...sized };
   return {
     ...base,
     ...sized,
-    claimCredits: sized.creditsIn,
-    reason: `Intervention on proposal ${proposalId}: deviation ${Math.abs(gap).toFixed(4)} exceeds ${threshold}; buying ${direction.toUpperCase()} toward pFair.`,
+    reason: `Intervention on proposal ${proposalId}${isLeader ? " (leading on projected TWAP)" : ""}: deviation ${Math.abs(gap).toFixed(4)} exceeds ${threshold}; ${describeTrade(sized)} toward pFair.`,
   };
 }
 
-export function buildForecasterCalls({ roundContract, marketContract, roundId, plan, needsDeposit, depositUsdc = 1_000_000n }) {
+export function buildForecasterCalls({ roundContract, marketContract, roundId, plan, needsDeposit, depositUsdc = 2_000_000n }) {
   const calls = [];
   if (needsDeposit) {
     calls.push({ address: roundContract, signature: "deposit(uint256,uint256)", args: [roundId, depositUsdc], label: "deposit" });
   }
   if (plan.action === "buy") {
-    calls.push({
-      address: roundContract,
-      signature: "claimCredits(uint256,uint256,uint256)",
-      args: [roundId, BigInt(plan.proposalId), plan.claimCredits],
-      label: `claim proposal ${plan.proposalId}`,
-    });
+    const claim = plan.claimCredits ?? plan.creditsIn;
+    if (claim > 0n) {
+      calls.push({
+        address: roundContract,
+        signature: "claimCredits(uint256,uint256,uint256)",
+        args: [roundId, BigInt(plan.proposalId), claim],
+        label: `claim proposal ${plan.proposalId}`,
+      });
+    }
     calls.push({
       address: roundContract,
       signature: plan.side === "long"
@@ -193,6 +262,16 @@ export function buildForecasterCalls({ roundContract, marketContract, roundId, p
       label: `buy ${plan.side} proposal ${plan.proposalId}`,
     });
   }
+  if (plan.action === "sell") {
+    calls.push({
+      address: roundContract,
+      signature: plan.side === "long"
+        ? "sellLong(uint256,uint256,uint256,uint256)"
+        : "sellShort(uint256,uint256,uint256,uint256)",
+      args: [roundId, BigInt(plan.proposalId), plan.tokensIn, plan.minOut],
+      label: `sell ${plan.side} proposal ${plan.proposalId}`,
+    });
+  }
   return calls;
 }
 
@@ -200,7 +279,7 @@ export function buildRedeemCall({ roundContract, roundId }) {
   return { address: roundContract, signature: "redeem(uint256)", args: [roundId], label: "redeem" };
 }
 
-// Not exercised until the live round: redeem is only valid after the round settles.
+// Redeem is only valid after the round settles.
 export async function redeemAfterSettlement(signer, { roundContract, roundId }) {
   return signer.executeContractCall(buildRedeemCall({ roundContract, roundId }));
 }

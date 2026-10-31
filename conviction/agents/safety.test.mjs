@@ -11,10 +11,11 @@ import {
 
 test("agent budgets reject principal, gas, trade, and proposal overages", () => {
   assertPrincipalWithinCap("proposer", 1_000_000n);
-  assertPrincipalWithinCap("forecaster", 1_000_000n);
+  assertPrincipalWithinCap("forecaster", 2_000_000n);
+  assert.throws(() => assertPrincipalWithinCap("forecaster", 2_000_001n), /exceeds/);
   assert.throws(() => assertPrincipalWithinCap("proposer", 1_000_001n), /exceeds/);
-  assertTradeWithinCap(500_000n);
-  assert.throws(() => assertTradeWithinCap(500_001n), /0.50 USDC/);
+  assertTradeWithinCap(1_000_000n);
+  assert.throws(() => assertTradeWithinCap(1_000_001n), /1 credit/);
   assertProposalCountWithinCap(10);
   assert.throws(() => assertProposalCountWithinCap(11), /between zero and 10/);
   assertGasWithinCap(0n, PER_AGENT_GAS_CAP_WEI);
