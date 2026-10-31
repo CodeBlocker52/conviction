@@ -417,9 +417,28 @@ async function observeRound() {
   }
 }
 
+let lastGoodCandles = null;
+const MAX_CACHED_CANDLE_AGE_MS = 10 * 60_000;
+
+// Forecasters reuse the last good candles for up to 10 minutes if Coinbase is briefly stale, so a
+// transient outage cannot silence them inside the final TWAP window. Drift is shrunk, so this is safe.
+async function forecasterCandles() {
+  try {
+    const candles = await fetchRecentEthCandles();
+    lastGoodCandles = { candles, at: Date.now() };
+    return candles;
+  } catch (error) {
+    if (lastGoodCandles && Date.now() - lastGoodCandles.at <= MAX_CACHED_CANDLE_AGE_MS) {
+      log({ type: "candles_cached", reason: safeErrorMessage(error), ageSeconds: Math.round((Date.now() - lastGoodCandles.at) / 1000) });
+      return lastGoodCandles.candles;
+    }
+    throw error;
+  }
+}
+
 async function runForecasters({ round, roundCount, roundState, forecasterEvaluations, existingProposals, chainTimestamp }) {
   const horizonSeconds = Number(round.evaluationEnd - round.tradingEnd);
-  const candles = await fetchRecentEthCandles();
+  const candles = await forecasterCandles();
   const window = guardianThreshold({
     nowSeconds: chainTimestamp,
     tradingEnd: round.tradingEnd,
