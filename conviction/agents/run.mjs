@@ -9,6 +9,13 @@ import {
 } from "../contracts/script/demo-round-common.mjs";
 import { readAgents } from "./config.mjs";
 import { writeAgentEvent } from "./logging.mjs";
+import {
+  guardianThreshold,
+  planGuardianAction,
+  planQuantAction,
+  QUANT_THRESHOLD,
+  quantFairProbability,
+} from "./forecaster-strategies.mjs";
 import { fetchRecentEthCandles } from "./market-data.mjs";
 import {
   calculateMeanReversionProposal,
@@ -21,6 +28,15 @@ import {
 import { nextAgentEvaluation } from "./scheduler.mjs";
 import { loadRuntimeState, saveRuntimeState } from "./runtime-state.mjs";
 import { assertProposalCountWithinCap } from "./safety.mjs";
+import { parseAbi } from "viem";
+
+const marketAbi = parseAbi([
+  "function probabilities(uint256,uint256) view returns (uint256 longProbability, uint256 shortProbability)",
+  "function quoteBuyLong(uint256,uint256,uint256) view returns (uint256)",
+  "function quoteBuyShort(uint256,uint256,uint256) view returns (uint256)",
+]);
+
+const jsonSafe = (value) => JSON.parse(JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item)));
 
 const scriptPath = fileURLToPath(import.meta.url);
 const args = process.argv.slice(2);
@@ -97,6 +113,7 @@ async function observeRound() {
     evaluationEnd: result[2],
     rMin: result[3],
     rMax: result[4],
+    twapWindow: Number(result[5]),
     proposalCount: Number(result[7]),
     collapsed: result[9],
     settled: result[10],
@@ -206,25 +223,118 @@ async function observeRound() {
     }
   }
 
-  for (const { agent, evaluation } of evaluations.filter(({ agent }) => agent.type !== "proposer")) {
-    log({
-      type: "evaluation",
-      roundId: round.id,
-      agentId: agent.id,
-      agentName: agent.name,
-      agentType: agent.type,
-      cadence: evaluation.cadence,
-      intendedAction: "evaluate-markets",
-      status: "strategy_deferred_until_step_4",
-      reason: "Forecaster decision strategies are deferred to Step 4.",
-      dryRun: true,
-    });
-    roundState[agent.id] = evaluation.nextState;
+  const forecasterEvaluations = evaluations
+    .filter(({ agent }) => agent.type === "forecaster")
+    .sort((left, right) => Number(right.agent.name === "Quant") - Number(left.agent.name === "Quant"));
+  if (forecasterEvaluations.length > 0) {
+    await runForecasters({ round, roundCount, roundState, forecasterEvaluations, existingProposals, chainTimestamp });
     changed = true;
   }
   if (changed) {
     state.rounds[round.id] = roundState;
     saveState();
+  }
+}
+
+async function runForecasters({ round, roundCount, roundState, forecasterEvaluations, existingProposals, chainTimestamp }) {
+  const horizonSeconds = Number(round.evaluationEnd - round.tradingEnd);
+  const candles = await fetchRecentEthCandles();
+  const window = guardianThreshold({
+    nowSeconds: chainTimestamp,
+    tradingEnd: round.tradingEnd,
+    twapWindow: round.twapWindow,
+  });
+  const spent = roundState.forecasterSpent ??= {};
+  const deposited = roundState.forecasterDeposited ??= {};
+  const quantPlans = new Map();
+  const readMarket = async (proposalId) => {
+    const [longProbability] = await publicClient.readContract({
+      address: deployment.contracts.market,
+      abi: marketAbi,
+      functionName: "probabilities",
+      args: [roundCount, BigInt(proposalId)],
+    });
+    return Number(longProbability) / 1e18;
+  };
+  const quoteFor = (proposalId) => (direction) => (creditsIn) => publicClient.readContract({
+    address: deployment.contracts.market,
+    abi: marketAbi,
+    functionName: direction === "long" ? "quoteBuyLong" : "quoteBuyShort",
+    args: [roundCount, BigInt(proposalId), creditsIn],
+  });
+
+  for (const { agent, evaluation } of forecasterEvaluations) {
+    const agentSpent = spent[agent.id] ??= {};
+    for (let proposalId = 0; proposalId < existingProposals.length; proposalId += 1) {
+      const proposal = existingProposals[proposalId];
+      const tEthBps = Number(proposal[2]);
+      const fair = quantFairProbability({
+        tEthBps,
+        rMin: round.rMin,
+        rMax: round.rMax,
+        horizonSeconds,
+        candles,
+      });
+      const pMarket = await readMarket(proposalId);
+      const spentCredits = BigInt(agentSpent[proposalId] ?? "0");
+      const plan = agent.name === "Quant"
+        ? await planQuantAction({
+          proposalId,
+          pMarket,
+          pFair: fair.pFair,
+          threshold: Number(process.env.QUANT_THRESHOLD ?? QUANT_THRESHOLD),
+          quoteFor: quoteFor(proposalId),
+          spentCredits,
+        })
+        : await planGuardianAction({
+          proposalId,
+          pMarket,
+          pFair: fair.pFair,
+          window,
+          quantPlan: quantPlans.get(proposalId) ?? null,
+          quoteFor: quoteFor(proposalId),
+          spentCredits,
+        });
+      if (agent.name === "Quant") quantPlans.set(proposalId, plan);
+      const needsDeposit = plan.action === "buy" && !deposited[agent.id];
+      if (plan.action === "buy") {
+        agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
+        deposited[agent.id] = true;
+      }
+      log(jsonSafe({
+        type: agent.name === "Guardian" && plan.action !== "none" ? "guardian_intervention" : "forecaster_decision",
+        roundId: round.id,
+        agentId: agent.id,
+        agentName: agent.name,
+        publicAddress: agent.address,
+        cadence: evaluation.cadence,
+        proposalId,
+        proposalTEthBps: tEthBps,
+        pMarket,
+        pFair: fair.pFair,
+        gap: plan.gap,
+        threshold: plan.threshold,
+        inFinalWindow: window.inFinalWindow,
+        intendedAction: plan.action === "buy"
+          ? [needsDeposit ? "deposit 1 USDC (once per round)" : null, `claim ${plan.claimCredits} credit units for proposal ${proposalId}`, `buy ${plan.side}`].filter(Boolean)
+          : ["none"],
+        creditsIn: plan.creditsIn,
+        quotedOut: plan.quotedOut,
+        minOut: plan.minOut,
+        expectedPMarketAfter: plan.expectedPMarketAfter,
+        reason: plan.reason,
+        quantumMarketsNote: "One deposit backs independent credit claims in every proposal this agent trades.",
+        fairValue: {
+          expectedReturn: fair.expectedReturn,
+          appliedDrift: fair.appliedDrift,
+          maxAbsoluteDrift: fair.maxAbsoluteDrift,
+          sigmaLogReturnPerMinute: fair.sigmaLogReturnPerMinute,
+        },
+        dryRun: true,
+        submitted: false,
+      }));
+    }
+    roundState[agent.id] = evaluation.nextState;
   }
 }
 

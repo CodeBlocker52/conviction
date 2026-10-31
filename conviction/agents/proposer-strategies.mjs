@@ -312,7 +312,8 @@ export function resolveDistinctProposal(decision, existingProposals, gap = MIN_P
     return { skip: false, rawTEthBps: raw, tEthBps: raw, shifted: false, reason: null, rationale: decision.rationale };
   }
   const note = ` Signal suggests ${raw / 100}%; shifted to ${slot / 100}% to stay distinct from existing proposals.`;
-  const base = decision.rationale.replace(/;?\s*target \d+ bps tETH\.?/, "").trim();
+  const stripped = decision.rationale.replace(/;?\s*target \d+ bps tETH\.?/, "").trim();
+  const base = /[.!?]$/.test(stripped) ? stripped : `${stripped}.`;
   const rationale = `${base.slice(0, MAX_RATIONALE_CHARS - note.length)}${note}`.trim();
   return {
     skip: false,

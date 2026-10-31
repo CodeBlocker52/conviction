@@ -165,7 +165,7 @@ test("shift direction follows the agent's signal and the rationale states the sh
   assert.equal(down.tEthBps, 4_400);
   assert.equal(up.tEthBps, 5_400);
   assert.ok(down.shifted && up.shifted);
-  assert.match(down.rationale, /Signal suggests 49%; shifted to 44% to stay distinct from existing proposals\./);
+  assert.match(down.rationale, /z=-0\.1\. Signal suggests 49%; shifted to 44% to stay distinct from existing proposals\./);
   assert.ok(up.rationale.length <= 280);
   const long = resolveDistinctProposal({ tEthBps: 4_900, direction: 1, rationale: "x".repeat(400) }, [statusQuo]);
   assert.ok(long.rationale.length <= 280);
