@@ -1,6 +1,6 @@
 // Deliberate manipulation test for the Guardian. The deployer deposits 1 USDC, claims 1 credit in one
 // proposal, then buys LONG with it at the start of the final TWAP window to push pLong up.
-// Usage: node --env-file=.env contracts/script/demo-manipulate.mjs --proposal 2 [--strike-before 55] [--execute]
+// Usage (after settlement: --redeem): node --env-file=.env contracts/script/demo-manipulate.mjs --proposal 2 [--strike-before 55] [--execute]
 import { parseAbi } from "viem";
 import {
   accountFor,
@@ -19,7 +19,8 @@ const CREDITS = 1_000_000n;
 const args = process.argv.slice(2);
 const execute = args.includes("--execute");
 const valueOf = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback);
-const proposalId = BigInt(valueOf("--proposal", "-1"));
+const redeemOnly = args.includes("--redeem");
+const proposalId = BigInt(valueOf("--proposal", redeemOnly ? "0" : "-1"));
 const strikeBefore = Number(valueOf("--strike-before", "55"));
 if (proposalId < 0n) throw new Error("Pass --proposal <id>.");
 if (!Number.isInteger(strikeBefore) || strikeBefore < 5 || strikeBefore > 60) throw new Error("--strike-before must be 5 to 60 seconds.");
@@ -28,7 +29,9 @@ const abi = parseAbi([
   "function deposit(uint256,uint256)",
   "function claimCredits(uint256,uint256,uint256)",
   "function buyLong(uint256,uint256,uint256,uint256)",
+  "function redeem(uint256)",
 ]);
+const balanceAbi = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 const marketAbi = parseAbi([
   "function probabilities(uint256,uint256) view returns (uint256,uint256)",
   "function quoteBuyLong(uint256,uint256,uint256) view returns (uint256)",
@@ -41,6 +44,13 @@ const wallet = walletClientFor(deployer);
 const roundId = await publicClient.readContract({ address: quantumRound, abi: roundAbi, functionName: "roundCount" });
 const round = await publicClient.readContract({ address: quantumRound, abi: roundAbi, functionName: "rounds", args: [roundId] });
 const tradingEnd = Number(round[1]);
+if (redeemOnly) {
+  const balance = () => publicClient.readContract({ address: usdcAddress, abi: balanceAbi, functionName: "balanceOf", args: [deployer.address] });
+  const before = await balance();
+  await sendContract("deployer redeem", wallet, quantumRound, abi, "redeem", [roundId]);
+  console.log(`Deployer USDC ${usdc(before)} -> ${usdc(await balance())} after redeem.`);
+  process.exit(0);
+}
 const pLong = async () => Number((await publicClient.readContract({ address: market, abi: marketAbi, functionName: "probabilities", args: [roundId, proposalId] }))[0]) / 1e18;
 console.log(`Round ${roundId}, proposal ${proposalId}: pLong ${(await pLong()).toFixed(4)}; strike at ${new Date((tradingEnd - strikeBefore) * 1000).toISOString()}.`);
 if (!execute) process.exit(0);
