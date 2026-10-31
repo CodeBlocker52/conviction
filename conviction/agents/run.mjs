@@ -16,6 +16,7 @@ import {
   guardianThreshold,
   planGuardianAction,
   planQuantAction,
+  tooCloseToTradingEnd,
   QUANT_THRESHOLD,
   quantFairProbability,
 } from "./forecaster-strategies.mjs";
@@ -513,6 +514,12 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
       let transactions = [];
       let executedQuote;
       let pMarketAfter;
+      const blockedByDeadline = execute && plan.action === "buy"
+        && tooCloseToTradingEnd({ nowSeconds: chainTimestamp, tradingEnd: round.tradingEnd });
+      if (blockedByDeadline) {
+        plan.reason = `${plan.reason} Not submitted: under 15 s of trading left, too close to the deadline for Circle to confirm.`;
+        plan.action = "none";
+      }
       if (plan.action === "buy") {
         if (!execute) {
           agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();

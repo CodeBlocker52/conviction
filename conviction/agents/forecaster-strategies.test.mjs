@@ -11,6 +11,7 @@ import {
   planQuantAction,
   quantFairProbability,
   sizeTrade,
+  tooCloseToTradingEnd,
 } from "./forecaster-strategies.mjs";
 
 function candles(returns, initialPrice = 2_500) {
@@ -146,4 +147,9 @@ test("quant default threshold is 0.005 and acts just beyond it", async () => {
   assert.equal(quiet.action, "none");
   const active = await planQuantAction({ proposalId: 0, pMarket: 0.49, pFair: 0.5, quoteFor: mockQuote(0.49, 0.05) });
   assert.equal(active.action, "buy");
+});
+
+test("live trades stop 15 seconds before trading closes", () => {
+  assert.equal(tooCloseToTradingEnd({ nowSeconds: 984, tradingEnd: 1_000 }), false);
+  assert.equal(tooCloseToTradingEnd({ nowSeconds: 985, tradingEnd: 1_000 }), true);
 });

@@ -10,6 +10,10 @@ export const MIN_TRADE_CREDITS = 10_000n;
 export const SLIPPAGE_BPS = 50n;
 export const FAIR_PROBABILITY_MIN = 0.02;
 export const FAIR_PROBABILITY_MAX = 0.98;
+// Circle transactions take several seconds to land, so live trades stop shortly before trading closes.
+export const SUBMISSION_BUFFER_SECONDS = 15;
+export const tooCloseToTradingEnd = ({ nowSeconds, tradingEnd, buffer = SUBMISSION_BUFFER_SECONDS }) =>
+  nowSeconds >= Number(tradingEnd) - buffer;
 const CREDIT_TO_TOKEN_SCALE = 10n ** 12n;
 const SEARCH_STEPS = 24;
 
