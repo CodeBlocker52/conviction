@@ -314,3 +314,26 @@ Status: Settled; status quo won, with one on-chain proposal and no deposits.
 The protocol seed was 20.079913 USDC before opening, 15.079913 USDC while the 5 USDC status-quo market was active, and 20.079913 USDC after settlement. Vault inventory was unchanged: 2.5 USDC and 0.001054719528886627 tETH before and after. All five agent wallets still held 1.25 USDC.
 
 The proposer dry-run ran during the open window only. Momentum recommended 4100 bps (not a duplicate); Mean-reversion recommended 4900 bps (suppressed within 500 bps of status quo); News recommended 4100 bps (suppressed as a duplicate of Momentum). All decisions were logged as `dryRun: true` and `submitted: false`; no live agent proposal was sent.
+
+## Round 5 (agent dry-run round)
+
+Status: Settled; status quo won, with one on-chain proposal and no deposits. No agent wallet sent a transaction.
+
+| Action | Transaction | Result |
+|---|---|---|
+| Open status-quo-only round (20-minute trading, 600-second evaluation, ±0.50% return range) | [0xc53efc0b…a49d](https://explorer.testnet.arc.io/tx/0xc53efc0b56f76cdf087bb30b6d7c268edfc8afeb063841fd379404ec48e2a49d) | Confirmed |
+| Collapse round 5 | [0xcec67dac…c43d](https://explorer.testnet.arc.io/tx/0xcec67daca24ccd74e354541f8099dbb1335393ad3497d08ff66ac3ebd037c43d) | Confirmed |
+| Status-quo vault execution (no principal swap) | [0xe5babe6b…c4f5](https://explorer.testnet.arc.io/tx/0xe5babe6b3182ded9050a4048af1dd66a51363906747bd8d708d46e19a920c4f5) | Confirmed |
+| Report return and settle round 5 | [0xa41ade4e…8a1a](https://explorer.testnet.arc.io/tx/0xa41ade4e8dc72e370987d7010048767b6e26fc0525e21846da971373fb608a1a) | Confirmed |
+
+The pool was 0.36% off the oracle, under the 0.5% limit, so no recenter was run. The protocol seed was 20.079913 USDC before the round and 20.079913 USDC after settlement. All five agent wallets still held 1.25 USDC.
+
+Proposer dry-run (status quo at 4858 bps; News used the fallback because `ANTHROPIC_API_KEY` is not set):
+
+| Agent | Raw | Final | Shifted |
+|---|---|---|---|
+| Momentum | 8100 | 8100 | no |
+| Mean-reversion | 3700 | 3700 | no |
+| News | 3600 | 3200 | yes, within 500 bps of Mean-reversion; shifted down with its signal |
+
+Forecaster dry-run (proposal 0 only): Quant pMarket 0.5000, pFair 0.5027, gap 0.0027 against threshold 0.03, so no action. Guardian threshold 0.08 (normal window), so no action. All decisions were `dryRun: true`, `submitted: false`.

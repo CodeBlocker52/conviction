@@ -1,6 +1,6 @@
 # Wavefund agent plan
 
-**Status:** Steps 2 and 3 are implemented. The deployed Phase B v2 contracts remain unchanged. Agent wallets are funded under explicit approval; no agent proposal has been submitted.
+**Status:** Steps 2, 3 and 4 (dry-run) are implemented. The deployed Phase B v2 contracts remain unchanged. Agent wallets are funded under explicit approval; no agent proposal has been submitted.
 
 ## 1. Wallets and custody
 
@@ -74,4 +74,10 @@ The operator `demo:open-round` path opens status quo only; legacy deployer/keepe
 
 ### Step 3 implementation
 
-Momentum standardizes the ten-minute log return by recent one-minute realized volatility; mean-reversion standardizes the latest price's deviation from its 30-minute average. Both target a neutral 50% tETH allocation, move by 15 percentage points per signal z-score, clamp to 20–80%, and round to whole percentage points. News uses up to ten recent CoinDesk RSS headlines and, when `ANTHROPIC_API_KEY` is configured, asks Claude for a strict `{ tEthBps, rationale }` JSON response. Any feed/model/schema failure is recorded and uses bounded deterministic headline scoring (neutral if no headlines are available). Dry-run evaluates these strategies only while a real round is in its trading window; live proposal submission remains disabled.
+Momentum standardizes the ten-minute log return by recent one-minute realized volatility; mean-reversion standardizes the latest price's deviation from its 30-minute average. Both target a neutral 50% tETH allocation, move by 17.5 percentage points per signal z-score (z clamped to ±2, so ±35 points), clamp to the hard 10–90% bounds, and round to whole percentage points. News uses up to ten recent CoinDesk RSS headlines and, when `ANTHROPIC_API_KEY` is configured, asks `claude-haiku-5-5` for a strict `{ tEthBps, rationale }` JSON response. Any feed/model/schema failure is recorded and uses bounded deterministic headline scoring (neutral if no headlines are available). Dry-run evaluates these strategies only while a real round is in its trading window; live proposal submission remains disabled.
+
+Distinctness: a proposal within 500 bps of the status quo or of any proposal already decided in the same cycle is shifted, in the direction of the agent's own signal, to the nearest allocation at least 500 bps from every existing one (within 10–90%); if none exists it tries the opposite side once, then skips and logs why. The on-chain rationale states any shift and stays under 280 characters. Every News decision logs `source` (`claude` or `fallback`) and `fallbackReason`.
+
+### Step 4 implementation (dry-run only)
+
+`agents/forecaster-strategies.mjs` holds the pure logic; `agents/run.mjs` reads `probabilities` and the `quoteBuyLong`/`quoteBuyShort` views from the adapter. Quant computes `pFair = clamp((E[R] - rMin) / (rMax - rMin), 0.02, 0.98)` (drift halved and capped), trades only when `|pMarket - pFair| > 0.03` (`QUANT_THRESHOLD`), sizes each buy by bisection over the quote views so the marginal price moves about halfway to pFair (average execution price from the quote; marginal move taken as twice the average move), capped at 0.5 credits per trade and 1 credit per proposal. Each trade is preceded by one 1 USDC `deposit` per round and a `claimCredits` for that proposal, so one deposit backs claims in every proposal traded. Guardian reuses Quant's pFair, acts only beyond 0.08 (0.05 inside the final TWAP window), stands down if Quant's planned trade already brings the price within the threshold, and logs each intervention. Minimum outputs are the quoted output minus 0.5%. `redeemAfterSettlement` is implemented but not exercised until the live round. The dry-run never submits transactions; sell paths are only needed to unwind held positions and are not planned in this step.
