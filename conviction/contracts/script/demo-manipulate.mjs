@@ -22,6 +22,10 @@ const valueOf = (name, fallback) => (args.includes(name) ? args[args.indexOf(nam
 const redeemOnly = args.includes("--redeem");
 const proposalId = BigInt(valueOf("--proposal", redeemOnly ? "0" : "-1"));
 const strikeBefore = Number(valueOf("--strike-before", "55"));
+// Optional early SHORT nudge so an agent opens a LONG position that it can later trim; the nudge plus the strike stay within 1 credit.
+const nudgeCredits = BigInt(Math.round(Number(valueOf("--nudge", "0")) * 1e6));
+const strikeCredits = CREDITS - nudgeCredits;
+if (nudgeCredits < 0n || nudgeCredits >= CREDITS) throw new Error("--nudge must be between 0 and 1 credit.");
 if (proposalId < 0n) throw new Error("Pass --proposal <id>.");
 if (!Number.isInteger(strikeBefore) || strikeBefore < 5 || strikeBefore > 60) throw new Error("--strike-before must be 5 to 60 seconds.");
 
@@ -29,12 +33,14 @@ const abi = parseAbi([
   "function deposit(uint256,uint256)",
   "function claimCredits(uint256,uint256,uint256)",
   "function buyLong(uint256,uint256,uint256,uint256)",
+  "function buyShort(uint256,uint256,uint256,uint256)",
   "function redeem(uint256)",
 ]);
 const balanceAbi = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 const marketAbi = parseAbi([
   "function probabilities(uint256,uint256) view returns (uint256,uint256)",
   "function quoteBuyLong(uint256,uint256,uint256) view returns (uint256)",
+  "function quoteBuyShort(uint256,uint256,uint256) view returns (uint256)",
 ]);
 const { quantumRound, market, usdc: usdcAddress } = deployment.contracts;
 
@@ -59,10 +65,16 @@ await ensureAllowance("manipulation deposit", wallet, usdcAddress, deployer.addr
 await sendContract("manipulation deposit 1 USDC", wallet, quantumRound, abi, "deposit", [roundId, CREDITS]);
 await sendContract("manipulation claim 1 credit", wallet, quantumRound, abi, "claimCredits", [roundId, proposalId, CREDITS]);
 
+if (nudgeCredits > 0n) {
+  const nudgeBefore = await pLong();
+  const nudgeQuote = await publicClient.readContract({ address: market, abi: marketAbi, functionName: "quoteBuyShort", args: [roundId, proposalId, nudgeCredits] });
+  await sendContract("nudge buy SHORT", wallet, quantumRound, abi, "buyShort", [roundId, proposalId, nudgeCredits, (nudgeQuote * 9_950n) / 10_000n]);
+  console.log(`Nudge: pLong ${nudgeBefore.toFixed(4)} -> ${(await pLong()).toFixed(4)} with ${usdc(nudgeCredits)} credits SHORT at ${new Date().toISOString()}.`);
+}
 await waitUntil(BigInt(tradingEnd - strikeBefore));
 const before = await pLong();
-const quoted = await publicClient.readContract({ address: market, abi: marketAbi, functionName: "quoteBuyLong", args: [roundId, proposalId, CREDITS] });
+const quoted = await publicClient.readContract({ address: market, abi: marketAbi, functionName: "quoteBuyLong", args: [roundId, proposalId, strikeCredits] });
 const minOut = (quoted * 9_950n) / 10_000n;
-await sendContract("manipulation buy LONG with 1 credit", wallet, quantumRound, abi, "buyLong", [roundId, proposalId, CREDITS, minOut]);
+await sendContract("manipulation strike buy LONG", wallet, quantumRound, abi, "buyLong", [roundId, proposalId, strikeCredits, minOut]);
 const after = await pLong();
 console.log(`Manipulation: pLong ${before.toFixed(4)} -> ${after.toFixed(4)} (quoted ${quoted}, min ${minOut}) at ${new Date().toISOString()}. Deposit ${usdc(CREDITS)} USDC.`);

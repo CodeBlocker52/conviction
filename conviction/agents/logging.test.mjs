@@ -2,14 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { sumGasReservations } from "./logging.mjs";
 
-test("daily gas reservations count the greater of estimate or actual and retain unknown outcomes", () => {
+test("daily gas counts the confirmed actual fee, holds pending estimates and releases unbroadcast ones", () => {
   const lines = [
     { type: "transaction_attempt", agentId: "MOMENTUM", reservationId: "a", estimatedGasWei: "10" },
     { type: "transaction", agentId: "MOMENTUM", reservationId: "a", actualGasWei: "15" },
     { type: "transaction_attempt", agentId: "MOMENTUM", reservationId: "b", estimatedGasWei: "20" },
     { type: "transaction_attempt", agentId: "NEWS", reservationId: "c", estimatedGasWei: "100" },
+    { type: "transaction_attempt", agentId: "MOMENTUM", reservationId: "d", estimatedGasWei: "100" },
+    { type: "transaction", agentId: "MOMENTUM", reservationId: "d", actualGasWei: "40" },
+    { type: "transaction_attempt", agentId: "MOMENTUM", reservationId: "e", estimatedGasWei: "70" },
+    { type: "transaction_released", agentId: "MOMENTUM", reservationId: "e" },
   ].map(JSON.stringify).join("\n");
-  assert.equal(sumGasReservations(lines, "MOMENTUM"), 35n);
+  // a: actual 15, b: pending estimate 20, d: actual 40 (not the 100 estimate), e: released.
+  assert.equal(sumGasReservations(lines, "MOMENTUM"), 75n);
 });
 
 test("gas ledger rejects malformed records instead of resetting the cap", () => {

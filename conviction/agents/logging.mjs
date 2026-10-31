@@ -30,6 +30,7 @@ export function readDailyGasReservations(agentId, day = new Date().toISOString()
 export function sumGasReservations(contents, agentId, path = "agent log") {
   const reservations = new Map();
   const actualFees = new Map();
+  const released = new Set();
   for (const [index, line] of contents.split("\n").entries()) {
     if (!line) continue;
     let event;
@@ -44,6 +45,9 @@ export function sumGasReservations(contents, agentId, path = "agent log") {
       }
       reservations.set(event.reservationId ?? `line-${index}`, BigInt(event.estimatedGasWei));
     }
+    if (event.agentId === agentId && event.type === "transaction_released" && event.reservationId) {
+      released.add(event.reservationId);
+    }
     if (event.agentId === agentId && event.type === "transaction" && event.reservationId) {
       if (typeof event.actualGasWei !== "string" || !/^\d+$/.test(event.actualGasWei)) {
         throw new Error(`Agent log ${path} has an invalid actual gas fee on line ${index + 1}.`);
@@ -53,8 +57,9 @@ export function sumGasReservations(contents, agentId, path = "agent log") {
   }
   let total = 0n;
   for (const [reservationId, estimate] of reservations) {
-    const actual = actualFees.get(reservationId) ?? estimate;
-    total += actual > estimate ? actual : estimate;
+    if (released.has(reservationId)) continue;
+    // A pending or unknown-outcome transaction holds its estimate; a confirmed one counts its actual fee.
+    total += actualFees.get(reservationId) ?? estimate;
   }
   return total;
 }

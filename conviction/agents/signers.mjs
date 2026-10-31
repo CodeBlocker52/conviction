@@ -98,7 +98,14 @@ export class CircleAgentSigner {
         idempotencyKey,
         refId: `${agentSlug(this.agent.name)}-${label.slice(0, 60)}`,
       });
-    } catch {
+    } catch (error) {
+      // An explicit 4xx rejection means nothing was broadcast, so the reservation is released.
+      // Anything else (timeouts, 5xx) may have created a transaction, so the reservation stays.
+      const status = error?.response?.status ?? error?.status;
+      if (Number.isInteger(status) && status >= 400 && status < 500) {
+        this.spentGasWei -= estimatedGasWei;
+        this.logEvent({ type: "transaction_released", agentId: this.agent.id, label, reservationId: idempotencyKey });
+      }
       throw new Error(`Circle transaction request for ${label} failed; it was not automatically retried.`);
     }
     const transactionId = created.data?.id ?? created.data?.transaction?.id;
@@ -133,7 +140,8 @@ export class CircleAgentSigner {
       throw new Error(`${label} receipt did not include an effective gas price.`);
     }
     const actualGasWei = receipt.gasUsed * receipt.effectiveGasPrice;
-    if (actualGasWei > estimatedGasWei) this.spentGasWei += actualGasWei - estimatedGasWei;
+    // The estimate was only a pending reservation; the confirmed fee replaces it.
+    this.spentGasWei += actualGasWei - estimatedGasWei;
     this.logEvent({
       type: "transaction",
       agentId: this.agent.id,
@@ -198,7 +206,8 @@ export class LocalAgentSigner {
       throw new Error(`${label} receipt did not include an effective gas price.`);
     }
     const actualGasWei = receipt.gasUsed * receipt.effectiveGasPrice;
-    if (actualGasWei > estimatedGasWei) this.spentGasWei += actualGasWei - estimatedGasWei;
+    // The estimate was only a pending reservation; the confirmed fee replaces it.
+    this.spentGasWei += actualGasWei - estimatedGasWei;
     this.logEvent({
       type: "transaction",
       agentId: this.agent.id,

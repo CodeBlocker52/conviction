@@ -392,3 +392,51 @@ Realised return 0.99867 (rMin 0.995, rMax 1.005). Vault: 2.5 USDC + 0.0010547195
 | Deployer | 37.795152 (before top-up) | 27.495477 | 10 USDC top-up, manipulation deposit 1 → redeemed 0.672111 (−0.327889), plus gas and recenter |
 
 Reserve: 20.079913 before top-up, 30.079913 after top-up, 10.079913 while four markets were live, 30.185875 after settlement (+0.105962). Deposits were 3.000000 USDC (Quant 1, Guardian 1, deployer 1) and redemptions were 2.894038, so the reserve gain of 0.105962 matches exactly. The QuantumRound USDC balance (30.185875) equals the reserve and the registry holds 0 USDC, so nothing is unaccounted for.
+
+## Round 7 (Guardian outcome-aware test)
+
+Status: Settled; proposal 1 (Momentum, 52% tETH) won. **The manipulation test did not pass**: the manipulated proposal still won (see "Result").
+
+| Stage | Action | Transaction |
+|---|---|---|
+| B | Fund Quant and Guardian with 1.25 USDC each | [Quant](https://explorer.testnet.arc.io/tx/0xc7d16a282c40fb0c507c4da1f16a675acfb4f6ba3ac4ef42fedc788154726a48), [Guardian](https://explorer.testnet.arc.io/tx/0xe72b9df8b3042ed019130d6bc1e978661403c4ec5068c40bacd88eab07aaaa0e) |
+| B | Pool recenter (0.59% off the oracle, within the 1 USDC cap): remove / align / add | [remove](https://explorer.testnet.arc.io/tx/0xb360e0433a34c2d679d593f785b3c2540ec61edb1c33d2a2538ee9a135f35b1d), [align](https://explorer.testnet.arc.io/tx/0x08702de990d06de3e24f075c87047bbf9e9fdcfa866a9324101e0ceb14f49b65), [add](https://explorer.testnet.arc.io/tx/0x7f2733f58a854d4722293f375f7eeceb8419a5ce63a5314adf6bf24344d371a3) |
+| B | Open round 7 (20 min, 600 s evaluation, ±0.50%) | [0x86d70a…5b8c](https://explorer.testnet.arc.io/tx/0x86d70aee1825c2ffa9e9ed9d0cdf0bf7d9a2edc6cea97e18f56c772acf375b8c) |
+| C | Momentum: approve bond, propose 5200 bps | [approve](https://explorer.testnet.arc.io/tx/0xf3163c62d0405847f1a5841e79979b19f9b979dd687c21af3c51945d756fadeb), [propose](https://explorer.testnet.arc.io/tx/0x4c4f1a4251c90f81fc3d218da18d0e795ca0ff6c0be4451a46a696b1f530bf28) |
+| C | Mean-reversion: approve bond, propose 5700 bps | [approve](https://explorer.testnet.arc.io/tx/0xb1c4ab0299e203c0ab18d2e2b9e0ab4d37b33349393210da37e70b3d8a795f2e), [propose](https://explorer.testnet.arc.io/tx/0x96c97de70cb2840fe14e3cb608c31624a302491c6bd6bf5a342972856994a266) |
+| C | News: approve bond, propose 3900 bps | [approve](https://explorer.testnet.arc.io/tx/0xa2bfdc93991171339d7e23e83bda47435dd6f85553ffc8202b3729c673c3ab7f), [propose](https://explorer.testnet.arc.io/tx/0x6e0706fcbfec59684f8e54d26eaae8f1fbb24e24b2050a7b1e49922549a314c6) |
+| C | Quant deposit 2 USDC, then pre-claim 2 credits in each of 4 proposals | [deposit](https://explorer.testnet.arc.io/tx/0x6c26d5eb0f90d0275e4377b81e35baeb6d863db80b166adffe090497ac857ae5) |
+| C | Guardian deposit 2 USDC, then pre-claim 2 credits in each of 4 proposals | [deposit](https://explorer.testnet.arc.io/tx/0x70d8bb1395050dec0a56a5cce12185cd5f5f8afb5aa76684b144a084ebbce9a5) |
+| C | Deployer deposit 1 USDC and claim 1 credit (proposal 1) | [deposit](https://explorer.testnet.arc.io/tx/0xbf3a79e8c744fd26a6fa059085433e6daacdaf27301caefd53e0977b86fd9d1c), [claim](https://explorer.testnet.arc.io/tx/0x7369b1de9d0e9444ce7e96cd2cf712ec070274f53e0a729ad9a32ddb639225dc) |
+| C | Deployer nudge: buy SHORT 0.25 credits (15:15:32Z), pLong 0.5000 to 0.4757 | [0x168691…4997](https://explorer.testnet.arc.io/tx/0x016869108675136bd172273788091642e63bdf00e25f4629bab3637347444997) |
+| C | **Quant BUY LONG** 0.234 credits (15:15:52Z), pLong 0.4757 to 0.4996; min 0.4770 vs quote 0.4794 tokens | [0x5ad94b…2cde](https://explorer.testnet.arc.io/tx/0x5ad94b77b17fe7dc134ca0ec686de9d9db3a7a239ce8f0ea4e7b47bee9d62cde) |
+| E | **Deployer strike**: buy LONG 0.75 credits (15:26:50Z, 44 s before trading end), pLong 0.4996 to 0.5689 | [0xd60c05…aac6](https://explorer.testnet.arc.io/tx/0xd60c0593443540d37272c5e23fc829143a449b88a4b24349ada6cddcbfa6aac6) |
+| E | **Quant SELL LONG** 0.479 tokens (15:26:54Z), pLong 0.5689 to 0.5454; quote 0.266771 credits, min 0.265437 | [0x7fcdf5…3c06](https://explorer.testnet.arc.io/tx/0x7fcdf5db23070a4a34d9fbf2063f77c54fd36704fcbf3e4f8a73520417706c13) |
+| E | **Guardian BUY SHORT** 0.412 credits (15:27:10Z), pLong 0.5454 to 0.5025; deviation 0.0444 over threshold 0.01, leader on projected TWAP; quote 0.864361, min 0.860039 tokens | [0xe00e33…7ff3](https://explorer.testnet.arc.io/tx/0xe00e33c49e217db708149e6f41e8a32da6e1d3eb936cce894baf81a12b0d7ff3) |
+| F | Collapse | [0xaf8df9…a684](https://explorer.testnet.arc.io/tx/0xaf8df987c405f5a32c553135fa01ef29e1b2ddbbf914a122e804b1d5d4dca684) |
+| F | Vault executes proposal 1 | [0x06bd46…7101](https://explorer.testnet.arc.io/tx/0x06bd4652f3118527f2c85b5028083ef34da21b875b83a66e79e821686a487101) |
+| F | Report return and settle | [0x2595ad…e7a2](https://explorer.testnet.arc.io/tx/0x2595ad6927102dc61359f4fe5f2fef4ac289eaeca119feccb2b7a6a4b010e7a2) |
+| F | Redeems | [Quant](https://explorer.testnet.arc.io/tx/0xcf552c26fca6a5b944c164085ea363ee174c9c51d4e2a91c0636cd3de0dc48e9), [Guardian](https://explorer.testnet.arc.io/tx/0xe0c833425fb6911272b9ff345799ef184d29f22eca5c248c8a0abfe8aecaefb3), [deployer](https://explorer.testnet.arc.io/tx/0xb30b62a913a70e53a181b008d0fdf507fb15721199b265878aba067dc680251a) |
+
+Proposals (on-chain rationales): 1 Momentum 52% ("10m trend z=0.13 …"); 2 Mean-reversion 57% (raw 54%: "Signal suggests 54%; shifted to 57% to stay distinct from existing proposals"); 3 News 39% ("… Model unavailable; fallback used."). News used its **fallback** (Anthropic HTTP 400, credit balance too low), as expected for this round; both the log and the on-chain rationale say so.
+
+### Result
+
+Final TWAPs: status quo 0.5000, proposal 1 **0.5176**, proposal 2 0.5000, proposal 3 0.5000. Proposal 1 won because it beat the status quo by 0.0176, above epsilon 0.005. It was the manipulated proposal, and its pFair was 0.5011, so the win is not justified by fair value. Realised return 0.999479 (rMin 0.995, rMax 1.005). Vault after round 6: 3.306767 USDC and 0.000693301523185074 tETH; after round 7: 2.334299 USDC (rebalanced to 52% tETH).
+
+Why the defence was too slow: the 60 s TWAP weights every second equally. pLong sat near 0.569 for 4 s (strike to Quant's sell), 0.545 for 16 s (Quant's sell to Guardian's buy) and 0.5025 for the last 24 s, with 16 s at 0.4996 before the strike: (16×0.4996 + 4×0.5689 + 16×0.5454 + 24×0.5025) / 60 = 0.5176. Quant, limited by the size of its position, corrected only part of the push. Guardian runs after Quant in the same sequential loop and then needs its own Circle confirmation (about 16 s). An excess of about 0.05 for 20 s is worth about 0.017 of TWAP, three times the selection margin.
+
+### Reconciliation
+
+Deposits 5.000000 USDC (Quant 2, Guardian 2, deployer 1). Exact Redeemed events: Quant 2.032630, Guardian 2.065166, deployer 0.896762, total 4.994558. The difference, 0.005442, equals the reserve gain: reserve 30.185875 to 30.191317, equal to QuantumRound's USDC balance; registry holds 0. Nothing is unaccounted for.
+
+| Wallet | After round 7 | Net |
+|---|---|---|
+| Quant | 2.616444 | deposit 2 returned 2.032630 (+0.0326), plus gas |
+| Guardian | 2.513317 | deposit 2 returned 2.065166 (+0.0652), plus gas |
+| Deployer | 24.255581 | strike deposit 1 returned 0.896762 (−0.1032), plus gas; also paid the 2.5 USDC funding |
+| Momentum, Mean-reversion, News | 1.097383, 1.089225, 1.085155 | gas only; bonds refunded |
+
+### Gas-cap incident
+
+A `propose` is estimated at about 0.146 USDC but costs about 0.076, and the ledger kept the estimate, so the 0.25 USDC daily cap blocked the proposers before any proposal. The cap was raised to 0.5 USDC for this round with approval; nothing reverted. The permanent fix (actual fee replaces the estimate on confirmation, unbroadcast requests are released, cap back to 0.25) is in the same commit.
