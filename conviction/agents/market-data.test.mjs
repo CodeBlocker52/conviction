@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateRiskModel, estimateQuantFairProbability } from "./market-data.mjs";
+import { calculateRiskModel, estimateQuantFairProbability, fetchRecentEthCandles } from "./market-data.mjs";
 
 function makeCandles(returnSteps) {
   const candles = [];
@@ -57,4 +57,19 @@ test("quant fair values use half drift and cap its effect at one quarter of the 
 test("risk model rejects noncontiguous or insufficient candle history", () => {
   assert.throws(() => calculateRiskModel(makeCandles([0.001, -0.001])), /contiguous one-minute closes/);
   assert.throws(() => calculateRiskModel(makeCandles(Array(40).fill(0)), 30), /at least 60 whole seconds/);
+});
+
+test("candle fetch retries transient failures and then gives up", async () => {
+  let calls = 0;
+  const waits = [];
+  const wait = async (ms) => waits.push(ms);
+  const good = [[1, 1, 1, 1, 1, 1]];
+  const flaky = async () => { calls += 1; if (calls < 3) throw new Error("stale"); return good; };
+  assert.equal(await fetchRecentEthCandles({ fetchOnce: flaky, wait }), good);
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [8_000, 12_000]);
+  await assert.rejects(
+    fetchRecentEthCandles({ fetchOnce: async () => { throw new Error("stale"); }, wait }),
+    /after 3 attempts: stale/,
+  );
 });

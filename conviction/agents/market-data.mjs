@@ -4,7 +4,24 @@ const MIN_BAND_BPS = 50;
 const MAX_BAND_BPS = 200;
 const BAND_STEP_BPS = 50;
 
-export async function fetchRecentEthCandles() {
+const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+// Retries transient Coinbase failures (stale or missing candles, HTTP errors) with backoff:
+// 3 attempts over roughly 20 seconds by default.
+export async function fetchRecentEthCandles({ attempts = 3, delaysMs = [8_000, 12_000], fetchOnce = fetchRecentEthCandlesOnce, wait = sleep } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchOnce();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) await wait(delaysMs[Math.min(attempt, delaysMs.length - 1)]);
+    }
+  }
+  throw new Error(`Coinbase candles unavailable after ${attempts} attempts: ${lastError?.message ?? "unknown error"}`);
+}
+
+async function fetchRecentEthCandlesOnce() {
   const response = await fetch(
     "https://api.exchange.coinbase.com/products/ETH-USD/candles?granularity=60",
     {

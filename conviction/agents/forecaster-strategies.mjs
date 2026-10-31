@@ -1,7 +1,7 @@
 import { calculateRiskModel, estimateQuantFairProbability } from "./market-data.mjs";
 import { assertTradeWithinCap, TRADE_CAP_USDC } from "./safety.mjs";
 
-export const QUANT_THRESHOLD = 0.03;
+export const QUANT_THRESHOLD = 0.005;
 export const GUARDIAN_THRESHOLD = 0.08;
 export const GUARDIAN_FINAL_WINDOW_THRESHOLD = 0.05;
 export const PER_TRADE_CAP_CREDITS = TRADE_CAP_USDC;
@@ -62,16 +62,16 @@ function averageLongPrice(direction, creditsIn, quotedOut) {
   return direction === "long" ? price : 1 - price;
 }
 
-// Sizes a buy so the marginal price moves roughly halfway toward pFair. Quotes give the average
+// Sizes a buy so the marginal price moves all the way to pFair (fraction 1). Quotes give the average
 // execution price; for a locally linear curve the marginal price moves about twice as far.
-export async function sizeTrade({ direction, pMarket, pFair, quote, spentCredits = 0n }) {
+export async function sizeTrade({ direction, pMarket, pFair, quote, spentCredits = 0n, fraction = 1 }) {
   if (direction !== "long" && direction !== "short") throw new Error("Trade direction must be long or short.");
   const proposalRoom = PER_PROPOSAL_CAP_CREDITS - spentCredits;
   const available = proposalRoom < PER_TRADE_CAP_CREDITS ? proposalRoom : PER_TRADE_CAP_CREDITS;
   if (available < MIN_TRADE_CREDITS) {
     return { action: "none", reason: "Per-proposal cap of 1 credit is exhausted." };
   }
-  const target = pMarket + (pFair - pMarket) / 2;
+  const target = pMarket + (pFair - pMarket) * fraction;
   const evaluate = async (creditsIn) => {
     const quotedOut = await quote(creditsIn);
     if (quotedOut <= 0n) return { creditsIn, quotedOut, withinTarget: false, impliedAfter: Number.NaN };
@@ -86,7 +86,7 @@ export async function sizeTrade({ direction, pMarket, pFair, quote, spentCredits
     let high = available;
     const smallest = await evaluate(low);
     if (!smallest.withinTarget) {
-      return { action: "none", reason: "Even the smallest trade would overshoot the halfway-to-fair target." };
+      return { action: "none", reason: "Even the smallest trade would overshoot the pFair target." };
     }
     best = smallest;
     for (let step = 0; step < SEARCH_STEPS && high - low > 1n; step += 1) {

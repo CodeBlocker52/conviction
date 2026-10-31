@@ -10,6 +10,9 @@ import {
 import { readAgents } from "./config.mjs";
 import { writeAgentEvent } from "./logging.mjs";
 import {
+  applySlippage,
+  buildForecasterCalls,
+  buildRedeemCall,
   guardianThreshold,
   planGuardianAction,
   planQuantAction,
@@ -27,14 +30,30 @@ import {
 } from "./proposer-strategies.mjs";
 import { nextAgentEvaluation } from "./scheduler.mjs";
 import { loadRuntimeState, saveRuntimeState } from "./runtime-state.mjs";
-import { assertProposalCountWithinCap } from "./safety.mjs";
+import { assertPrincipalWithinCap, assertProposalCountWithinCap } from "./safety.mjs";
 import { parseAbi } from "viem";
+import { createAgentSigner } from "./signers.mjs";
 
 const marketAbi = parseAbi([
   "function probabilities(uint256,uint256) view returns (uint256 longProbability, uint256 shortProbability)",
   "function quoteBuyLong(uint256,uint256,uint256) view returns (uint256)",
   "function quoteBuyShort(uint256,uint256,uint256) view returns (uint256)",
 ]);
+
+const quantumAbi = parseAbi([
+  "function deposits(uint256,address) view returns (uint256)",
+  "function creditsClaimed(uint256,uint256,address) view returns (uint256)",
+  "function DEFAULT_BOND() view returns (uint256)",
+]);
+const registryAbi = parseAbi([
+  "function agents(address) view returns (string name, address wallet, bool active, uint256 proposalCount, uint256 winCount, int256 cumulativeReturn)",
+]);
+const usdcAbi = parseAbi([
+  "function allowance(address,address) view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)",
+]);
+const EXPLORER_TX = "https://explorer.testnet.arc.io/tx/";
+const FORECASTER_DEPOSIT_USDC = 1_000_000n;
 
 const jsonSafe = (value) => JSON.parse(JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item)));
 
@@ -43,13 +62,19 @@ const args = process.argv.slice(2);
 let execute = false;
 let dryRunRequested = false;
 let once = false;
+let agentFilter = null;
 let pollSeconds = 10;
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
   if (arg === "--execute") execute = true;
   else if (arg === "--dry-run") dryRunRequested = true;
   else if (arg === "--once") once = true;
-  else if (arg === "--poll") {
+  else if (arg === "--agents") {
+    const value = args[index + 1];
+    if (!value) throw new Error("--agents needs a comma-separated list of agent names, proposers or forecasters.");
+    agentFilter = value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+    index += 1;
+  } else if (arg === "--poll") {
     const value = args[index + 1];
     if (!value || !/^\d+$/.test(value)) throw new Error("--poll needs a whole-number seconds value.");
     pollSeconds = Number(value);
@@ -61,16 +86,148 @@ if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
   throw new Error("--poll must be a whole number between 1 and 300 seconds.");
 }
 if (dryRunRequested && execute) throw new Error("Choose either --dry-run or --execute, not both.");
-if (execute) throw new Error("Live proposer submissions are not enabled in Step 3; run with --dry-run.");
 
 const log = (event) => writeAgentEvent(event);
-const agents = readAgents();
+const agents = readAgents().filter((agent) => !agentFilter
+  || agentFilter.includes(agent.name.toLowerCase())
+  || agentFilter.includes(`${agent.type}s`));
+if (agents.length === 0) throw new Error("No configured agent matches --agents.");
 const statePath = resolve(dirname(scriptPath), ".runtime-state.json");
 const lockPath = resolve(dirname(scriptPath), ".runtime.lock");
 const state = dryRun ? { version: 1, rounds: {} } : loadRuntimeState(statePath);
 
 function saveState() {
   if (!dryRun) saveRuntimeState(state, statePath);
+}
+
+const signers = new Map();
+const signerFor = (agent) => {
+  if (!signers.has(agent.id)) signers.set(agent.id, createAgentSigner(agent, process.env, log));
+  return signers.get(agent.id);
+};
+
+// Every on-chain failure is fatal: the runtime stops and reports instead of retrying in a loop.
+async function submit(agent, call) {
+  try {
+    const result = await signerFor(agent).executeContractCall(call);
+    const transaction = { label: call.label, hash: result.hash, explorerUrl: `${EXPLORER_TX}${result.hash}` };
+    log({ type: "agent_transaction", agentId: agent.id, agentName: agent.name, ...transaction });
+    return transaction;
+  } catch (error) {
+    const failure = new Error(`${agent.name} ${call.label} failed: ${safeErrorMessage(error)}`);
+    failure.fatal = true;
+    throw failure;
+  }
+}
+
+const readAllowance = (owner, spender) => publicClient.readContract({
+  address: deployment.contracts.usdc,
+  abi: usdcAbi,
+  functionName: "allowance",
+  args: [owner, spender],
+});
+
+async function ensureApproval(agent, spender, amount, label) {
+  const transactions = [];
+  if ((await readAllowance(agent.address, spender)) < amount) {
+    transactions.push(await submit(agent, {
+      address: deployment.contracts.usdc,
+      signature: "approve(address,uint256)",
+      args: [spender, amount],
+      label,
+    }));
+  }
+  return transactions;
+}
+
+async function executeProposal({ agent, round, roundCount, resolved, existingProposals }) {
+  const owner = agent.address.toLowerCase();
+  if (existingProposals.some((proposal) => String(proposal[1]).toLowerCase() === owner)) {
+    return { executed: false, note: "This agent already has a proposal in the round; not proposing again.", transactions: [] };
+  }
+  const transactions = [];
+  const info = await publicClient.readContract({
+    address: deployment.contracts.proposerRegistry,
+    abi: registryAbi,
+    functionName: "agents",
+    args: [agent.address],
+  });
+  if (info[1] === "0x0000000000000000000000000000000000000000") {
+    transactions.push(await submit(agent, {
+      address: deployment.contracts.proposerRegistry,
+      signature: "registerAgent(string)",
+      args: [agent.name],
+      label: "register proposer",
+    }));
+  } else if (!info[2]) {
+    throw Object.assign(new Error(`${agent.name} is registered but deactivated.`), { fatal: true });
+  }
+  const bond = await publicClient.readContract({
+    address: deployment.contracts.quantumRound,
+    abi: quantumAbi,
+    functionName: "DEFAULT_BOND",
+  });
+  assertPrincipalWithinCap("proposer", bond);
+  transactions.push(...await ensureApproval(agent, deployment.contracts.proposerRegistry, bond, "approve bond"));
+  transactions.push(await submit(agent, {
+    address: deployment.contracts.quantumRound,
+    signature: "propose(uint256,(uint16),string)",
+    args: [roundCount, [resolved.tEthBps], resolved.rationale],
+    label: `propose ${resolved.tEthBps} bps`,
+  }));
+  return { executed: true, transactions };
+}
+
+async function ensureForecasterDeposit(agent, roundCount) {
+  const current = await publicClient.readContract({
+    address: deployment.contracts.quantumRound,
+    abi: quantumAbi,
+    functionName: "deposits",
+    args: [roundCount, agent.address],
+  });
+  if (current > 0n) return [];
+  assertPrincipalWithinCap("forecaster", FORECASTER_DEPOSIT_USDC);
+  const transactions = await ensureApproval(agent, deployment.contracts.quantumRound, FORECASTER_DEPOSIT_USDC, "approve deposit");
+  transactions.push(await submit(agent, {
+    address: deployment.contracts.quantumRound,
+    signature: "deposit(uint256,uint256)",
+    args: [roundCount, FORECASTER_DEPOSIT_USDC],
+    label: "deposit 1 USDC",
+  }));
+  return transactions;
+}
+
+async function redeemForecasters({ round, roundCount, roundState }) {
+  const redeemed = roundState.redeemed ??= {};
+  for (const agent of agents.filter(({ type }) => type === "forecaster")) {
+    if (redeemed[agent.id]) continue;
+    const deposited = await publicClient.readContract({
+      address: deployment.contracts.quantumRound,
+      abi: quantumAbi,
+      functionName: "deposits",
+      args: [roundCount, agent.address],
+    });
+    if (deposited === 0n) {
+      redeemed[agent.id] = true;
+      continue;
+    }
+    const before = await publicClient.readContract({ address: deployment.contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [agent.address] });
+    const transaction = await submit(agent, buildRedeemCall({ roundContract: deployment.contracts.quantumRound, roundId: roundCount }));
+    const after = await publicClient.readContract({ address: deployment.contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [agent.address] });
+    redeemed[agent.id] = true;
+    state.rounds[round.id] = roundState;
+    saveState();
+    log(jsonSafe({
+      type: "forecaster_redeem",
+      roundId: round.id,
+      agentId: agent.id,
+      agentName: agent.name,
+      deposited,
+      usdcBalanceBefore: before,
+      usdcBalanceAfter: after,
+      transaction,
+    }));
+  }
 }
 
 function safeErrorMessage(error) {
@@ -121,6 +278,12 @@ async function observeRound() {
   };
   assertProposalCountWithinCap(round.proposalCount);
   if (round.settled || round.cancelled) {
+    if (execute && round.settled) {
+      const closedState = state.rounds[round.id] ?? {};
+      await redeemForecasters({ round, roundCount, roundState: closedState });
+      state.rounds[round.id] = closedState;
+      saveState();
+    }
     log({
       type: "round_closed",
       roundId: round.id,
@@ -187,6 +350,19 @@ async function observeRound() {
         throw new Error(`No proposer strategy is configured for ${agent.name}.`);
       }
       const resolved = resolveDistinctProposal(decision, consideredProposals, MIN_PROPOSAL_GAP_BPS);
+      let execution = { executed: false, transactions: [] };
+      if (execute && !resolved.skip) {
+        execution = await executeProposal({ agent, round, roundCount, resolved, existingProposals });
+        if (execution.executed) {
+          const count = Number(await publicClient.readContract({
+            address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "rounds", args: [roundCount],
+          }).then((value) => value[7]));
+          existingProposals.push(await publicClient.readContract({
+            address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "proposals", args: [roundCount, BigInt(count - 1)],
+          }));
+          execution.proposalId = count - 1;
+        }
+      }
       if (!resolved.skip) {
         consideredProposals.push({
           id: `dry-run-${agent.id}`,
@@ -215,10 +391,15 @@ async function observeRound() {
           comparedAgainst: consideredProposals.filter((proposal) => proposal.id !== `dry-run-${agent.id}`)
             .map(({ id, source, tEthBps }) => ({ id, source, tEthBps })),
         },
-        dryRun: true,
-        submitted: false,
+        dryRun,
+        submitted: execution.executed,
+        proposalId: execution.proposalId,
+        executionNote: execution.note,
+        transactions: execution.transactions,
       });
       roundState[agent.id] = evaluation.nextState;
+      state.rounds[round.id] = roundState;
+      saveState();
       changed = true;
     }
   }
@@ -265,6 +446,13 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
 
   for (const { agent, evaluation } of forecasterEvaluations) {
     const agentSpent = spent[agent.id] ??= {};
+    let depositTransactions = [];
+    if (execute && existingProposals.length > 0) {
+      depositTransactions = await ensureForecasterDeposit(agent, roundCount);
+      if (depositTransactions.length > 0) {
+        log({ type: "forecaster_deposit", roundId: round.id, agentId: agent.id, agentName: agent.name, transactions: depositTransactions });
+      }
+    }
     for (let proposalId = 0; proposalId < existingProposals.length; proposalId += 1) {
       const proposal = existingProposals[proposalId];
       const tEthBps = Number(proposal[2]);
@@ -276,7 +464,14 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
         candles,
       });
       const pMarket = await readMarket(proposalId);
-      const spentCredits = BigInt(agentSpent[proposalId] ?? "0");
+      const claimedOnChain = await publicClient.readContract({
+        address: deployment.contracts.quantumRound,
+        abi: quantumAbi,
+        functionName: "creditsClaimed",
+        args: [roundCount, BigInt(proposalId), agent.address],
+      });
+      const remembered = BigInt(agentSpent[proposalId] ?? "0");
+      const spentCredits = claimedOnChain > remembered ? claimedOnChain : remembered;
       const plan = agent.name === "Quant"
         ? await planQuantAction({
           proposalId,
@@ -295,12 +490,33 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
           quoteFor: quoteFor(proposalId),
           spentCredits,
         });
-      if (agent.name === "Quant") quantPlans.set(proposalId, plan);
-      const needsDeposit = plan.action === "buy" && !deposited[agent.id];
+      const needsDeposit = plan.action === "buy" && !deposited[agent.id] && !execute;
+      let transactions = [];
+      let executedQuote;
+      let pMarketAfter;
       if (plan.action === "buy") {
-        agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
-        deposited[agent.id] = true;
+        if (!execute) {
+          agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
+          deposited[agent.id] = true;
+        } else {
+          const [claim, buy] = buildForecasterCalls({
+            roundContract: deployment.contracts.quantumRound,
+            marketContract: deployment.contracts.market,
+            roundId: roundCount,
+            plan,
+            needsDeposit: false,
+          });
+          transactions.push(await submit(agent, claim));
+          // Re-quote after the claim so the minimum output reflects the live market, then apply 0.5% slippage.
+          executedQuote = await quoteFor(proposalId)(plan.side)(plan.creditsIn);
+          if (executedQuote <= 0n) throw Object.assign(new Error(`${agent.name}: adapter quote returned zero output.`), { fatal: true });
+          buy.args[3] = applySlippage(executedQuote);
+          transactions.push(await submit(agent, buy));
+          pMarketAfter = await readMarket(proposalId);
+        }
       }
+      // After a live Quant trade the market read above already reflects it, so Guardian uses real prices.
+      if (agent.name === "Quant") quantPlans.set(proposalId, execute && plan.action === "buy" ? null : plan);
       log(jsonSafe({
         type: agent.name === "Guardian" && plan.action !== "none" ? "guardian_intervention" : "forecaster_decision",
         roundId: round.id,
@@ -330,11 +546,14 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
           maxAbsoluteDrift: fair.maxAbsoluteDrift,
           sigmaLogReturnPerMinute: fair.sigmaLogReturnPerMinute,
         },
-        dryRun: true,
-        submitted: false,
+        ...(execute ? { executedQuote, executedMinOut: executedQuote === undefined ? undefined : applySlippage(executedQuote), pMarketAfter, transactions } : {}),
+        dryRun,
+        submitted: transactions.length > 0,
       }));
     }
     roundState[agent.id] = evaluation.nextState;
+    state.rounds[round.id] = roundState;
+    saveState();
   }
 }
 
@@ -345,7 +564,7 @@ async function main() {
     chain: deployment.chainName,
     mode: dryRun ? "dry-run" : "execute",
     pollSeconds,
-    liveSubmissionsEnabled: false,
+    liveSubmissionsEnabled: execute,
     agents: agents.map(({ id, name, type, address }) => ({ id, name, type, address })),
     signerBackend: execute ? (process.env.AGENT_SIGNER_BACKEND ?? "circle") : "not initialized in dry-run",
   });
@@ -365,6 +584,10 @@ async function main() {
       await observeRound();
       failures = 0;
     } catch (error) {
+      if (error.fatal) {
+        log({ type: "fatal_error", error: safeErrorMessage(error), note: "Stopping without retry; inspect the failed transaction before restarting." });
+        throw error;
+      }
       failures += 1;
       const backoffSeconds = Math.min(pollSeconds * 2 ** (failures - 1), 120);
       log({ type: "runtime_error", error: safeErrorMessage(error), retryInSeconds: backoffSeconds, dryRun });

@@ -12,13 +12,16 @@ test("proposers schedule one early evaluation per round", () => {
   assert.equal(nextAgentEvaluation(proposer, round, 901, first.nextState), null);
 });
 
-test("forecasters schedule periodically and once in the final TWAP window", () => {
+test("forecasters schedule every 15 s, then every 10 s in the final TWAP window", () => {
   const first = nextAgentEvaluation(forecaster, round, 900);
   assert.equal(first.cadence, "periodic");
   assert.equal(nextAgentEvaluation(forecaster, round, 910, first.nextState), null);
   const final = nextAgentEvaluation(forecaster, round, 940, first.nextState);
   assert.equal(final.cadence, "final-window");
-  assert.equal(nextAgentEvaluation(forecaster, round, 941, final.nextState), null);
+  assert.equal(nextAgentEvaluation(forecaster, round, 949, final.nextState), null);
+  const next = nextAgentEvaluation(forecaster, round, 950, final.nextState);
+  assert.equal(next.cadence, "final-window");
+  assert.equal(nextAgentEvaluation(forecaster, round, 960, next.nextState).cadence, "final-window");
 });
 
 test("closed rounds and rounds past trading end are not scheduled", () => {

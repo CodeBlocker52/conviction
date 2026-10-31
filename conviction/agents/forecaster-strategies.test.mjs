@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applySlippage,
+  QUANT_THRESHOLD,
   buildForecasterCalls,
   buildRedeemCall,
   decideDirection,
@@ -61,17 +62,22 @@ test("direction and threshold logic", () => {
   assert.throws(() => decideDirection({ pMarket: Number.NaN, pFair: 0.5, threshold: 0.03 }));
 });
 
-test("trade sizing moves price about halfway toward pFair and uses quote views", async () => {
+test("trade sizing moves price all the way toward pFair and uses quote views", async () => {
   const quote = mockQuote(0.4, 0.2);
   const sized = await sizeTrade({ direction: "long", pMarket: 0.4, pFair: 0.5, quote: quote("long") });
   assert.equal(sized.action, "buy");
-  assert.ok(sized.expectedPMarketAfter <= 0.45 + 1e-6);
-  assert.ok(sized.expectedPMarketAfter > 0.4);
+  assert.ok(sized.expectedPMarketAfter <= 0.5 + 1e-6);
+  assert.ok(sized.expectedPMarketAfter > 0.45);
+  assert.equal(sized.targetPMarket, 0.5);
   assert.equal(sized.minOut, applySlippage(sized.quotedOut));
   assert.equal(sized.minOut, (sized.quotedOut * 9_950n) / 10_000n);
   const short = await sizeTrade({ direction: "short", pMarket: 0.6, pFair: 0.5, quote: mockQuote(0.6, 0.2)("short") });
   assert.equal(short.action, "buy");
-  assert.ok(short.expectedPMarketAfter >= 0.55 - 1e-6);
+  assert.ok(short.expectedPMarketAfter >= 0.5 - 1e-6);
+  assert.ok(short.expectedPMarketAfter < 0.55);
+  const half = await sizeTrade({ direction: "long", pMarket: 0.4, pFair: 0.5, quote: quote("long"), fraction: 0.5 });
+  assert.ok(half.expectedPMarketAfter <= 0.45 + 1e-6);
+  assert.ok(half.creditsIn < sized.creditsIn);
 });
 
 test("per-trade and per-proposal caps are enforced", async () => {
@@ -132,4 +138,12 @@ test("redeem call targets QuantumRound.redeem", () => {
     args: [5n],
     label: "redeem",
   });
+});
+
+test("quant default threshold is 0.005 and acts just beyond it", async () => {
+  assert.equal(QUANT_THRESHOLD, 0.005);
+  const quiet = await planQuantAction({ proposalId: 0, pMarket: 0.496, pFair: 0.5, quoteFor: mockQuote(0.496, 0.05) });
+  assert.equal(quiet.action, "none");
+  const active = await planQuantAction({ proposalId: 0, pMarket: 0.49, pFair: 0.5, quoteFor: mockQuote(0.49, 0.05) });
+  assert.equal(active.action, "buy");
 });

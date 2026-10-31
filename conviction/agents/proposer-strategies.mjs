@@ -234,7 +234,16 @@ async function askNewsModel(headlines, marketSignal, apiKey, fetchImpl) {
     }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new Error(`News model request failed: HTTP ${response.status}`);
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = ` (${body?.error?.type ?? "unknown_error"}: ${String(body?.error?.message ?? "").slice(0, 120)})`;
+    } catch {
+      // The error body is optional context; the status alone is enough to fall back.
+    }
+    throw new Error(`News model request failed: HTTP ${response.status}${detail}`);
+  }
   const result = await response.json();
   const text = result.content?.filter((item) => item.type === "text").map((item) => item.text).join("").trim();
   if (typeof text !== "string" || !text) throw new Error("News model returned no text.");
