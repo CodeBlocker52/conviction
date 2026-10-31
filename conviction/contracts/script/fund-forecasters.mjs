@@ -1,5 +1,5 @@
-// Sends USDC from the deployer to the Quant and Guardian wallets (public addresses from agents/agents.json).
-// Usage: node --env-file=.env contracts/script/fund-forecasters.mjs [--amount 1.25] [--execute]
+// Sends USDC from the deployer to the Quant and Guardian wallets, or with --group proposers to the proposer wallets (public addresses from agents/agents.json).
+// Usage: node --env-file=.env contracts/script/fund-forecasters.mjs [--group forecasters|proposers] [--amount 1.25] [--execute]
 import { readFileSync } from "node:fs";
 import { parseAbi, parseUnits } from "viem";
 import {
@@ -22,8 +22,11 @@ if (amount === 0n || amount > MAX_PER_WALLET) throw new Error("Amount per wallet
 
 const transferAbi = parseAbi(["function transfer(address,uint256) returns (bool)"]);
 const agents = JSON.parse(readFileSync(new URL("../../agents/agents.json", import.meta.url), "utf8")).agents;
-const targets = agents.filter(({ name }) => name === "Quant" || name === "Guardian");
-if (targets.length !== 2) throw new Error("Expected exactly the Quant and Guardian in agents.json.");
+const groupIndex = args.indexOf("--group");
+const group = groupIndex >= 0 ? args[groupIndex + 1] : "forecasters";
+if (!["forecasters", "proposers"].includes(group)) throw new Error("--group must be forecasters or proposers.");
+const targets = agents.filter(({ type }) => type === group.slice(0, -1));
+if (targets.length !== (group === "proposers" ? 3 : 2)) throw new Error(`Unexpected number of ${group} in agents.json.`);
 
 await assertArcTestnet();
 const deployer = accountFor(process.env.DEPLOYER_PK, deployment.admin, "deployer");

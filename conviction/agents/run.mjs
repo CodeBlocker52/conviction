@@ -691,13 +691,16 @@ async function main() {
   });
   // Live mode runs proposers, Quant and Guardian as independent loops so one agent's pending
   // transaction never delays another. Dry-run keeps one sequential loop so the Guardian can reason over the Quant's plan.
+  const hasProposerLoop = agents.some((agent) => agent.type !== "forecaster");
   const loops = execute
     ? [
-      { name: "proposers", tick: () => observeRound({ agentFilter: (agent) => agent.type !== "forecaster", handlesRedeem: true }) },
-      ...agents.filter((agent) => agent.type === "forecaster").map((agent) => ({
+      ...(hasProposerLoop
+        ? [{ name: "proposers", tick: () => observeRound({ agentFilter: (agent) => agent.type !== "forecaster", handlesRedeem: true }) }]
+        : []),
+      ...agents.filter((agent) => agent.type === "forecaster").map((agent, index) => ({
         name: agent.name,
         pollSeconds: Math.min(pollSeconds, FINAL_WINDOW_INTERVAL_SECONDS),
-        tick: () => observeRound({ agentFilter: (candidate) => candidate.id === agent.id, handlesRedeem: false }),
+        tick: () => observeRound({ agentFilter: (candidate) => candidate.id === agent.id, handlesRedeem: index === 0 && !hasProposerLoop }),
       })),
     ]
     : [{ name: "all", tick: () => observeRound() }];
