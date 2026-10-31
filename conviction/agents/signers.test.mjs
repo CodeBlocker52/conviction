@@ -153,3 +153,48 @@ test("Circle signer releases the reservation when Circle rejects the request bef
   await assert.rejects(timeoutSigner.executeContractCall({ address: agent.address, signature: "approve(address,uint256)", args: [], label: "approval" }), /request/);
   assert.equal(timeoutSigner.spentGasWei, 50_000_000_000_000_000n);
 });
+
+function capSigner({ roundId, spentByRound = {}, daily = 0n, events = [] }) {
+  const signer = new CircleAgentSigner({
+    agent,
+    walletId: "wallet-id",
+    gasCapWei: 1_000_000_000_000_000_000n,
+    spentGasWei: daily,
+    roundGasCapWei: 250_000_000_000_000_000n,
+    getRoundId: () => roundId.current,
+    readRoundSpent: (_agentId, id) => spentByRound[id] ?? 0n,
+    logEvent: (event) => events.push(event),
+    waitForReceipt: async () => ({ status: "success", gasUsed: 150_000_000_000_000_000n, effectiveGasPrice: 1n }),
+    client: {
+      estimateContractExecutionFee: async () => ({ data: { medium: { networkFee: "0.15" } } }),
+      createContractExecutionTransaction: async () => ({ data: { id: "id" } }),
+      getTransaction: async () => ({ data: { transaction: { txHash: hash } } }),
+    },
+  });
+  return signer;
+}
+
+const callArgs = { address: agent.address, signature: "approve(address,uint256)", args: [], label: "call" };
+
+test("gas is capped per round at 0.25 USDC and a new round gets a fresh budget", async () => {
+  const roundId = { current: "8" };
+  const events = [];
+  const signer = capSigner({ roundId, spentByRound: { 8: 200_000_000_000_000_000n }, daily: 600_000_000_000_000_000n, events });
+  await assert.rejects(signer.executeContractCall(callArgs), /0.25 USDC gas cap \(per round\)/);
+  roundId.current = "9";
+  await signer.executeContractCall(callArgs);
+  assert.equal(events.find((event) => event.type === "transaction_attempt").roundId, "9");
+});
+
+test("the daily cap of 1 USDC still blocks an agent across rounds", async () => {
+  const roundId = { current: "10" };
+  const signer = capSigner({ roundId, daily: 900_000_000_000_000_000n });
+  await assert.rejects(signer.executeContractCall(callArgs), /1 USDC gas cap \(daily\)/);
+});
+
+test("per-round spend is tracked across calls within one round", async () => {
+  const roundId = { current: "11" };
+  const signer = capSigner({ roundId });
+  await signer.executeContractCall(callArgs);
+  await assert.rejects(signer.executeContractCall({ ...callArgs, label: "second" }), /per round/);
+});

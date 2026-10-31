@@ -27,3 +27,15 @@ test("gas ledger rejects malformed records instead of resetting the cap", () => 
     /invalid JSON/,
   );
 });
+
+test("per-round gas sums only reservations tagged with that round", () => {
+  const lines = [
+    { type: "transaction_attempt", agentId: "A", reservationId: "r1", roundId: "8", estimatedGasWei: "10" },
+    { type: "transaction_attempt", agentId: "A", reservationId: "r2", roundId: "9", estimatedGasWei: "20" },
+    { type: "transaction", agentId: "A", reservationId: "r1", actualGasWei: "4" },
+    { type: "transaction_attempt", agentId: "B", reservationId: "r3", roundId: "8", estimatedGasWei: "99" },
+  ].map((event) => JSON.stringify(event)).join("\n");
+  assert.equal(sumGasReservations(lines, "A", "log", { roundId: "8" }), 4n);
+  assert.equal(sumGasReservations(lines, "A", "log", { roundId: "9" }), 20n);
+  assert.equal(sumGasReservations(lines, "A"), 24n);
+});

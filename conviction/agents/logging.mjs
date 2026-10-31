@@ -15,6 +15,31 @@ export function writeAgentEvent(event) {
   console.log(JSON.stringify(event));
 }
 
+let activeGasRound = null;
+export const setActiveGasRound = (roundId) => { activeGasRound = roundId === null || roundId === undefined ? null : String(roundId); };
+export const getActiveGasRound = () => activeGasRound;
+
+function readLogContents(day) {
+  const path = resolve(logDirectory, `${day}.jsonl`);
+  try {
+    return { contents: readFileSync(path, "utf8"), path };
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+// A round can straddle UTC midnight, so the per-round total reads today's and yesterday's logs.
+export function readRoundGasReservations(agentId, roundId, now = new Date()) {
+  const days = [0, 1].map((back) => new Date(now.getTime() - back * 86_400_000).toISOString().slice(0, 10));
+  let total = 0n;
+  for (const day of days) {
+    const log = readLogContents(day);
+    if (log) total += sumGasReservations(log.contents, agentId, log.path, { roundId });
+  }
+  return total;
+}
+
 export function readDailyGasReservations(agentId, day = new Date().toISOString().slice(0, 10)) {
   const path = resolve(logDirectory, `${day}.jsonl`);
   let contents;
@@ -27,7 +52,7 @@ export function readDailyGasReservations(agentId, day = new Date().toISOString()
   return sumGasReservations(contents, agentId, path);
 }
 
-export function sumGasReservations(contents, agentId, path = "agent log") {
+export function sumGasReservations(contents, agentId, path = "agent log", { roundId } = {}) {
   const reservations = new Map();
   const actualFees = new Map();
   const released = new Set();
@@ -43,7 +68,9 @@ export function sumGasReservations(contents, agentId, path = "agent log") {
       if (typeof event.estimatedGasWei !== "string" || !/^\d+$/.test(event.estimatedGasWei)) {
         throw new Error(`Agent log ${path} has an invalid gas reservation on line ${index + 1}.`);
       }
-      reservations.set(event.reservationId ?? `line-${index}`, BigInt(event.estimatedGasWei));
+      if (roundId === undefined || String(event.roundId) === String(roundId)) {
+        reservations.set(event.reservationId ?? `line-${index}`, BigInt(event.estimatedGasWei));
+      }
     }
     if (event.agentId === agentId && event.type === "transaction_released" && event.reservationId) {
       released.add(event.reservationId);

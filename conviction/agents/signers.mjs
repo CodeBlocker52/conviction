@@ -10,8 +10,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
 import { agentSlug, circleWalletIdEnvKey, localPrivateKeyEnvKey } from "./config.mjs";
 import { deployment, publicClient, rpcUrl, chain } from "../contracts/script/demo-round-common.mjs";
-import { assertGasWithinCap, PER_AGENT_GAS_CAP_WEI } from "./safety.mjs";
-import { readDailyGasReservations } from "./logging.mjs";
+import { assertGasWithinCap, PER_AGENT_GAS_CAP_WEI, PER_ROUND_GAS_CAP_WEI } from "./safety.mjs";
+import { getActiveGasRound, readDailyGasReservations, readRoundGasReservations } from "./logging.mjs";
 
 function requiredEnv(env, key) {
   const value = env[key];
@@ -35,6 +35,32 @@ function serializeAbiParameter(value) {
   return value;
 }
 
+
+// Gas is capped twice: per round (the active round id) and per UTC day. Estimates are held only while pending.
+function initRoundGas(signer, { roundGasCapWei, getRoundId, readRoundSpent }) {
+  signer.roundGasCapWei = roundGasCapWei;
+  signer.getRoundId = getRoundId;
+  signer.readRoundSpent = readRoundSpent;
+  signer.roundSpentWei = new Map();
+}
+
+function reserveGas(signer, estimatedGasWei) {
+  const roundId = signer.getRoundId();
+  assertGasWithinCap(signer.spentGasWei, estimatedGasWei, signer.gasCapWei, "daily");
+  if (roundId !== null) {
+    if (!signer.roundSpentWei.has(roundId)) signer.roundSpentWei.set(roundId, signer.readRoundSpent(signer.agent.id, roundId));
+    assertGasWithinCap(signer.roundSpentWei.get(roundId), estimatedGasWei, signer.roundGasCapWei, "per round");
+    signer.roundSpentWei.set(roundId, signer.roundSpentWei.get(roundId) + estimatedGasWei);
+  }
+  signer.spentGasWei += estimatedGasWei;
+  return roundId;
+}
+
+function adjustGas(signer, roundId, deltaWei) {
+  signer.spentGasWei += deltaWei;
+  if (roundId !== null) signer.roundSpentWei.set(roundId, signer.roundSpentWei.get(roundId) + deltaWei);
+}
+
 export class CircleAgentSigner {
   constructor({
     agent,
@@ -42,6 +68,9 @@ export class CircleAgentSigner {
     client,
     gasCapWei = PER_AGENT_GAS_CAP_WEI,
     spentGasWei = readDailyGasReservations(agent.id),
+    roundGasCapWei = PER_ROUND_GAS_CAP_WEI,
+    getRoundId = getActiveGasRound,
+    readRoundSpent = readRoundGasReservations,
     logEvent = () => {},
     waitForReceipt = (hash) => publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 }),
   }) {
@@ -50,6 +79,7 @@ export class CircleAgentSigner {
     this.client = client;
     this.gasCapWei = gasCapWei;
     this.spentGasWei = spentGasWei;
+    initRoundGas(this, { roundGasCapWei, getRoundId, readRoundSpent });
     this.logEvent = logEvent;
     this.waitForReceipt = waitForReceipt;
     this.queue = Promise.resolve();
@@ -76,14 +106,14 @@ export class CircleAgentSigner {
     }
     const mediumFee = estimate.data?.medium;
     const estimatedGasWei = nativeFeeToWei(mediumFee?.networkFee);
-    assertGasWithinCap(this.spentGasWei, estimatedGasWei, this.gasCapWei);
-    this.spentGasWei += estimatedGasWei;
+    const roundId = reserveGas(this, estimatedGasWei);
     const idempotencyKey = randomUUID();
     this.logEvent({
       type: "transaction_attempt",
       agentId: this.agent.id,
       label,
       reservationId: idempotencyKey,
+      roundId,
       estimatedGasWei: estimatedGasWei.toString(),
     });
 
@@ -103,7 +133,7 @@ export class CircleAgentSigner {
       // Anything else (timeouts, 5xx) may have created a transaction, so the reservation stays.
       const status = error?.response?.status ?? error?.status;
       if (Number.isInteger(status) && status >= 400 && status < 500) {
-        this.spentGasWei -= estimatedGasWei;
+        adjustGas(this, roundId, -estimatedGasWei);
         this.logEvent({ type: "transaction_released", agentId: this.agent.id, label, reservationId: idempotencyKey });
       }
       throw new Error(`Circle transaction request for ${label} failed; it was not automatically retried.`);
@@ -141,7 +171,7 @@ export class CircleAgentSigner {
     }
     const actualGasWei = receipt.gasUsed * receipt.effectiveGasPrice;
     // The estimate was only a pending reservation; the confirmed fee replaces it.
-    this.spentGasWei += actualGasWei - estimatedGasWei;
+    adjustGas(this, roundId, actualGasWei - estimatedGasWei);
     this.logEvent({
       type: "transaction",
       agentId: this.agent.id,
@@ -164,12 +194,16 @@ export class LocalAgentSigner {
     account,
     gasCapWei = PER_AGENT_GAS_CAP_WEI,
     spentGasWei = readDailyGasReservations(agent.id),
+    roundGasCapWei = PER_ROUND_GAS_CAP_WEI,
+    getRoundId = getActiveGasRound,
+    readRoundSpent = readRoundGasReservations,
     logEvent,
   }) {
     this.agent = agent;
     this.account = account;
     this.gasCapWei = gasCapWei;
     this.spentGasWei = spentGasWei;
+    initRoundGas(this, { roundGasCapWei, getRoundId, readRoundSpent });
     this.logEvent = logEvent;
     this.walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) });
     this.queue = Promise.resolve();
@@ -190,14 +224,14 @@ export class LocalAgentSigner {
       publicClient.getGasPrice(),
     ]);
     const estimatedGasWei = estimatedGas * gasPrice;
-    assertGasWithinCap(this.spentGasWei, estimatedGasWei, this.gasCapWei);
-    this.spentGasWei += estimatedGasWei;
+    const roundId = reserveGas(this, estimatedGasWei);
     const reservationId = randomUUID();
     this.logEvent({
       type: "transaction_attempt",
       agentId: this.agent.id,
       label,
       reservationId,
+      roundId,
       estimatedGasWei: estimatedGasWei.toString(),
     });
     const hash = await this.walletClient.sendTransaction({ account: this.account, to: address, data });
@@ -207,7 +241,7 @@ export class LocalAgentSigner {
     }
     const actualGasWei = receipt.gasUsed * receipt.effectiveGasPrice;
     // The estimate was only a pending reservation; the confirmed fee replaces it.
-    this.spentGasWei += actualGasWei - estimatedGasWei;
+    adjustGas(this, roundId, actualGasWei - estimatedGasWei);
     this.logEvent({
       type: "transaction",
       agentId: this.agent.id,

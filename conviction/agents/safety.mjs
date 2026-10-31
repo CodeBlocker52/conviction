@@ -1,6 +1,7 @@
-import { parseUnits } from "viem";
+import { formatUnits, parseUnits } from "viem";
 
-export const PER_AGENT_GAS_CAP_WEI = parseUnits("0.25", 18);
+export const PER_ROUND_GAS_CAP_WEI = parseUnits("0.25", 18);
+export const PER_AGENT_GAS_CAP_WEI = parseUnits("1", 18);
 export const PROPOSER_BOND_CAP_USDC = 1_000_000n;
 export const FORECASTER_DEPOSIT_CAP_USDC = 2_000_000n;
 export const TRADE_CAP_USDC = 1_000_000n;
@@ -16,12 +17,13 @@ export function requiredProtocolSeed(perProposal, proposerCount) {
   return perProposal * BigInt(1 + proposerCount);
 }
 
-export function assertGasWithinCap(spentWei, estimatedWei, capWei = PER_AGENT_GAS_CAP_WEI) {
+// PER_AGENT_GAS_CAP_WEI is the daily (UTC) cap; PER_ROUND_GAS_CAP_WEI is enforced separately for the active round.
+export function assertGasWithinCap(spentWei, estimatedWei, capWei = PER_AGENT_GAS_CAP_WEI, scope = "daily") {
   if (spentWei < 0n || estimatedWei < 0n || capWei < 0n) {
     throw new Error("Gas budget values must be nonnegative.");
   }
   if (spentWei + estimatedWei > capWei) {
-    throw new Error("Estimated transaction fee would exceed this agent's 0.25 USDC gas cap.");
+    throw new Error(`Estimated transaction fee would exceed this agent's ${formatUnits(capWei, 18)} USDC gas cap (${scope}).`);
   }
 }
 

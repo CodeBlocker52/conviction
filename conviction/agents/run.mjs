@@ -8,7 +8,7 @@ import {
   roundAbi,
 } from "../contracts/script/demo-round-common.mjs";
 import { readAgents } from "./config.mjs";
-import { writeAgentEvent } from "./logging.mjs";
+import { setActiveGasRound, writeAgentEvent } from "./logging.mjs";
 import {
   applySlippage,
   buildForecasterCalls,
@@ -272,6 +272,7 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
     log({ type: "idle", reason: "No round has been opened yet.", dryRun });
     return;
   }
+  setActiveGasRound(roundCount);
   const result = await publicClient.readContract({
     address: deployment.contracts.quantumRound,
     abi: roundAbi,
