@@ -152,7 +152,7 @@ export async function fetchCryptoHeadlines(fetchImpl = fetch) {
   return parseRssHeadlines(await response.text());
 }
 
-export function calculateNewsFallback(headlines, marketSignal = {}) {
+export function calculateNewsFallback(headlines, marketSignal = {}, reason = "ANTHROPIC_API_KEY is not set.") {
   const normalized = headlines.map((headline) => String(headline).slice(0, 300));
   const scores = normalized.map((headline) => {
     const positive = POSITIVE_TERMS.reduce((count, expression) => count + Number(expression.test(headline)), 0);
@@ -179,9 +179,7 @@ export function calculateNewsFallback(headlines, marketSignal = {}) {
       ? `News: headline score ${averageHeadlineScore.toFixed(2)} and 10m market z=${trendZScore.toFixed(2)}; target ${allocation} bps tETH.`
       : `News: no recent headlines; 10m price-only fallback z=${trendZScore.toFixed(2)}; target ${allocation} bps tETH.`,
     source: "fallback",
-    fallbackReason: normalized.length > 0
-      ? "Using deterministic headline and price-signal scoring."
-      : "No recent headlines were available; using a deterministic price-only fallback.",
+    fallbackReason: normalized.length > 0 ? reason : `${reason} No recent headlines were available; using a deterministic price-only fallback.`,
     signal: {
       averageHeadlineScore,
       trendZScore,
@@ -192,7 +190,7 @@ export function calculateNewsFallback(headlines, marketSignal = {}) {
   };
 }
 
-function validateNewsModelResponse(value) {
+export function validateNewsModelResponse(value) {
   let parsed;
   try {
     parsed = JSON.parse(value);
@@ -214,7 +212,10 @@ function validateNewsModelResponse(value) {
   ) {
     throw new Error("News model response did not match the proposer decision schema.");
   }
-  return { tEthBps: parsed.tEthBps, rationale: parsed.rationale };
+  return {
+    tEthBps: clamp(parsed.tEthBps, MIN_ALLOCATION_BPS, MAX_ALLOCATION_BPS),
+    rationale: parsed.rationale,
+  };
 }
 
 async function askNewsModel(headlines, marketSignal, apiKey, fetchImpl) {
@@ -245,12 +246,14 @@ export async function calculateNewsProposal({
   marketSignal = {},
   apiKey,
   fetchImpl = fetch,
+  unavailableReason,
 }) {
-  if (!apiKey) return calculateNewsFallback(headlines, marketSignal);
+  if (!apiKey) return calculateNewsFallback(headlines, marketSignal, unavailableReason ?? "ANTHROPIC_API_KEY is not set.");
   try {
     return {
       ...await askNewsModel(headlines, marketSignal, apiKey, fetchImpl),
       source: "claude",
+      fallbackReason: null,
       signal: {
         headlineCount: headlines.length,
         headlines,
@@ -259,12 +262,8 @@ export async function calculateNewsProposal({
       },
     };
   } catch (error) {
-    const fallback = calculateNewsFallback(headlines, marketSignal);
-    return {
-      ...fallback,
-      rationale: `${fallback.rationale} Model unavailable; fallback used.`,
-      fallbackReason: error.message,
-    };
+    const fallback = calculateNewsFallback(headlines, marketSignal, `Claude call or validation failed: ${error.message}`);
+    return { ...fallback, rationale: `${fallback.rationale} Model unavailable; fallback used.` };
   }
 }
 

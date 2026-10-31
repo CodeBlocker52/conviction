@@ -8,6 +8,8 @@ import {
   findProposalDuplicate,
   parseRssHeadlines,
   resolveDistinctProposal,
+  validateNewsModelResponse,
+  NEWS_MODEL,
 } from "./proposer-strategies.mjs";
 
 function candlesFromReturns(returns, initialPrice = 2_500) {
@@ -202,4 +204,43 @@ test("opposite side is tried once when the signal direction is exhausted", () =>
   const result = resolveDistinctProposal({ tEthBps: 8_800, direction: 1, rationale: "x" }, [{ tEthBps: 8_700 }]);
   assert.equal(result.tEthBps, 8_200);
   assert.match(result.reason, /opposite side/);
+});
+
+const claudeReply = (text) => async (url, options) => {
+  claudeReply.last = { url, body: JSON.parse(options.body), headers: options.headers };
+  return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text }] }) };
+};
+const headlines = ["Ethereum ETF inflow accelerates as adoption grows"];
+
+test("News uses claude-haiku-5-5 and accepts a valid mocked Claude response", async () => {
+  const valid = JSON.stringify({ tEthBps: 6_300, rationale: "Positive ETF flow headlines support higher ETH exposure." });
+  const decision = await calculateNewsProposal({ headlines, marketSignal: { zScore: 0.4 }, apiKey: "test-key", fetchImpl: claudeReply(valid) });
+  assert.equal(NEWS_MODEL, "claude-haiku-5-5");
+  assert.equal(claudeReply.last.body.model, "claude-haiku-5-5");
+  assert.equal(decision.source, "claude");
+  assert.equal(decision.fallbackReason, null);
+  assert.equal(decision.tEthBps, 6_300);
+});
+
+test("invalid mocked Claude responses fall back with an explicit reason", async () => {
+  for (const bad of ["not json", JSON.stringify({ tEthBps: 5_000 }), JSON.stringify({ tEthBps: 5_000.5, rationale: "x".repeat(40) }), JSON.stringify({ tEthBps: 5_000, rationale: "short" }), JSON.stringify({ tEthBps: 5_000, rationale: "x".repeat(40), extra: 1 })]) {
+    assert.throws(() => validateNewsModelResponse(bad));
+    const decision = await calculateNewsProposal({ headlines, apiKey: "test-key", fetchImpl: claudeReply(bad) });
+    assert.equal(decision.source, "fallback");
+    assert.match(decision.fallbackReason, /Claude call or validation failed/);
+  }
+  const failing = async () => ({ ok: false, status: 500 });
+  const http = await calculateNewsProposal({ headlines, apiKey: "test-key", fetchImpl: failing });
+  assert.match(http.fallbackReason, /HTTP 500/);
+});
+
+test("out-of-range Claude allocations are clamped to the hard bounds", () => {
+  const result = validateNewsModelResponse(JSON.stringify({ tEthBps: 10_000, rationale: "Extremely bullish headline flow today." }));
+  assert.equal(result.tEthBps, 9_000);
+});
+
+test("News without a key reports the fallback and why", async () => {
+  const decision = await calculateNewsProposal({ headlines, apiKey: undefined });
+  assert.equal(decision.source, "fallback");
+  assert.match(decision.fallbackReason, /ANTHROPIC_API_KEY is not set/);
 });

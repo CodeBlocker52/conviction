@@ -163,16 +163,9 @@ async function observeRound() {
         decision = await calculateNewsProposal({
           headlines,
           marketSignal: momentumDecision.signal,
-          apiKey: process.env.ANTHROPIC_API_KEY,
+          apiKey: rssError ? undefined : process.env.ANTHROPIC_API_KEY,
+          unavailableReason: rssError ? `RSS unavailable: ${rssError}` : undefined,
         });
-        if (rssError) {
-          decision = {
-            ...decision,
-            rationale: `${decision.rationale} RSS unavailable; fallback used.`,
-            fallbackReason: rssError,
-            source: "fallback",
-          };
-        }
       } else {
         throw new Error(`No proposer strategy is configured for ${agent.name}.`);
       }
