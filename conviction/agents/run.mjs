@@ -31,7 +31,8 @@ import {
   MIN_PROPOSAL_GAP_BPS,
   resolveDistinctProposal,
 } from "./proposer-strategies.mjs";
-import { nextAgentEvaluation } from "./scheduler.mjs";
+import { FINAL_WINDOW_INTERVAL_SECONDS, nextAgentEvaluation } from "./scheduler.mjs";
+import { runIndependentLoops } from "./loops.mjs";
 import { loadRuntimeState, saveRuntimeState } from "./runtime-state.mjs";
 import { assertPrincipalWithinCap, assertProposalCountWithinCap } from "./safety.mjs";
 import { parseAbi } from "viem";
@@ -258,7 +259,7 @@ function safeErrorMessage(error) {
   return message;
 }
 
-async function observeRound() {
+async function observeRound({ agentFilter = () => true, handlesRedeem = true } = {}) {
   const [roundCount, block] = await Promise.all([
     publicClient.readContract({
       address: deployment.contracts.quantumRound,
@@ -291,10 +292,9 @@ async function observeRound() {
   };
   assertProposalCountWithinCap(round.proposalCount);
   if (round.settled || round.cancelled) {
-    if (execute && round.settled) {
-      const closedState = state.rounds[round.id] ?? {};
+    if (execute && round.settled && handlesRedeem) {
+      const closedState = state.rounds[round.id] ??= {};
       await redeemForecasters({ round, roundCount, roundState: closedState });
-      state.rounds[round.id] = closedState;
       saveState();
     }
     log({
@@ -307,7 +307,7 @@ async function observeRound() {
   }
 
   const chainTimestamp = Number(block.timestamp);
-  const roundState = state.rounds[round.id] ?? {};
+  const roundState = state.rounds[round.id] ??= {};
   const existingProposals = await Promise.all(
     Array.from({ length: round.proposalCount }, (_, proposalIndex) =>
       publicClient.readContract({
@@ -325,7 +325,7 @@ async function observeRound() {
   }));
   let changed = false;
   const evaluations = [];
-  for (const agent of agents) {
+  for (const agent of agents.filter(agentFilter)) {
     const previous = roundState[agent.id] ?? {};
     const evaluation = nextAgentEvaluation(agent, round, chainTimestamp, previous);
     if (!evaluation) continue;
@@ -688,31 +688,33 @@ async function main() {
     stopping = true;
     log({ type: "shutdown_requested", reason: "SIGINT; finishing the current read cycle." });
   });
-  let failures = 0;
-  const waitForNextCycle = async (durationMs) => {
-    for (let remaining = durationMs; remaining > 0 && !stopping; remaining -= 500) {
-      await new Promise((resolve_) => setTimeout(resolve_, Math.min(remaining, 500)));
+  // Live mode runs proposers, Quant and Guardian as independent loops so one agent's pending
+  // transaction never delays another. Dry-run keeps one sequential loop so the Guardian can reason over the Quant's plan.
+  const loops = execute
+    ? [
+      { name: "proposers", tick: () => observeRound({ agentFilter: (agent) => agent.type !== "forecaster", handlesRedeem: true }) },
+      ...agents.filter((agent) => agent.type === "forecaster").map((agent) => ({
+        name: agent.name,
+        pollSeconds: Math.min(pollSeconds, FINAL_WINDOW_INTERVAL_SECONDS),
+        tick: () => observeRound({ agentFilter: (candidate) => candidate.id === agent.id, handlesRedeem: false }),
+      })),
+    ]
+    : [{ name: "all", tick: () => observeRound() }];
+  try {
+    await runIndependentLoops({
+      loops,
+      pollSeconds,
+      once,
+      isStopping: () => stopping,
+      requestStop: () => { stopping = true; },
+      onError: ({ name, error, backoffSeconds }) => log({ type: "runtime_error", loop: name, error: safeErrorMessage(error), retryInSeconds: backoffSeconds, dryRun }),
+    });
+  } catch (error) {
+    if (error.fatal) {
+      log({ type: "fatal_error", error: safeErrorMessage(error), note: "Stopping without retry; inspect the failed transaction before restarting." });
     }
-  };
-  do {
-    try {
-      await observeRound();
-      failures = 0;
-    } catch (error) {
-      if (error.fatal) {
-        log({ type: "fatal_error", error: safeErrorMessage(error), note: "Stopping without retry; inspect the failed transaction before restarting." });
-        throw error;
-      }
-      failures += 1;
-      const backoffSeconds = Math.min(pollSeconds * 2 ** (failures - 1), 120);
-      log({ type: "runtime_error", error: safeErrorMessage(error), retryInSeconds: backoffSeconds, dryRun });
-      if (once) throw error;
-      await waitForNextCycle(backoffSeconds * 1_000);
-      continue;
-    }
-    if (once) break;
-    if (!stopping) await waitForNextCycle(pollSeconds * 1_000);
-  } while (!stopping);
+    throw error;
+  }
   log({ type: "runtime_stopped" });
 }
 

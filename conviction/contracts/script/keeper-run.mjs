@@ -27,6 +27,7 @@ import {
 import { calculateRiskModel, fetchRecentEthCandles } from "../../agents/market-data.mjs";
 import { readAgents } from "../../agents/config.mjs";
 import { requiredProtocolSeed } from "../../agents/safety.mjs";
+import { parseTwapWindowArg, resolveTwapWindow } from "./twap-window.mjs";
 
 const { contracts } = deployment;
 const proposerCount = readAgents().filter((agent) => agent.type === "proposer").length;
@@ -39,7 +40,6 @@ const pollSeconds = opt("poll", 15);
 const openEveryMinutes = opt("open-every", 0);
 const windowMinutes = opt("window", 30);
 const horizonSeconds = opt("horizon", 600);
-const TWAP_WINDOW = 60;
 if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
   throw new Error("--poll must be a whole number between 1 and 300 seconds.");
 }
@@ -52,6 +52,7 @@ if (!Number.isInteger(windowMinutes) || windowMinutes < 3 || windowMinutes > 1_4
 if (!Number.isInteger(horizonSeconds) || horizonSeconds < 60 || horizonSeconds > 86_400) {
   throw new Error("--horizon must be between 60 and 86400 whole seconds.");
 }
+const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args), windowMinutes * 60);
 
 const vaultAbi = parseAbi([
   "function executeTrade(uint256,uint16)",

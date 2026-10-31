@@ -4,7 +4,7 @@ import { nextAgentEvaluation } from "./scheduler.mjs";
 
 const proposer = { type: "proposer" };
 const forecaster = { type: "forecaster" };
-const round = { tradingEnd: 1_000, settled: false, cancelled: false };
+const round = { tradingEnd: 1_000, twapWindow: 60, settled: false, cancelled: false };
 
 test("proposers schedule one early evaluation per round", () => {
   const first = nextAgentEvaluation(proposer, round, 900);
@@ -28,4 +28,10 @@ test("closed rounds and rounds past trading end are not scheduled", () => {
   assert.equal(nextAgentEvaluation(proposer, { ...round, collapsed: true }, 900), null);
   assert.equal(nextAgentEvaluation(proposer, { ...round, settled: true }, 900), null);
   assert.equal(nextAgentEvaluation(forecaster, round, 1_000), null);
+});
+
+test("the final window follows the round's on-chain TWAP window", () => {
+  const longWindow = { ...round, twapWindow: 300 };
+  assert.equal(nextAgentEvaluation(forecaster, longWindow, 705).cadence, "final-window");
+  assert.equal(nextAgentEvaluation(forecaster, round, 705).cadence, "periodic");
 });

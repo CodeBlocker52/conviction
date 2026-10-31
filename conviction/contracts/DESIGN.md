@@ -159,6 +159,8 @@ External LP shares/claims, cross-proposal LP accounting, fee distribution, migra
 
 `IProposalMarket.probabilityTwap` returns the final-window LONG probability TWAP in `[0, 1e18]`. `QuantumRound.collapse` selects the winner on it: a proposal must beat the status quo's TWAP by `EPSILON = 0.005` (0.5 percentage points); otherwise the status quo wins. All bonds are refunded at collapse, whether or not the proposal won. `ConstantProductMarket` derives probability as `price / (1 + price)` from its price TWAP. `Collapsed` now emits probabilities.
 
+**TWAP window length.** `twapWindow` is a round parameter (no contract change). The keeper and `demo:open-round` default it to 25% of the trading window, at least 120 s (a 20-minute round gets 300 s, a 10-minute round 150 s); override with `--twap-window <seconds>`. `openRound` requires it to be nonzero and no longer than the trading window, and the scripts validate that before sending. Why: the TWAP weights every second equally, so with a 60 s window a distortion held for ~20 s moved the average by ~0.017, three times the 0.005 selection margin (round 7). A longer window dilutes a brief late distortion and gives agents time to correct it. Agents read the round's on-chain `twapWindow` for their final-window schedule.
+
 ### Operating notes (live)
 
 - The USDC/tETH pool carries a concentrated −10% / +20% position owned through the v4 callback (deployer-controlled); `npm run pool:recenter -- --execute` re-aligns it before each demo and `--remove` recovers the funds. `demo:open-round` refuses to open if the pool is more than 0.5% off the oracle.

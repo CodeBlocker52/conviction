@@ -11,7 +11,9 @@ export function nextAgentEvaluation(agent, round, chainTimestamp, previous = {})
   }
 
   if (agent.type !== "forecaster") throw new Error(`Unsupported agent type: ${agent.type}`);
-  const finalWindowStart = tradingEnd - 60;
+  const twapWindow = Number(round.twapWindow);
+  if (!Number.isFinite(twapWindow) || twapWindow <= 0) throw new Error("Round twapWindow is required to schedule forecasters.");
+  const finalWindowStart = tradingEnd - twapWindow;
   if (chainTimestamp >= finalWindowStart) {
     if (chainTimestamp - Number(previous.lastForecastAt ?? 0) >= FINAL_WINDOW_INTERVAL_SECONDS) {
       return {
