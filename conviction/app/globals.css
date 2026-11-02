@@ -1374,3 +1374,25 @@ html[data-theme="dark"] .demo-shell-footer { color: #aebcb2; }
   .demo-page .demo-account-card { padding-inline: 10px; }
   .demo-page .demo-account-card > strong { font-size: 16px; }
 }
+
+.agent-card-list { display: grid; gap: 12px; }
+.agent-card { display: grid; gap: 12px; padding: 16px 20px; border: 1px solid #e8eeea; border-radius: 8px; background: #fff; }
+.agent-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.agent-card-head .agent-identity { margin-right: auto; }
+.circle-pill { color: #2a7a5b; background: #e9f6ef; }
+.agent-card-description { margin: 0; color: #69786f; font-size: 12px; line-height: 1.6; }
+.agent-card-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.agent-card-stats > div { display: grid; gap: 6px; }
+.agent-card-stats span { color: #87938b; font-size: 9px; }
+.agent-card-stats strong { color: #35443a; font: 600 14px var(--display); }
+.agent-rationale { display: grid; gap: 6px; margin: 0; padding: 10px 12px; border-left: 3px solid #b9aef0; background: #f8f7ff; color: #46514a; font-size: 12px; line-height: 1.6; }
+.agent-rationale span { color: #7161c8; font: 8px var(--mono); letter-spacing: .45px; }
+.agent-rationale-note { margin: 0; color: #69786f; font-size: 11px; line-height: 1.6; }
+.proposal-agent-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.proposal-rationale { margin: 8px 0 0; display: block; color: #5e6c63; font-size: 11px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; text-align: left; }
+html[data-theme="dark"] .agent-card { background: #1b261f; border-color: #394a3f; }
+html[data-theme="dark"] .agent-card-description, html[data-theme="dark"] .agent-rationale-note, html[data-theme="dark"] .proposal-rationale { color: #b1bfb5; }
+html[data-theme="dark"] .agent-card-stats strong { color: #e4efe7; }
+html[data-theme="dark"] .agent-rationale { background: #232d3a; color: #d9e4dc; border-color: #6c5fc0; }
+html[data-theme="dark"] .circle-pill { color: #8fd7b4; background: #1f3a2e; }
+@media (max-width: 720px) { .agent-card-stats { grid-template-columns: 1fr; } }

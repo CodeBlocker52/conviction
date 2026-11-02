@@ -67,6 +67,7 @@ Everything below runs on Arc testnet today, is verified on the Arc explorer, and
 - **Seed accounting:** protocol seed per market returns to the reserve at collapse (losers) and at settlement or `releaseSeed` (winner).
 - **Keeper service** (`npm run keeper:run`): collapses at trading end, runs the vault trade immediately, reports and settles at evaluation end, runs the oracle watcher, optionally opens the next round.
 - **Frontend** (Next.js, plain viem, no wagmi): live mode on Arc testnet with adapter quotes, round states, vault, portfolio and agents pages, plus a mock mode.
+- **Agents:** three proposer agents (Momentum, Mean-reversion, News) and two forecaster agents (Quant, Guardian), each with a Circle developer-controlled wallet, live on Arc testnet; the Agents page shows on-chain stats and proposal cards show agent name, type and rationale.
 - **Resolution today:** the keeper reads the oracle and reports the vault's realised return (NAV ratio) to the contracts.
 
 ## Roadmap
@@ -75,12 +76,10 @@ Not implemented; do not treat these as part of the live protocol.
 
 - **Chainlink CRE** workflow for collapse, price reads and resolution (today the keeper does this).
 - **Decentralised oracles** (Pyth, Chainlink or Stork). Today the price is a keeper-updated adapter fed from Coinbase's public API.
-- **Proposer agents and forecaster agents** (momentum, mean-reversion, news, quant, LLM) and **Circle developer-controlled wallets** for them. Today proposals come from the deployer and keeper wallets.
 - **Proposer performance-fee reward** (a share of the vault's profit to the winning proposer).
 - **External LP shares** in proposal markets and the vault pool.
 - **Price-based bond slashing.** It needs a manipulation-resistant signal: a rival could push a proposal's price below a threshold at almost no cost, because losing markets are erased.
 - **Fixing the vault's withdrawal liquidity** so it grosses up for the pool fee (see [Known limitations](#known-limitations)).
-- Leaderboard of agent performance beyond the on-chain proposer registry stats.
 
 ---
 
@@ -257,7 +256,7 @@ The reference resolves outcomes with a single signer's signature. Wavefund's ret
 
 ## Agents
 
-> **Status:** Step 2 runtime and Step 3 proposer strategies are implemented. Proposal submission remains disabled; no agent has proposed on-chain. The forecaster strategies remain deferred to Step 4.
+> **Status: built and live on Arc testnet.** All five agents run from `agents/`, each with its own Circle developer-controlled wallet, and have transacted in live rounds (rounds 6, 7 and 10; see [`demo-round.md`](contracts/deployments/demo-round.md)). Dry-run is the default; `--execute` submits real transactions under per-trade, per-round and daily gas caps.
 
 Each agent is a participant with money at stake.
 
@@ -269,7 +268,7 @@ Each agent is a participant with money at stake.
 | **Quant forecaster** | Trades every proposal's market | Expected return under each allocation, from current price and volatility | Forecasting deposit |
 | **Guardian forecaster** | Trades every proposal's market | Monitors probabilities for manipulation and responds near the final TWAP window | Forecasting deposit |
 
-Each agent has its own **Circle developer-controlled wallet** on Arc. `npm run agents:setup` provisions five Arc Testnet EOAs, records public addresses in `agents/agents.json`, and stores Circle wallet IDs in the ignored `.env`. Momentum and mean-reversion use bounded candle signals; News uses recent RSS headlines and an optional Claude JSON decision with deterministic fallback. `npm run agents:run -- --dry-run` computes proposer decisions only during an open round and never signs or submits; live agent actions remain disabled.
+Each agent has its own **Circle developer-controlled wallet** on Arc. `npm run agents:setup` provisions five Arc Testnet EOAs (idempotent), records public addresses in `agents/agents.json`, and stores Circle wallet IDs in the ignored `.env`. Momentum and mean-reversion use bounded candle signals; News uses recent RSS headlines and a Claude JSON decision with a deterministic fallback, and every decision is logged and written on-chain as "claude" or "fallback". Proposers register in the `ProposerRegistry`, post a 1 USDC bond and propose, shifting an allocation by at least 500 bps when it would duplicate another proposal. The Quant and Guardian each deposit 2 USDC once per round, claim credits independently in every proposal, size trades from the adapter's `quote*` views (0.5% slippage) and call `redeem` after settlement; the Guardian runs in its own loop, checking every 5 s in the final TWAP window. `npm run agents:run -- --dry-run` computes decisions without signing; `--execute` submits them. The **Agents page** (live mode) lists each agent from `agents.json` with on-chain stats read from the `ProposerRegistry` and `QuantumRound` events (proposals made, rounds won, average winning return, forecasting P&L, latest on-chain rationale, Guardian interventions), and proposal cards on Markets show each agent's name, type and rationale.
 
 The leaderboard tracks each agent's record: proposals won, realised return of its winning proposals, and forecasting PnL. Over time the best agents accumulate capital and influence; weak ones lose deposits. That is the paper's point about decision markets being the right substrate for AI agents, made concrete.
 

@@ -17,6 +17,7 @@ import {
   type VaultTrade,
 } from "./hooks/useQuantumRound";
 import { useWallet } from "./hooks/useWallet";
+import { agentTypeLabel, findAgent } from "./lib/agents";
 
 function useNow() {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -409,6 +410,7 @@ function LiveProposalCard({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const agent = proposal.id === 0 ? undefined : findAgent(proposal.proposer);
   const isWinner = round.winnerProposalId === proposal.id && !round.cancelled;
   const erased = round.collapsed && !round.cancelled && !isWinner;
   return (
@@ -417,13 +419,15 @@ function LiveProposalCard({
         <span className="proposal-avatar avatar-violet">{proposal.id === 0 ? "WF" : `P${proposal.id}`}</span>
         <span className="demo-proposal-name">
           <strong>{proposalTitle(proposal)}</strong>
-          <small>{proposal.tEthBps / 100}% tETH · {proposal.id === 0 ? "Protocol" : proposal.proposerName}</small>
+          <small>{proposal.tEthBps / 100}% tETH · {proposal.id === 0 ? "Protocol" : agent?.name ?? proposal.proposerName}</small>
+          {proposal.id !== 0 && <small className="proposal-agent-meta"><span className={`role-pill ${agent ? "role-proposer" : "role-forecaster"}`}>{agent ? agentTypeLabel(agent.type) : "Independent proposer"}</span></small>}
           {proposal.id !== 0 && <small className="proposal-address">{proposal.proposer}</small>}
         </span>
         {isWinner && <span className="winner-tag">WINNER</span>}
         {erased && <span className="voided-position">ERASED</span>}
         {proposal.id === 0 && !isWinner && !erased && <span className="status-quo">STATUS QUO</span>}
       </div>
+      {proposal.id !== 0 && proposal.rationale && <span className="proposal-rationale" title={proposal.rationale}>{proposal.rationale}</span>}
       <div className="demo-proposal-bottom">
         <span>pLong (LONG price, credits) <strong>{prob(proposal.pLong)}</strong></span>
         <span>pShort <strong>{prob(proposal.pShort)}</strong></span>
