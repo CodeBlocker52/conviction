@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applySlippage,
+  createFairCache,
+  FAIR_CACHE_TTL_MS,
+  selectGuardianCandidates,
+  submissionBufferFor,
   QUANT_THRESHOLD,
   buildForecasterCalls,
   buildRedeemCall,
@@ -238,4 +242,46 @@ test("quant default threshold is 0.005 and acts just beyond it", async () => {
 test("live trades stop 15 seconds before trading closes", () => {
   assert.equal(tooCloseToTradingEnd({ nowSeconds: 984, tradingEnd: 1_000 }), false);
   assert.equal(tooCloseToTradingEnd({ nowSeconds: 985, tradingEnd: 1_000 }), true);
+});
+
+test("the Guardian's trading-end guard is 5 s while the Quant keeps 15 s", () => {
+  assert.equal(submissionBufferFor("Guardian"), 5);
+  assert.equal(submissionBufferFor("Quant"), 15);
+  const tradingEnd = 1_000;
+  const at = (nowSeconds, name) => tooCloseToTradingEnd({ nowSeconds, tradingEnd, buffer: submissionBufferFor(name) });
+  assert.equal(at(990, "Guardian"), false);
+  assert.equal(at(990, "Quant"), true);
+  assert.equal(at(995, "Guardian"), true);
+});
+
+test("Guardian candidates are the leader plus proposals priced at or above the status quo", () => {
+  const ordered = prioritizeByProjectedTwap([
+    { proposalId: 0, pMarket: 0.5, projectedTwap: 0.5 },
+    { proposalId: 1, pMarket: 0.48, projectedTwap: 0.49 },
+    { proposalId: 2, pMarket: 0.57, projectedTwap: 0.53 },
+    { proposalId: 3, pMarket: 0.5, projectedTwap: 0.5 },
+    { proposalId: 4, pMarket: 0.4, projectedTwap: 0.45 },
+  ]);
+  const ids = selectGuardianCandidates(ordered).map(({ proposalId }) => proposalId);
+  assert.deepEqual(ids.sort(), [2, 3]);
+  // The leader is kept even when it is priced below the status quo.
+  const belowLeader = prioritizeByProjectedTwap([
+    { proposalId: 0, pMarket: 0.5, projectedTwap: 0.5 },
+    { proposalId: 1, pMarket: 0.45, projectedTwap: 0.46 },
+    { proposalId: 2, pMarket: 0.4, projectedTwap: 0.41 },
+  ]);
+  assert.deepEqual(selectGuardianCandidates(belowLeader).map(({ proposalId }) => proposalId), [1]);
+  assert.deepEqual(selectGuardianCandidates([{ proposalId: 0, pMarket: 0.5, projectedTwap: 0.5 }]), []);
+});
+
+test("the pFair cache serves values for 60 s and then expires", () => {
+  let now = 0;
+  const cache = createFairCache({ now: () => now });
+  assert.equal(cache.get("10:1"), undefined);
+  cache.set("10:1", { pFair: 0.51 });
+  now = 59_000;
+  assert.deepEqual(cache.get("10:1"), { pFair: 0.51 });
+  now = 61_000;
+  assert.equal(cache.get("10:1"), undefined);
+  assert.equal(FAIR_CACHE_TTL_MS, 60_000);
 });

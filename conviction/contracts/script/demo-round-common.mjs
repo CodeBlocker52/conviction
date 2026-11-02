@@ -22,6 +22,8 @@ export const chain = defineChain({
   name: deployment.chainName,
   nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
   rpcUrls: { default: { http: [rpcUrl] } },
+  // Canonical Multicall3 is deployed on Arc Testnet; it lets the agents batch read-only calls.
+  contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
 });
 export const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
 

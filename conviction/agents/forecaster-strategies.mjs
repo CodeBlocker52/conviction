@@ -12,6 +12,10 @@ export const FAIR_PROBABILITY_MIN = 0.02;
 export const FAIR_PROBABILITY_MAX = 0.98;
 // Circle transactions take several seconds to land, so live trades stop shortly before trading closes.
 export const SUBMISSION_BUFFER_SECONDS = 15;
+// The Guardian defends right up to the wire: a late TradingClosed revert costs only gas, while an unanswered strike can decide the round.
+export const GUARDIAN_SUBMISSION_BUFFER_SECONDS = 5;
+export const submissionBufferFor = (agentName) => (agentName === "Guardian" ? GUARDIAN_SUBMISSION_BUFFER_SECONDS : SUBMISSION_BUFFER_SECONDS);
+export const FAIR_CACHE_TTL_MS = 60_000;
 export const tooCloseToTradingEnd = ({ nowSeconds, tradingEnd, buffer = SUBMISSION_BUFFER_SECONDS }) =>
   nowSeconds >= Number(tradingEnd) - buffer;
 const CREDIT_TO_TOKEN_SCALE = 10n ** 12n;
@@ -181,6 +185,30 @@ export async function planQuantAction({
     ...sized,
     reason: `Market ${direction === "long" ? "below" : "above"} fair value by ${Math.abs(gap).toFixed(4)}; ${describeTrade(sized)}.`,
   };
+}
+
+// Caches each proposal's pFair per round so repeated Guardian passes skip recomputation.
+export function createFairCache({ ttlMs = FAIR_CACHE_TTL_MS, now = () => Date.now() } = {}) {
+  const entries = new Map();
+  return {
+    get(key) {
+      const hit = entries.get(key);
+      return hit && now() - hit.at <= ttlMs ? hit.value : undefined;
+    },
+    set(key, value) {
+      entries.set(key, { value, at: now() });
+      return value;
+    },
+  };
+}
+
+// The Guardian only needs the proposal currently leading on projected TWAP plus any proposal priced at or above the status quo.
+// `ordered` must already be sorted by prioritizeByProjectedTwap; the status quo (id 0) is never a Guardian target.
+export function selectGuardianCandidates(ordered) {
+  const statusQuo = ordered.find(({ proposalId }) => proposalId === 0);
+  const leader = ordered.find(({ proposalId }) => proposalId > 0);
+  return ordered.filter(({ proposalId, pMarket }) => proposalId > 0
+    && (proposalId === leader?.proposalId || (statusQuo !== undefined && pMarket >= statusQuo.pMarket)));
 }
 
 // Orders proposals so the one currently leading on projected final-window TWAP is handled first.

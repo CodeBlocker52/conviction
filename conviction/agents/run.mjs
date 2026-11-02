@@ -19,6 +19,9 @@ import {
   PER_PROPOSAL_CAP_CREDITS,
   prioritizeByProjectedTwap,
   tooCloseToTradingEnd,
+  submissionBufferFor,
+  createFairCache,
+  selectGuardianCandidates,
   QUANT_THRESHOLD,
   quantFairProbability,
 } from "./forecaster-strategies.mjs";
@@ -455,6 +458,26 @@ async function forecasterCandles({ inFinalWindow = false } = {}) {
   }
 }
 
+const fairCache = createFairCache();
+
+// One Multicall3 round trip for every proposal's price and projected TWAP.
+async function readSnapshot(roundCount, proposalCount) {
+  const ids = Array.from({ length: proposalCount }, (_, proposalId) => proposalId);
+  const contracts = ids.flatMap((proposalId) => [
+    { address: deployment.contracts.market, abi: marketAbi, functionName: "probabilities", args: [roundCount, BigInt(proposalId)] },
+    { address: deployment.contracts.market, abi: marketAbi, functionName: "probabilityTwap", args: [roundCount, BigInt(proposalId), 0n, 0n] },
+  ]);
+  // If Multicall3 is unavailable the same reads run individually, so a defender never loses a pass to batching.
+  const results = await publicClient.multicall({ contracts, allowFailure: false }).catch(() => Promise.all(
+    contracts.map((call) => publicClient.readContract(call)),
+  ));
+  return ids.map((proposalId) => ({
+    proposalId,
+    pMarket: Number(results[proposalId * 2][0]) / 1e18,
+    projectedTwap: Number(results[proposalId * 2 + 1]) / 1e18,
+  }));
+}
+
 const tokenAddressCache = new Map();
 async function proposalTokenAddresses(roundCount, proposalId) {
   const key = `${roundCount}:${proposalId}`;
@@ -553,22 +576,23 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
       }
     }
 
-    // Fresh snapshot per agent so Guardian sees prices after any Quant trade; the leader on projected TWAP goes first.
-    const snapshot = await Promise.all(existingProposals.map(async (proposal, proposalId) => ({
-      proposalId,
-      pMarket: await readMarket(proposalId),
-      projectedTwap: await readProjectedTwap(proposalId),
-    })));
-    const ordered = prioritizeByProjectedTwap(snapshot);
-    const leaderId = ordered.find(({ proposalId }) => proposalId > 0)?.proposalId;
+    // Fresh snapshot per agent so Guardian sees prices after any Quant trade; one Multicall3 batch reads every
+    // proposal's price and projected TWAP, and the leader on projected TWAP goes first.
+    const passStartMs = Date.now();
+    const snapshot = await readSnapshot(roundCount, existingProposals.length);
+    const sorted = prioritizeByProjectedTwap(snapshot);
+    const leaderId = sorted.find(({ proposalId }) => proposalId > 0)?.proposalId;
+    const ordered = agent.name === "Guardian" ? selectGuardianCandidates(sorted) : sorted;
+    let tradesThisPass = 0;
 
     for (const { proposalId, pMarket: snapshotMarket, projectedTwap } of ordered) {
       const proposal = existingProposals[proposalId];
       const tEthBps = Number(proposal[2]);
-      const fair = quantFairProbability({ tEthBps, rMin: round.rMin, rMax: round.rMax, horizonSeconds, candles });
+      const fairKey = `${round.id}:${proposalId}`;
+      const fair = fairCache.get(fairKey) ?? fairCache.set(fairKey, quantFairProbability({ tEthBps, rMin: round.rMin, rMax: round.rMax, horizonSeconds, candles }));
       const window = windowAt();
       // Re-read the price right before deciding: an earlier trade in this cycle may have moved it.
-      const pMarket = proposalId === ordered[0].proposalId ? snapshotMarket : await readMarket(proposalId);
+      const pMarket = tradesThisPass === 0 ? snapshotMarket : await readMarket(proposalId);
       const holdings = execute ? await readHoldings(agent, roundCount, proposalId) : { credit: 0n, long: 0n, short: 0n };
       const spentCredits = BigInt(agentSpent[proposalId] ?? "0");
       const common = {
@@ -595,9 +619,9 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
       let executedQuote;
       let pMarketAfter;
       const blockedByDeadline = execute && plan.action !== "none"
-        && tooCloseToTradingEnd({ nowSeconds: chainNow(), tradingEnd: round.tradingEnd });
+        && tooCloseToTradingEnd({ nowSeconds: chainNow(), tradingEnd: round.tradingEnd, buffer: submissionBufferFor(agent.name) });
       if (blockedByDeadline) {
-        plan.reason = `${plan.reason} Not submitted: under 15 s of trading left, too close to the deadline for Circle to confirm.`;
+        plan.reason = `${plan.reason} Not submitted: under ${submissionBufferFor(agent.name)} s of trading left, too close to the deadline for Circle to confirm.`;
         plan.action = "none";
       }
       if (plan.action === "buy" || plan.action === "sell") {
@@ -605,26 +629,43 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
           if (plan.action === "buy") agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
           deposited[agent.id] = true;
         } else {
-          const calls = buildForecasterCalls({
-            roundContract: deployment.contracts.quantumRound,
-            marketContract: deployment.contracts.market,
-            roundId: roundCount,
-            plan,
-            needsDeposit: false,
-          });
-          const trade = calls.pop();
-          for (const call of calls) transactions.push(await submit(agent, call));
-          // Re-quote right before trading so the minimum output reflects the live market, then apply 0.5% slippage.
-          executedQuote = plan.action === "buy"
-            ? await quoteFor(proposalId)(plan.side)(plan.creditsIn)
-            : await sellQuoteFor(proposalId)(plan.side)(plan.tokensIn);
-          if (executedQuote <= 0n) throw Object.assign(new Error(`${agent.name}: adapter quote returned zero output.`), { fatal: true });
-          trade.args[3] = applySlippage(executedQuote);
-          transactions.push(await submit(agent, trade));
-          if (plan.action === "buy") agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
-          state.rounds[round.id] = roundState;
-          saveState();
-          pMarketAfter = await readMarket(proposalId);
+          try {
+            const calls = buildForecasterCalls({
+              roundContract: deployment.contracts.quantumRound,
+              marketContract: deployment.contracts.market,
+              roundId: roundCount,
+              plan,
+              needsDeposit: false,
+            });
+            const trade = calls.pop();
+            for (const call of calls) transactions.push(await submit(agent, call));
+            // Re-quote right before trading so the minimum output reflects the live market, then apply 0.5% slippage.
+            executedQuote = plan.action === "buy"
+              ? await quoteFor(proposalId)(plan.side)(plan.creditsIn)
+              : await sellQuoteFor(proposalId)(plan.side)(plan.tokensIn);
+            if (executedQuote <= 0n) throw Object.assign(new Error(`${agent.name}: adapter quote returned zero output.`), { fatal: true });
+            trade.args[3] = applySlippage(executedQuote);
+            transactions.push(await submit(agent, trade));
+            if (plan.action === "buy") agentSpent[proposalId] = (spentCredits + plan.creditsIn).toString();
+            state.rounds[round.id] = roundState;
+            saveState();
+            pMarketAfter = await readMarket(proposalId);
+            tradesThisPass += 1;
+          } catch (error) {
+            // A defender's trade can land after trading closes; that revert is expected and must not stop the loop.
+            const late = agent.name === "Guardian" && (/TradingClosed/i.test(String(error?.message)) || tooCloseToTradingEnd({ nowSeconds: chainNow(), tradingEnd: round.tradingEnd, buffer: 0 }));
+            if (!late || error?.fatal) throw error;
+            log({
+              type: "guardian_late_trade_failed",
+              roundId: round.id,
+              agentId: agent.id,
+              agentName: agent.name,
+              proposalId,
+              chainSecondsBeforeTradingEnd: Number(round.tradingEnd) - chainNow(),
+              error: String(error?.message ?? error).split("\n")[0],
+              note: "Guardian trade landed after trading closed (TradingClosed); expected for a 5 s guard. Only gas was at risk.",
+            });
+          }
         }
       }
       // After a live Quant trade Guardian re-reads real prices; in dry-run it reasons over the Quant's planned price.
@@ -667,6 +708,19 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
         submitted: transactions.length > 0,
       }));
     }
+    const passDurationMs = Date.now() - passStartMs;
+    log({
+      type: "forecaster_pass",
+      roundId: round.id,
+      agentId: agent.id,
+      agentName: agent.name,
+      cadence: evaluation.cadence,
+      proposalsEvaluated: ordered.map(({ proposalId }) => proposalId),
+      proposalsInRound: existingProposals.length,
+      passDurationMs,
+      targetMs: 3000,
+      overTarget: passDurationMs > 3000,
+    });
     roundState[agent.id] = evaluation.nextState;
     state.rounds[round.id] = roundState;
     saveState();

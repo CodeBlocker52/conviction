@@ -1,9 +1,10 @@
-export const MIN_TWAP_WINDOW_SECONDS = 120;
-export const TWAP_WINDOW_FRACTION = 0.25;
+export const MIN_TWAP_WINDOW_SECONDS = 300;
+export const TWAP_WINDOW_FRACTION = 0.5;
 
-// Default: 25% of the trading window, never below 120 s (20 min -> 300 s, 10 min -> 150 s).
+// Default: 50% of the trading window, never below 300 s (20 min -> 600 s), and never above the trading window
+// itself, which the contract forbids (a 4 min round gets 240 s).
 export function defaultTwapWindow(tradingSeconds) {
-  return Math.max(MIN_TWAP_WINDOW_SECONDS, Math.floor(tradingSeconds * TWAP_WINDOW_FRACTION));
+  return Math.min(tradingSeconds, Math.max(MIN_TWAP_WINDOW_SECONDS, Math.floor(tradingSeconds * TWAP_WINDOW_FRACTION)));
 }
 
 // Mirrors QuantumRound.openRound: nonzero and no longer than the trading window.
