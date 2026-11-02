@@ -10,6 +10,7 @@
     "e2e:live": "node scripts/e2e-live.mjs",
     "pool:recenter": "node --env-file=.env contracts/script/pool-recenter.mjs",
     "demo:round": "node --env-file=.env contracts/script/demo-round.mjs",
+    "demo:preflight": "node --env-file=.env contracts/script/demo-preflight.mjs",
     "demo:open-round": "node --env-file=.env contracts/script/demo-open-round.mjs",
     "demo:close-round": "node --env-file=.env contracts/script/demo-close-round.mjs",
     "keeper:run": "node --env-file=.env contracts/script/keeper-run.mjs",
