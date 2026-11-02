@@ -440,3 +440,33 @@ Deposits 5.000000 USDC (Quant 2, Guardian 2, deployer 1). Exact Redeemed events:
 ### Gas-cap incident
 
 A `propose` is estimated at about 0.146 USDC but costs about 0.076, and the ledger kept the estimate, so the 0.25 USDC daily cap blocked the proposers before any proposal. The cap was raised to 0.5 USDC for this round with approval; nothing reverted. The permanent fix (actual fee replaces the estimate on confirmation, unbroadcast requests are released, cap back to 0.25) is in the same commit.
+
+## Rounds 8, 9 and 10 (TWAP window 300 s)
+
+All figures below are read from QuantumRound events and state with `node --env-file=.env contracts/script/round-report.mjs --round N` (read-only), except pFair, which is computed off-chain and comes from the agents' decision logs. Reserve (`protocolLiquiditySeed`) before round 8: 30.191317 USDC; after round 10: 30.475223 USDC.
+
+### Round 8: wasted (gas cap)
+
+Opened 2026-10-31T16:13:54Z (tx [0x01ddee…835f](https://explorer.testnet.arc.io/tx/0x01ddeede0abed1c11ef6e821b7b0db451effd6f7d7ba9b1c62c6361bd0bf835f); pool recentered first, 0.73% off). Momentum had spent its whole 0.25 USDC daily gas allowance on round 7, so no proposer could act, and the reply to my question arrived after trading closed. On chain: no proposals, no deposits, status quo won (TWAP 0.5), no vault trade, settled. Nothing to reconcile: 0 USDC in, 0 out, reserve unchanged. Fix: gas caps became 0.25 USDC per round and 1.0 USDC per day.
+
+### Round 9: wasted (proposer balance revert)
+
+Opened 2026-10-31T17:04:22Z (tx [0xd83d29…0391](https://explorer.testnet.arc.io/tx/0xd83d29a11491c9476158e00f9a0fc15726fa6680c2669e03ba5857a5966c0391)). One proposal landed on chain (Momentum, 2700 bps, bond refunded, 1 USDC). Mean-reversion's `propose` reverted at about 84k gas (tx 0x4d0a86c2…2622) and the round expired while waiting for a reply. Status quo won, no vault trade, no deposits. Root cause, found in round 10: on Arc, USDC is the gas token, and a `propose` reserves 0.12–0.146 USDC of gas up front out of the same balance that must also cover the 1 USDC bond transfer, so a proposer needs about 1.15 USDC or more. The proposers held 1.08–1.10. Each proposer was topped up by 0.5 USDC (Momentum [0xa12a69…cdcf](https://explorer.testnet.arc.io/tx/0xa12a697d87b26cd30017820264d6e1c94327e6928c5da933c9cc1bab6156cdcf), Mean-reversion [0x5f4a8d…47a0](https://explorer.testnet.arc.io/tx/0x5f4a8d704b198efdb06024db1413bae9708340d923afaf58c7050506658947a0), News [0x0bdac9…bc53](https://explorer.testnet.arc.io/tx/0x0bdac9712bef278760a5d00c4675de07a1391cf17cb00e2cd0db9fcf8149bc53)).
+
+### Round 10: manipulation test, FAILED
+
+Opened 2026-10-31T18:03:28Z (tx [0x51835f…5d0d](https://explorer.testnet.arc.io/tx/0x51835ff1aedad39104e8efaf860100e46cdfaab0e2c03a078444398c30595d0d)): trading end 18:23:27Z, evaluation end 18:33:27Z, TWAP window 300 s, range 0.995–1.005, epsilon 0.005.
+
+| # | Agent | tETH | Rationale (on chain) |
+|---|---|---|---|
+| 1 | Momentum | 3400 bps | "10m trend z=-0.93 over 30 one-minute returns; target 3400 bps tETH." |
+| 2 | Mean-reversion | 4600 bps | "Signal suggests 48%; shifted to 46% to stay distinct…" |
+| 3 | News | 2900 bps | "…Model unavailable; fallback used. Signal suggests 38%; shifted to 29%…" (Anthropic HTTP 400, credit too low) |
+
+Final TWAPs from the `Collapsed` event: status quo 0.5000, **proposal 1 0.5082**, proposal 2 0.5000, proposal 3 0.5000. Winner: proposal 1, the manipulated one, which beat the status quo by 0.0082 (epsilon 0.005). Last pFair per proposal (agent logs, 18:23Z): status quo 0.5027–0.5030, proposal 1 0.5017–0.5020, proposal 2 0.5023, proposal 3 0.5015, so the win was not justified. Realised return: 0.998344 (−0.17%), vault traded to 34% tETH.
+
+Trades (the three `Trade` events): deployer SHORT 0.25 credits (block 70049265, pLong 0.5000 → 0.4757); Quant LONG 0.2416 credits (block 70049336, back to about 0.5003); **deployer strike LONG 0.75 credits** (block 70051130, [tx 0x47fc1d…2040](https://explorer.testnet.arc.io/tx/0x47fc1d380a9938e493a719cab0a864e6c1f5b9e24e046d37ddfb5decfb752040)), pLong 0.5003 → 0.5695, confirmed at 18:22:56.996Z, about 30 s before trading end (the plan was 45 s; the script timed the submission, not the confirmation, which is fixed). The Guardian and Quant logged decisions at 18:23:25Z, saw gap −0.068, and were blocked by the 15 s trading-end guard; neither traded. A strike of 0.07 held for about 30 s is distortion × duration ≈ 2.1 against margin × window = 0.005 × 300 = 1.5, so it decided the round. Forecaster passes took more than 10 s each (many separate RPC calls); the new Multicall3 snapshot targets under 3 s.
+
+Reconciliation (exact events): deposits 5.000000 USDC (Quant 2, Guardian 2, deployer 1); `Redeemed` payouts 4.716094 (Quant 1.923678, Guardian 2.000000, deployer 0.792416); bonds 3 × 1 USDC locked and refunded in full. Deposits − redemptions = 0.283906 = reserve change (30.475223 − 30.191317 = 0.283906). Unaccounted: 0. P&L before gas: Quant −0.0763, Guardian 0, deployer −0.2076 (the manipulation cost it 21% of its deposit).
+
+Changes made after the round: TWAP window default 50% of trading (600 s for 20 minutes), Guardian trading-end guard 5 s (Quant 15 s), faster Guardian pass (leader plus proposals at or above the status quo, 60 s pFair cache, Multicall3 batch, pass duration logged), strike timing measured from the confirmed transaction.
