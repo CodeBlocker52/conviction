@@ -24,3 +24,18 @@ test("--twap-window is parsed from the CLI arguments", () => {
   assert.equal(parseTwapWindowArg(["--minutes", "20", "--twap-window", "240"]), "240");
   assert.equal(parseTwapWindowArg(["--minutes", "20"]), undefined);
 });
+
+test("presets: judge is 8 min / 240 s TWAP / 120 s evaluation with a 3 USDC daily gas cap; full keeps the validated defaults", async () => {
+  const { PRESETS, parsePresetArg } = await import("../contracts/script/presets.mjs");
+  assert.deepEqual(parsePresetArg(["--preset", "judge"]), { name: "judge", ...PRESETS.judge });
+  assert.equal(PRESETS.judge.tradingMinutes, 8);
+  assert.equal(PRESETS.judge.twapWindow, 240);
+  assert.equal(PRESETS.judge.horizonSeconds, 120);
+  assert.equal(PRESETS.judge.dailyGasCapUsdc, "3");
+  assert.equal(PRESETS.full.tradingMinutes * 60, 1_200);
+  assert.equal(PRESETS.full.twapWindow, defaultTwapWindow(PRESETS.full.tradingMinutes * 60));
+  // Both presets satisfy the contract's twapWindow constraints.
+  for (const preset of Object.values(PRESETS)) assert.equal(resolveTwapWindow(preset.twapWindow, preset.tradingMinutes * 60), preset.twapWindow);
+  assert.equal(parsePresetArg([]), undefined);
+  assert.throws(() => parsePresetArg(["--preset", "nope"]), /must be one of/);
+});

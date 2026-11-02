@@ -37,8 +37,9 @@ import {
 import { FINAL_WINDOW_INTERVAL_SECONDS, nextAgentEvaluation } from "./scheduler.mjs";
 import { runIndependentLoops } from "./loops.mjs";
 import { loadRuntimeState, saveRuntimeState } from "./runtime-state.mjs";
-import { assertPrincipalWithinCap, assertProposalCountWithinCap } from "./safety.mjs";
-import { parseAbi } from "viem";
+import { assertPrincipalWithinCap, assertProposalCountWithinCap, PER_AGENT_GAS_CAP_WEI } from "./safety.mjs";
+import { parseAbi, parseUnits } from "viem";
+import { PRESETS } from "../contracts/script/presets.mjs";
 import { createAgentSigner } from "./signers.mjs";
 
 const marketAbi = parseAbi([
@@ -81,6 +82,7 @@ let dryRunRequested = false;
 let once = false;
 let agentFilter = null;
 let pollSeconds = 10;
+let presetName;
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
   if (arg === "--execute") execute = true;
@@ -96,9 +98,15 @@ for (let index = 0; index < args.length; index += 1) {
     if (!value || !/^\d+$/.test(value)) throw new Error("--poll needs a whole-number seconds value.");
     pollSeconds = Number(value);
     index += 1;
+  } else if (arg === "--preset") {
+    presetName = args[index + 1];
+    index += 1;
   } else throw new Error(`Unsupported option: ${arg}.`);
 }
 const dryRun = !execute;
+if (presetName !== undefined && !Object.hasOwn(PRESETS, presetName)) throw new Error(`--preset must be one of: ${Object.keys(PRESETS).join(", ")}.`);
+// Daily (UTC) gas cap per agent comes from the preset; the per-round cap of 0.25 USDC never changes.
+const dailyGasCapWei = presetName ? parseUnits(PRESETS[presetName].dailyGasCapUsdc, 18) : PER_AGENT_GAS_CAP_WEI;
 if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
   throw new Error("--poll must be a whole number between 1 and 300 seconds.");
 }
@@ -119,7 +127,7 @@ function saveState() {
 
 const signers = new Map();
 const signerFor = (agent) => {
-  if (!signers.has(agent.id)) signers.set(agent.id, createAgentSigner(agent, process.env, log));
+  if (!signers.has(agent.id)) signers.set(agent.id, createAgentSigner(agent, process.env, log, { gasCapWei: dailyGasCapWei }));
   return signers.get(agent.id);
 };
 

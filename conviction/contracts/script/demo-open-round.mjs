@@ -1,5 +1,5 @@
 // Opens a status-quo-only Phase B round; legacy demo proposals require an explicit opt-in.
-// Usage: npm run demo:open-round [-- --minutes 20] [-- --horizon 600] [-- --twap-window 300] [-- --test] [-- --with-demo-proposals] [-- --execute]
+// Usage: npm run demo:open-round [-- --minutes 20] [-- --horizon 600] [-- --twap-window 300] [-- --preset judge|full] [-- --test] [-- --with-demo-proposals] [-- --execute]
 import {
   accountFor,
   assertArcTestnet,
@@ -20,6 +20,7 @@ import { calculateRiskModel, fetchRecentEthCandles } from "../../agents/market-d
 import { readAgents } from "../../agents/config.mjs";
 import { requiredProtocolSeed } from "../../agents/safety.mjs";
 import { parseTwapWindowArg, resolveTwapWindow } from "./twap-window.mjs";
+import { parsePresetArg } from "./presets.mjs";
 import {
   liquidityForBuyImpact,
   readPool,
@@ -37,22 +38,23 @@ const args = process.argv.slice(2);
 const execute = args.includes("--execute");
 const testMode = args.includes("--test");
 const withDemoProposals = args.includes("--with-demo-proposals");
+const preset = parsePresetArg(args);
 const minutesIndex = args.indexOf("--minutes");
 const horizonIndex = args.indexOf("--horizon");
 const tradingMinutes = minutesIndex === -1
-  ? Number(process.env.DEMO_TRADING_WINDOW_MINUTES ?? 15)
+  ? Number(preset?.tradingMinutes ?? process.env.DEMO_TRADING_WINDOW_MINUTES ?? 15)
   : Number(args[minutesIndex + 1]);
 if (!Number.isInteger(tradingMinutes) || tradingMinutes < 3 || tradingMinutes > 1_440) {
   throw new Error("Trading window must be between 3 and 1440 whole minutes.");
 }
 const horizonSeconds = horizonIndex === -1
-  ? Number(process.env.DEMO_EVALUATION_WINDOW_SECONDS ?? 600)
+  ? Number(preset?.horizonSeconds ?? process.env.DEMO_EVALUATION_WINDOW_SECONDS ?? 600)
   : Number(args[horizonIndex + 1]);
 if (!Number.isInteger(horizonSeconds) || horizonSeconds < 60 || horizonSeconds > 86_400) {
   throw new Error("Evaluation window must be between 60 and 86400 whole seconds.");
 }
 const horizon = BigInt(horizonSeconds);
-const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args), tradingMinutes * 60);
+const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args) ?? preset?.twapWindow, tradingMinutes * 60);
 
 const read = (address, abi, functionName, fnArgs = []) =>
   publicClient.readContract({ address, abi, functionName, args: fnArgs });

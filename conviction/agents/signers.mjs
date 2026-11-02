@@ -258,7 +258,7 @@ export class LocalAgentSigner {
   }
 }
 
-export function createAgentSigner(agent, env = process.env, logEvent = () => {}) {
+export function createAgentSigner(agent, env = process.env, logEvent = () => {}, { gasCapWei = PER_AGENT_GAS_CAP_WEI } = {}) {
   const backend = env.AGENT_SIGNER_BACKEND ?? "circle";
   if (backend === "circle") {
     if (!agent.address) throw new Error(`Agent ${agent.name} needs a Circle wallet address from agents:setup.`);
@@ -266,7 +266,7 @@ export function createAgentSigner(agent, env = process.env, logEvent = () => {})
     const entitySecret = requiredEnv(env, "CIRCLE_ENTITY_SECRET");
     const walletId = requiredEnv(env, circleWalletIdEnvKey(agent));
     const client = initiateDeveloperControlledWalletsClient({ apiKey, entitySecret });
-    return new CircleAgentSigner({ agent, walletId, client, logEvent });
+    return new CircleAgentSigner({ agent, walletId, client, logEvent, gasCapWei });
   }
   if (backend === "local") {
     if (env.AGENT_LOCAL_SIGNER_APPROVED !== "true") {
@@ -281,7 +281,7 @@ export function createAgentSigner(agent, env = process.env, logEvent = () => {})
     if ([deployment.admin, deployment.keeper].some((address_) => address_.toLowerCase() === account.address.toLowerCase())) {
       throw new Error("Deployer and keeper keys cannot be used as agent signers.");
     }
-    return new LocalAgentSigner({ agent, account, logEvent });
+    return new LocalAgentSigner({ agent, account, logEvent, gasCapWei });
   }
   throw new Error(`Unsupported agent signer backend: ${backend}.`);
 }

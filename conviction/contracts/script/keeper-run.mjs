@@ -1,6 +1,6 @@
 // Keeper service: drives every round through its lifecycle automatically.
 //
-//   npm run keeper:run -- [--poll 15] [--open-every 60 --window 30 --horizon 600]
+//   npm run keeper:run -- [--poll 15] [--preset judge|full] [--open-every 60 --window 30 --horizon 600]
 //
 // While a round is active it runs the oracle watcher (60 s price updates). It then
 //   (a) collapses as soon as trading ends,
@@ -28,6 +28,7 @@ import { calculateRiskModel, fetchRecentEthCandles } from "../../agents/market-d
 import { readAgents } from "../../agents/config.mjs";
 import { requiredProtocolSeed } from "../../agents/safety.mjs";
 import { parseTwapWindowArg, resolveTwapWindow } from "./twap-window.mjs";
+import { parsePresetArg } from "./presets.mjs";
 
 const { contracts } = deployment;
 const proposerCount = readAgents().filter((agent) => agent.type === "proposer").length;
@@ -37,9 +38,11 @@ const opt = (name, fallback) => {
   return i >= 0 ? Number(args[i + 1]) : fallback;
 };
 const pollSeconds = opt("poll", 15);
-const openEveryMinutes = opt("open-every", 0);
-const windowMinutes = opt("window", 30);
-const horizonSeconds = opt("horizon", 600);
+const preset = parsePresetArg(args);
+// Explicit flags override the preset; without a preset the original defaults apply.
+const openEveryMinutes = opt("open-every", preset?.openEveryMinutes ?? 0);
+const windowMinutes = opt("window", preset?.tradingMinutes ?? 30);
+const horizonSeconds = opt("horizon", preset?.horizonSeconds ?? 600);
 if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
   throw new Error("--poll must be a whole number between 1 and 300 seconds.");
 }
@@ -52,7 +55,7 @@ if (!Number.isInteger(windowMinutes) || windowMinutes < 3 || windowMinutes > 1_4
 if (!Number.isInteger(horizonSeconds) || horizonSeconds < 60 || horizonSeconds > 86_400) {
   throw new Error("--horizon must be between 60 and 86400 whole seconds.");
 }
-const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args), windowMinutes * 60);
+const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args) ?? preset?.twapWindow, windowMinutes * 60);
 
 const vaultAbi = parseAbi([
   "function executeTrade(uint256,uint16)",
