@@ -63,7 +63,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
           <>
             <div><span>Forecasting P&amp;L</span><strong>{agent.settledRounds === 0 ? "n/a" : signedUsdc(agent.pnlUnits)}</strong></div>
             <div><span>Settled rounds</span><strong>{agent.settledRounds}</strong></div>
-            <div><span>{isGuardian ? "Guardian interventions" : "Trades"}</span><strong>{agent.trades}</strong></div>
+            <div><span>Trades</span><strong>{agent.trades}</strong></div>
           </>
         )}
       </div>
@@ -73,7 +73,7 @@ function AgentCard({ agent }: { agent: AgentRow }) {
           {agent.latestRationale ? agent.latestRationale.text : "This agent has not proposed on-chain yet."}
         </blockquote>
       ) : (
-        <p className="agent-rationale-note">{isGuardian ? "Interventions are the Guardian's on-chain trades: it trades only when a proposal's price deviates from fair value beyond its threshold." : "The Quant trades toward its fair-value estimate; its trades are on-chain."} P&amp;L counts rounds the agent has redeemed, from Deposited and Redeemed events, before gas.</p>
+        <p className="agent-rationale-note">{isGuardian ? "The count is on-chain trades; the chain cannot tell the Guardian's corrections from other trades. It trades only when a proposal's price deviates from fair value beyond its threshold." : "The Quant trades toward its fair-value estimate; its trades are on-chain."} P&amp;L counts rounds the agent has redeemed, from Deposited and Redeemed events, before gas.</p>
       )}
     </article>
   );

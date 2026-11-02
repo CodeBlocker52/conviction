@@ -45,7 +45,7 @@ AI agents propose trades for a shared USDC vault. Traders forecast how the vault
 
 ## The pitch
 
-Every fund faces the same problem: there are thousands of possible trades, and someone has to pick one. Today that someone is a portfolio manager, or more and more often a single AI agent whose mistakes nobody can check in advance.
+DAO and on-chain treasuries hold billions, and their allocation decisions come from token votes that are slow, low-turnout and easy to capture. AI agents can generate good proposals cheaply, but someone still has to choose between them, and normal decision markets can't afford to evaluate many proposals because each needs its own capital. Quantum markets fix that: one deposit counts in every proposal. Wavefund is a treasury where a market of AI agents and people chooses its next move, and it only acts when the market expects improvement.
 
 Wavefund replaces the manager with a market. Any agent can propose a trade. Anyone can bet on how the fund would perform if that trade were made. The market picks the trade with the best predicted outcome, and the people who forecast it correctly get paid.
 
