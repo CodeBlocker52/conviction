@@ -41,6 +41,10 @@ export const roundAbi = parseAbi([
   "function propose(uint256,(uint16 tEthBps),string)",
   "function collapse(uint256)",
   "function roundEvaluationEnd(uint256) view returns (uint64)",
+  "error AlreadyCollapsed()",
+  "error AlreadySettled()",
+  "error TradingNotClosed()",
+  "error TradingClosed()",
 ]);
 export const vaultAbi = parseAbi([
   "function hasRole(bytes32,address) view returns (bool)",
@@ -49,6 +53,8 @@ export const vaultAbi = parseAbi([
   "function totalVaultTEth() view returns (uint256)",
   "function executeTrade(uint256,uint16)",
   "function reportReturn(uint256)",
+  "error TradeAlreadyExecuted()",
+  "error ReturnAlreadyReported()",
 ]);
 export const usdcAbi = parseAbi([
   "function allowance(address,address) view returns (uint256)",
@@ -97,9 +103,21 @@ export async function assertArcTestnet() {
   }
 }
 
+// Reverts that mean another keeper instance already did this step: not a failure, nothing to retry.
+const ALREADY_DONE = new Set(["AlreadyCollapsed", "AlreadySettled", "TradeAlreadyExecuted", "ReturnAlreadyReported"]);
+export class AlreadyDoneError extends Error {}
+
+export function revertName(error) {
+  return error?.walk?.((cause) => cause?.data?.errorName)?.data?.errorName;
+}
+
+export const PRE_BROADCAST_RETRY_MS = 6_000;
+
 // Gas estimation can hit an RPC node that has not yet seen the previous block (for example the
-// approval just mined), which makes a valid call look like a revert. Retrying before broadcast is safe.
-export async function sendContract(label, walletClient, address, abi, functionName, args) {
+// approval just mined), which makes a valid call look like a revert. Nothing is sent when the
+// pre-broadcast simulation fails, so retrying with a pause is safe; only a confirmed on-chain
+// revert (receipt status) is treated as a failure of the transaction itself.
+export async function sendContract(label, walletClient, address, abi, functionName, args, { retryMs = PRE_BROADCAST_RETRY_MS } = {}) {
   let hash;
   for (let attempt = 0; ; attempt++) {
     try {
@@ -113,13 +131,15 @@ export async function sendContract(label, walletClient, address, abi, functionNa
       });
       break;
     } catch (error) {
+      const name = revertName(error);
+      if (ALREADY_DONE.has(name)) throw new AlreadyDoneError(`${label}: ${name} (another keeper already did this step)`);
       if (attempt >= 4) throw error;
-      console.log(`${label}: pre-broadcast error (${String(error.shortMessage ?? error.message).split("\n")[0]}); retrying`);
-      await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
+      console.log(`${label}: pre-broadcast simulation failed (${name ?? String(error.shortMessage ?? error.message).split("\n")[0]}); nothing sent, retrying in ${retryMs / 1000}s`);
+      await new Promise((resolve) => setTimeout(resolve, retryMs));
     }
   }
   const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
-  if (receipt.status !== "success") throw new Error(`${label} reverted: ${hash}`);
+  if (receipt.status !== "success") throw new Error(`${label} reverted on-chain: ${hash}`);
   console.log(`${label}: ${explorerUrl}/tx/${hash}`);
   return hash;
 }

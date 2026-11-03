@@ -198,3 +198,51 @@ test("per-round spend is tracked across calls within one round", async () => {
   await signer.executeContractCall(callArgs);
   await assert.rejects(signer.executeContractCall({ ...callArgs, label: "second" }), /per round/);
 });
+
+test("Circle signer retries a failed fee estimate without submitting, then proceeds", async () => {
+  const events = [];
+  let estimates = 0;
+  let submissions = 0;
+  const signer = new CircleAgentSigner({
+    agent,
+    walletId: "wallet-id",
+    gasCapWei: 250_000_000_000_000_000n,
+    spentGasWei: 0n,
+    estimateRetryDelayMs: 1,
+    logEvent: (event) => events.push(event),
+    waitForReceipt: async () => ({ status: "success", gasUsed: 21_000n, effectiveGasPrice: 1_000_000_000n }),
+    client: {
+      estimateContractExecutionFee: async () => {
+        estimates += 1;
+        if (estimates < 3) throw Object.assign(new Error("boom"), { response: { status: 500, data: { code: 1, message: "try later" } } });
+        return { data: { medium: { networkFee: "0.01" } } };
+      },
+      createContractExecutionTransaction: async () => {
+        submissions += 1;
+        return { data: { id: "circle-transaction-id" } };
+      },
+      getTransaction: async () => ({ data: { transaction: { txHash: hash } } }),
+    },
+  });
+  await signer.executeContractCall({ address: agent.address, signature: "approve(address,uint256)", args: [agent.address, 1n], label: "approval" });
+  assert.equal(estimates, 3);
+  assert.equal(submissions, 1);
+  assert.equal(events.filter((event) => event.type === "fee_estimate_failed").length, 2);
+  assert.equal(events.find((event) => event.type === "fee_estimate_failed").httpStatus, 500);
+});
+
+test("Circle signer gives up after four failed estimates and never submits", async () => {
+  let submissions = 0;
+  const signer = new CircleAgentSigner({
+    agent,
+    walletId: "wallet-id",
+    spentGasWei: 0n,
+    estimateRetryDelayMs: 1,
+    client: {
+      estimateContractExecutionFee: async () => { throw new Error("down"); },
+      createContractExecutionTransaction: async () => { submissions += 1; },
+    },
+  });
+  await assert.rejects(signer.executeContractCall({ address: agent.address, signature: "approve(address,uint256)", args: [agent.address, 1n], label: "approval" }), /after 4 attempts; no transaction was submitted/);
+  assert.equal(submissions, 0);
+});

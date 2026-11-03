@@ -8,8 +8,12 @@
 //   (c) reports and settles once the evaluation window ends,
 //   (d) optionally opens the next round (--open-every <minutes> after the previous round settled).
 // Every transaction is logged. Ctrl+C stops cleanly (finishes the current step, stops the watcher).
+import { closeSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseAbi } from "viem";
 import {
+  AlreadyDoneError,
   accountFor,
   assertArcTestnet,
   deployment,
@@ -60,6 +64,8 @@ const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args) ?? preset?.twapWi
 const vaultAbi = parseAbi([
   "function executeTrade(uint256,uint16)",
   "function reportReturn(uint256)",
+  "error TradeAlreadyExecuted()",
+  "error ReturnAlreadyReported()",
   "function roundState(uint256) view returns (uint256 startValueUsdc,uint256 tEthAtStart,uint256 usdcAtStart,uint256 startPriceUsdc,uint64 navTimestamp,bool executed,bool reported,bool cancelled)",
 ]);
 
@@ -181,6 +187,28 @@ async function step() {
   }
 }
 
+// Two keepers on one deployment race each other (round 13: both tried to collapse in the same second).
+const lockPath = join(tmpdir(), "wavefund-keeper.lock");
+function acquireLock() {
+  try {
+    const pid = Number(readFileSync(lockPath, "utf8"));
+    try {
+      process.kill(pid, 0);
+      throw new Error(`Another keeper (PID ${pid}) is already running; stop it first (lock ${lockPath}).`);
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+    rmSync(lockPath, { force: true });
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const fd = openSync(lockPath, "wx", 0o600);
+  writeSync(fd, String(process.pid));
+  closeSync(fd);
+}
+acquireLock();
+process.on("exit", () => rmSync(lockPath, { force: true }));
+
 await assertArcTestnet();
 log(`Keeper ${keeper.address} running on ${deployment.chainName}; poll ${pollSeconds}s${openEveryMinutes ? `, next round ${openEveryMinutes} min after settlement` : ""}.`);
 while (!stopping) {
@@ -188,6 +216,11 @@ while (!stopping) {
     await step();
     failures.clear();
   } catch (error) {
+    if (error instanceof AlreadyDoneError) {
+      log(`${error.message}; re-reading state.`);
+      await sleep(2_000);
+      continue;
+    }
     const key = String(error.shortMessage ?? error.message).split("\n")[0];
     const count = (failures.get(key) ?? 0) + 1;
     failures.set(key, count);

@@ -73,7 +73,9 @@ export class CircleAgentSigner {
     readRoundSpent = readRoundGasReservations,
     logEvent = () => {},
     waitForReceipt = (hash) => publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 }),
+    estimateRetryDelayMs = 4_000,
   }) {
+    this.estimateRetryDelayMs = estimateRetryDelayMs;
     this.agent = agent;
     this.walletId = walletId;
     this.client = client;
@@ -93,16 +95,34 @@ export class CircleAgentSigner {
 
   async performContractCall({ address, signature, args, label }) {
     const abiParameters = serializeAbiParameter(args);
+    // Estimation sends nothing, so a transient failure (for example the node not yet seeing the previous
+    // approval) can be retried safely. Only the status and error code are logged, never request details.
+    const attempts = 4;
     let estimate;
-    try {
-      estimate = await this.client.estimateContractExecutionFee({
-        abiFunctionSignature: signature,
-        abiParameters,
-        contractAddress: address,
-        source: { walletId: this.walletId },
-      });
-    } catch {
-      throw new Error(`Circle could not estimate the fee for ${label}; no transaction was submitted.`);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        estimate = await this.client.estimateContractExecutionFee({
+          abiFunctionSignature: signature,
+          abiParameters,
+          contractAddress: address,
+          source: { walletId: this.walletId },
+        });
+        break;
+      } catch (error) {
+        this.logEvent({
+          type: "fee_estimate_failed",
+          agentId: this.agent.id,
+          label,
+          attempt,
+          httpStatus: error?.response?.status ?? null,
+          errorCode: error?.response?.data?.code ?? null,
+          message: String(error?.response?.data?.message ?? error?.message ?? "unknown").slice(0, 200),
+        });
+        if (attempt >= attempts) {
+          throw new Error(`Circle could not estimate the fee for ${label} after ${attempts} attempts; no transaction was submitted.`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.estimateRetryDelayMs));
+      }
     }
     const mediumFee = estimate.data?.medium;
     const estimatedGasWei = nativeFeeToWei(mediumFee?.networkFee);
