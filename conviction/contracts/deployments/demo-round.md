@@ -492,3 +492,18 @@ Opened ([tx](https://explorer.testnet.arc.io/tx/0x5d00a1a83ae1a91334f14c3ca68167
 | 16 | [tx](https://explorer.testnet.arc.io/tx/0x0a1a339fd072f2f44bef6c0e04bda0630b7527a8df5e1352614d185fed90f739) | [tx](https://explorer.testnet.arc.io/tx/0xac0b86ac287d64617b48183151c7fab69ae7b14a0251f9b8775bd034743c8e5c) | [tx](https://explorer.testnet.arc.io/tx/0x4c1f5003b9816bb12e34c534a40493febb9c332a1bfcd3616f643dc2a37d578c) | status quo | Momentum 65%, Mean-reversion 40%, News 29% (fallback, shifted) |
 
 In rounds 15 and 16 the three proposers proposed, Quant and Guardian each deposited 2 USDC and redeemed it automatically, and the keeper opened, collapsed, executed and settled with no intervention. The calm market left every proposal within 0.005 of pFair, so **the forecasters made no trades** (decision log: "within threshold"); all TWAPs were 0.5. Reconciliation per round: deposited 4.000000, redeemed 4.000000, 3 bonds refunded, reserve 30.4761 before and after, zero unaccounted.
+
+### Round 17: full preset (20 min, 600 s TWAP), live-site test round
+Opened 2026-11-05T20:48Z ([tx](https://explorer.testnet.arc.io/tx/0x4235d62da71b0ec8c7430c094dade36d1de6bc85bb277b6c13c9c24d0135cc0f)); trading ended 21:08:02Z (02:38:02 IST); collapse [tx](https://explorer.testnet.arc.io/tx/0x1c2341982d634320898babaa5bce3dd979cc7fcddd33b0a543c0320969bedaa0), vault execute [tx](https://explorer.testnet.arc.io/tx/0x53bc15e95873149df8a67394f7102942c561d40c30b6992360b3fee4de2d9aa5), report and settle [tx](https://explorer.testnet.arc.io/tx/0xb5e8862e671ea073f737dc4691418909adc90499b569a2f5045de4da68c51817). One keeper and one agents runtime ran under `caffeinate` with no sleep gap.
+
+Before the round, the pool was 2.3% off. `pool-position.json` held stale ticks (197280..200220); the live position sat at 197100..200040 (liquidity 4172829713545), so the recenter plan wanted 10.3 new USDC. After correcting the file it needed 0 new USDC and executed within the cap; pool 0.13% off afterwards.
+
+| # | Agent | tETH | On-chain rationale |
+|---|---|---|---|
+| 1 | Momentum | 4700 bps | trend z=-0.18; target 4700 bps |
+| 2 | Mean-reversion | 4200 bps | signal 48%, shifted to 42% to stay distinct |
+| 3 | News | 2900 bps | fallback used; signal 47%, shifted to 29% |
+
+Final TWAPs: status quo 0.4949, p1 0.4924, p2 0.4936, p3 0.4959. Winner: status quo (no proposal beat it by 0.005); vault did not trade. Realised return 0.99964.
+Trades (8 on chain): Quant SHORT on p0, p1, p2, p3 (the Quant claimed in every market from one deposit); a LONG of 0.3 credits on p2 from an outside wallet (0x55F8…, a user testing the live site); then Guardian SHORT 0.252 and Quant SHORT 0.252 on p2, and a Quant SELL of part of its p2 short. Agent passes: Guardian 118 under 3 s, 1 over; Quant 100 under 3 s, 4 over.
+Reconciliation: deposits 5.000000 (Quant 2, Guardian 2, outside wallet 1); redeemed 4.000894 (Quant and Guardian); the remaining 0.999106 belongs to the outside wallet, which had not redeemed yet, so the reserve reads 25.4761 until it does (30.4761 after). Bonds: 3 refunded. Zero unaccounted.
