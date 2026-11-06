@@ -6,10 +6,10 @@ import {
   createPublicClient,
   createWalletClient,
   defineChain,
-  http,
   parseAbi,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { arcHttpTransport } from "./rpc.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const deployment = JSON.parse(
@@ -25,7 +25,7 @@ export const chain = defineChain({
   // Canonical Multicall3 is deployed on Arc Testnet; it lets the agents batch read-only calls.
   contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
 });
-export const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+export const publicClient = createPublicClient({ chain, transport: arcHttpTransport(rpcUrl) });
 
 export const roundAbi = parseAbi([
   "function DEFAULT_BOND() view returns (uint256)",
@@ -93,7 +93,7 @@ export function accountFor(privateKey, expectedAddress, label) {
 }
 
 export function walletClientFor(account) {
-  return createWalletClient({ account, chain, transport: http(rpcUrl) });
+  return createWalletClient({ account, chain, transport: arcHttpTransport(rpcUrl) });
 }
 
 export async function assertArcTestnet() {

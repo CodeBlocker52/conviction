@@ -6,12 +6,12 @@ import {
   createPublicClient,
   defineChain,
   encodeFunctionData,
-  http,
   keccak256,
   parseAbi,
   toFunctionSelector,
   toHex,
 } from "viem";
+import { arcHttpTransport } from "./rpc.mjs";
 
 const root = process.cwd();
 
@@ -45,8 +45,22 @@ const chain = defineChain({
   name: deployment.chainName,
   nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
   rpcUrls: { default: { http: [deployment.rpcUrl] } },
+  contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
 });
-const client = createPublicClient({ chain, transport: http(deployment.rpcUrl) });
+const client = createPublicClient({ chain, transport: arcHttpTransport(deployment.rpcUrl) });
+async function multicallSequential(contracts) {
+  const results = [];
+  const chunkSize = 50;
+  for (let offset = 0; offset < contracts.length; offset += chunkSize) {
+    const batch = await client.multicall({
+      contracts: contracts.slice(offset, offset + chunkSize),
+      allowFailure: false,
+      batchSize: 64_000,
+    });
+    results.push(...batch);
+  }
+  return results;
+}
 const creReceiverAbi = parseAbi([
   "function onReport(bytes metadata, bytes report)",
   "function allowedTransmitter() view returns (address)",
@@ -129,7 +143,7 @@ function checkAbi(label, abi, address) {
 
 for (const [label, abi, address] of abiChecks) checkAbi(label, abi, address);
 
-for (const [contractAddress, abi, functionName, expectedAddress] of [
+const linkedAddressChecks = [
   [deployment.contracts.quantumRound, abis.quantumRoundAbi, "market", deployment.contracts.market],
   [deployment.contracts.quantumRound, abis.quantumRoundAbi, "proposalTokens", deployment.contracts.proposalTokens],
   [deployment.contracts.quantumRound, abis.quantumRoundAbi, "proposerRegistry", deployment.contracts.proposerRegistry],
@@ -148,32 +162,16 @@ for (const [contractAddress, abi, functionName, expectedAddress] of [
   [deployment.contracts.crePriceReceiver, creReceiverAbi, "owner", deployment.admin],
   [deployment.contracts.crePriceReceiver, creReceiverAbi, "getForwarderAddress", deployment.crePriceReceiverConfig.forwarder],
   [deployment.contracts.crePriceReceiver, creReceiverAbi, "allowedTransmitter", deployment.crePriceReceiverConfig.allowedTransmitter],
-]) {
-  const linkedAddress = await client.readContract({
-    address: contractAddress,
-    abi,
-    functionName,
-  });
+];
+const linkedAddresses = await multicallSequential(
+  linkedAddressChecks.map(([address, abi, functionName]) => ({ address, abi, functionName })),
+);
+for (const [index, [contractAddress, , functionName, expectedAddress]] of linkedAddressChecks.entries()) {
+  const linkedAddress = linkedAddresses[index];
   if (typeof linkedAddress !== "string" || linkedAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
     throw new Error(`${functionName} wired into ${contractAddress} does not match current.json (${expectedAddress}).`);
   }
 }
-
-const creChainSelector = await client.readContract({
-  address: deployment.contracts.crePriceReceiver,
-  abi: creReceiverAbi,
-  functionName: "expectedChainSelector",
-});
-if (creChainSelector !== BigInt(deployment.crePriceReceiverConfig.chainSelector)) {
-  throw new Error(`CRE chain selector ${creChainSelector} does not match current.json.`);
-}
-
-const creditDecimals = await client.readContract({
-  address: deployment.contracts.proposalTokens,
-  abi: abis.proposalTokensAbi,
-  functionName: "creditDecimals",
-});
-if (Number(creditDecimals) !== 6) throw new Error(`ProposalTokens.creditDecimals is ${creditDecimals}, expected 6.`);
 
 const roleChecks = [
   [deployment.contracts.proposalTokens, abis.proposalTokensAbi, "QUANTUM_ROUND_ROLE", deployment.contracts.quantumRound],
@@ -186,20 +184,41 @@ const roleChecks = [
   [deployment.contracts.priceOracle, abis.mockPriceOracleAbi, "KEEPER_ROLE", deployment.contracts.crePriceReceiver],
   [deployment.contracts.priceOracle, abis.mockPriceOracleAbi, "KEEPER_ROLE", deployment.keeper],
 ];
-for (const [address, abi, role, account] of roleChecks) {
-  const granted = await client.readContract({
-    address,
-    abi,
-    functionName: "hasRole",
-    args: [keccak256(toHex(role)), account],
-  });
+const deploymentChecks = await multicallSequential([
+    {
+      address: deployment.contracts.crePriceReceiver,
+      abi: creReceiverAbi,
+      functionName: "expectedChainSelector",
+    },
+    {
+      address: deployment.contracts.proposalTokens,
+      abi: abis.proposalTokensAbi,
+      functionName: "creditDecimals",
+    },
+    ...roleChecks.map(([address, abi, role, account]) => ({
+      address,
+      abi,
+      functionName: "hasRole",
+      args: [keccak256(toHex(role)), account],
+    })),
+    {
+      address: deployment.contracts.market,
+      abi: abis.waveMarketAbi,
+      functionName: "owner",
+    },
+]);
+const [creChainSelector, creditDecimals, ...roleAndOwnerResults] = deploymentChecks;
+if (creChainSelector !== BigInt(deployment.crePriceReceiverConfig.chainSelector)) {
+  throw new Error(`CRE chain selector ${creChainSelector} does not match current.json.`);
+}
+
+if (Number(creditDecimals) !== 6) throw new Error(`ProposalTokens.creditDecimals is ${creditDecimals}, expected 6.`);
+
+for (const [index, [address, , role, account]] of roleChecks.entries()) {
+  const granted = roleAndOwnerResults[index];
   if (!granted) throw new Error(`${role} is not granted to ${account} on ${address}.`);
 }
-const marketOwner = await client.readContract({
-  address: deployment.contracts.market,
-  abi: abis.waveMarketAbi,
-  functionName: "owner",
-});
+const marketOwner = roleAndOwnerResults[roleChecks.length];
 if (marketOwner.toLowerCase() !== deployment.contracts.quantumRound.toLowerCase()) {
   throw new Error(`Adapter owner ${marketOwner} is not the QuantumRound.`);
 }
@@ -236,25 +255,39 @@ const roundCount = await client.readContract({
   abi: abis.quantumRoundAbi,
   functionName: "roundCount",
 });
-for (let roundId = 1n; roundId <= roundCount; roundId += 1n) {
-  const round = await client.readContract({
-    address: deployment.contracts.quantumRound,
-    abi: abis.quantumRoundAbi,
-    functionName: "rounds",
-    args: [roundId],
-  });
+const roundIds = Array.from({ length: Number(roundCount) }, (_, index) => BigInt(index + 1));
+const rounds = roundIds.length === 0
+  ? []
+  : await multicallSequential(
+    roundIds.map((roundId) => ({
+      address: deployment.contracts.quantumRound,
+      abi: abis.quantumRoundAbi,
+      functionName: "rounds",
+      args: [roundId],
+    })),
+  );
+for (const [roundIndex, round] of rounds.entries()) {
+  const roundId = roundIds[roundIndex];
+  const tokenChecks = [];
   for (let proposalId = 0n; proposalId < round[7]; proposalId += 1n) {
     for (const tokenFunction of ["creditToken", "longToken", "shortToken"]) {
-      const token = await client.readContract({
+      tokenChecks.push({
         address: deployment.contracts.proposalTokens,
         abi: abis.proposalTokensAbi,
         functionName: tokenFunction,
         args: [roundId, proposalId],
       });
-      const code = await client.getBytecode({ address: token });
-      if (!code || code === "0x") throw new Error(`${tokenFunction}(${roundId}, ${proposalId}) has no deployed token code.`);
-      await checkErc20Calls(`Proposal ${roundId}/${proposalId} ${tokenFunction}`, token);
     }
+  }
+  const tokens = tokenChecks.length === 0
+    ? []
+    : await multicallSequential(tokenChecks);
+  for (const [tokenIndex, token] of tokens.entries()) {
+    const { functionName, args } = tokenChecks[tokenIndex];
+    const proposalId = args[1];
+    const code = await client.getBytecode({ address: token });
+    if (!code || code === "0x") throw new Error(`${functionName}(${roundId}, ${proposalId}) has no deployed token code.`);
+    await checkErc20Calls(`Proposal ${roundId}/${proposalId} ${functionName}`, token);
   }
 }
 
