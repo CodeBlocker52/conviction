@@ -13,7 +13,6 @@ const artifactDefinitions = [
   ["quantumRoundAbi", "contracts/out/QuantumRound.sol/QuantumRound.json"],
   ["resolverAbi", "contracts/out/Resolver.sol/Resolver.json"],
   ["wavefundVaultAbi", "contracts/out/WavefundVault.sol/WavefundVault.json"],
-  ["quantumLpAbi", "contracts/out/QuantumLP.sol/QuantumLP.json"],
   ["mockPriceOracleAbi", "contracts/out/MockPriceOracle.sol/MockPriceOracle.json"],
   ["poolManagerAbi", "contracts/out/IExtsload.sol/IExtsload.json"],
   ["v4CallbackAbi", "contracts/out/V4SmokeTest.s.sol/TestCallback.json"],

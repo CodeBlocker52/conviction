@@ -1,6 +1,6 @@
-# Wavefund Phase B v2 — Arc Testnet Deployment and Sources
+# Wavefund fresh redeployment — Arc Testnet Deployment and Sources
 
-The top of this file describes only the current (v2) deployment. Everything under "Superseded deployments (history)" is kept for reference and must not be used.
+The top of this file describes the active fresh deployment. Earlier deployments, including their completed round links, remain below as history and must not be used for new operations.
 
 ## Network and operating rules
 
@@ -13,12 +13,66 @@ The top of this file describes only the current (v2) deployment. Everything unde
 - Source configuration: Solidity `0.8.26`, Osaka EVM, `via_ir = true`; Uniswap v4 core `1.0.2`.
 - `current.json` is the canonical application and demo-script address config. `npm run check:contracts` rebuilds Forge artifacts and checks configured Arc addresses, the checked-in app ABI selectors, and this deployment record. Keep the app ABIs aligned with the active deployment; regenerate them with `node contracts/script/generate-contract-abis.mjs` only when updating the frontend to a deployment that includes the corresponding contracts.
 
-## Current deployment (Phase B v2: per-proposal credit claims)
+## Current deployment (fresh redeployment: Arc Testnet)
 
 Admin/deployer: `0xDA026fbF1F9a98632F52AA23F92c0041d6Ef3ac2`
 Keeper: `0xE7DD9a5fafa5739B466C61914311e39717f7192c`
 
-Redeployed after the contract fixes: per-proposal credit cap, winner-only redemption, status quo = no vault trade, `releaseSeed`, and proposal 0 mirroring the vault's allocation. Six contracts are new; the registry, oracle, tETH, `QuantumLP`, PoolManager and the USDC/tETH pool are reused.
+Fresh contracts are used for every active Wavefund component. USDC, PoolManager, PositionManager, Permit2, and Multicall3 are retained. The old `QuantumLP` is historical and not wired into the new deployment. Proposal-token credits use 6 decimals, the reserve is 30 USDC at 5 USDC per proposal, and the vault starts with 5 USDC.
+
+| Contract | Address | Deployment transaction |
+|---|---|---|
+| TestAsset (tETH) | `0xDeA9A56A10BCFbd86717fb5Dd58e2eb52255688f` | [0xa2b85d5c…79c5bb](https://explorer.testnet.arc.io/tx/0xa2b85d5c964b9cd0fcf86d7bd118e5d27fec88014409d2c9ffc245cd8797c5bb) |
+| MockPriceOracle | `0x394E1E7609a9a8E8AB60d359f77960afC488D78c` | [0x52a9b120…310dae](https://explorer.testnet.arc.io/tx/0x52a9b120c06cfffd8c70a2029197be76e964058f9449176bbc25056d5a310dae) |
+| ProposerRegistry | `0x113120Cf3D8f55d155e069E5952A2aFa5E94b012` | [0x7983855c…873e22](https://explorer.testnet.arc.io/tx/0x7983855c80ba3722719f0e762fad350ea032738a7df25faed229edec31873e22) |
+| ProposalTokens | `0x14CE21b275616c46EBfe45e19b03f1a61cbbf208` | [0x48c19117…0912728](https://explorer.testnet.arc.io/tx/0x48c1911751af01e81187141b2eb659fbf6af60db872ce4c1db0b5d04d0912728) |
+| WaveV4ProposalMarket | `0x77320698947AeB2EF5B740fa893f6358EBe1C034` | [0x93b5029b…35a5f21](https://explorer.testnet.arc.io/tx/0x93b5029b0b977a70741a47672e2a2095a1ff23f423465d0e3deba70b435a5f21) |
+| WaveHook | `0xc40F5F9F856eF0b64bC3fDc0AE8837CAac4c8ac0` | [0x4928a53c…d24408b2](https://explorer.testnet.arc.io/tx/0x4928a53cd4a8837f59f4ed8177945f51f0646fdc307fee7c0ca59967d24408b2) |
+| QuantumRound | `0x9E4aD1833F16C3dc6B6b18708aE086fa003e8dEF` | [0x934aba6b…3134f6](https://explorer.testnet.arc.io/tx/0x934aba6b425a6cf44ecd7828f9c24388d023af4f15709a7979e781b35c3134f6) |
+| Resolver | `0x33CA9beAEEA9f44457C6ff4FAfB694177cC55252` | [0x6bb62477…3179c82f](https://explorer.testnet.arc.io/tx/0x6bb62477e492f107eaaf83973831cea9cfb82b604380ac5dca2ac7dc3179c82f) |
+| WavefundVault | `0x2ba9271420082d05373282a9c6EFcB416acf799f` | [0xdd09fae7…b0a1390](https://explorer.testnet.arc.io/tx/0xdd09fae7a395ef289f3151c1f41977ef5385c1e91975d75fffdbcac71b0a1390) |
+| v4 pool callback | `0xf50B32E596f98e52cE5BC656d8a8C94372e6A757` | [0xf1ad77cb…9f475c79](https://explorer.testnet.arc.io/tx/0xf1ad77cb904b3aa702edf912728917bd51154c15ceba54b70a84c0859f475c79) |
+| WavefundPriceReceiver | `0xcf4edC109B47BeF93Ad27e72C8DD906A5c94838e` | [0x10d82581…b236ad50](https://explorer.testnet.arc.io/tx/0x10d825819ed225d4380a931c5ba790d994e0e47022460bb4b6126ef4b236ad50) |
+| USDC (predeploy) | `0x3600000000000000000000000000000000000000` | Retained |
+| Uniswap v4 PoolManager | `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` | Retained |
+| PositionManager | `0x87Dd714940ea540c921a92216e6E0DE1E2b1735C` | Retained |
+| Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` | Retained |
+| Multicall3 | `0xcA11bde05977b3631167028862bE2a173976CA11` | Retained |
+
+The market, round, resolver and vault are wired exclusively to the new contracts. `WireFresh` set the market owner to the new round, granted the keeper and vault roles, set 5 USDC initial liquidity per proposal and configured the vault as the allocation source. The new oracle grants `KEEPER_ROLE` to the keeper and CRE receiver; the old deployment and its roles were left untouched.
+
+The new receiver uses the Arc Testnet simulation forwarder `0x6E9EE680ef59ef64Aa8C7371279c27E496b5eDc1`, chain selector `3034092155422581607`, and allowed transmitter `0xa2A470207A21f957e3c0223d77fb4B46fb32b8d8`. The transmitter was set in [0x52dc0227…97ba1e3](https://explorer.testnet.arc.io/tx/0x52dc0227932f58b1afe0f33f98c07d67ab8236ba53e877b2f1118c17907ba1e3); the new oracle granted the receiver `KEEPER_ROLE` in [0x01eb64de…64ea92b](https://explorer.testnet.arc.io/tx/0x01eb64dec7651573f583f9716c600ed15aac587021ffc9f206311f92c64ea92b). Production workflow identity checks remain a requirement before using a production forwarder.
+
+Wiring transactions: [market ownership transfer](https://explorer.testnet.arc.io/tx/0xb4a387bb3fd454dcdeccf610545bf6a86a33bfa8ceacfd01bd686633ad3ee2dc), [set initial seed per proposal](https://explorer.testnet.arc.io/tx/0xbf833149bb34fd05ef63df34f19f97267fc4f4909367dd4b4f865e5976c629dc), [set vault allocation source](https://explorer.testnet.arc.io/tx/0xf31ab140d2e9d5f195ccba86b5d2f7475adf9055713652406b23e4166c848097).
+
+The oracle was refreshed at [0x2494273f…724fc200](https://explorer.testnet.arc.io/tx/0x2494273fdbfa2d5b894813b0f2d31e807d07c77f5dfaa0d49b1f8596724fc200) and again before preflight at [0xff63233e…a77de178](https://explorer.testnet.arc.io/tx/0xff63233eaa9e0ec1b62240059a0c64dfa31c2c97098d640155345d40a77de178). The new USDC/tETH pool was initialized at the oracle price ([0x939b9351…0149abb3](https://explorer.testnet.arc.io/tx/0x939b9351bb42dfd36c3bcdb11eb124a202c576ad6f7ec0785ecbc71a0149abb3)) and seeded with concentrated liquidity: 10.724166 USDC and 0.007865264270729363 tETH ([add liquidity](https://explorer.testnet.arc.io/tx/0xdb17052638bfd9b5db3a107c4b5a2ccb384bb15412180b6b51242bb8689d1747)). The new round reserve is 30 USDC ([fund](https://explorer.testnet.arc.io/tx/0xd58e20f56fdaf997af985b05fa0e7c78005f12b0a8280773b8229c75aa5c4bc4)); the vault bootstrap is 5 USDC ([fund](https://explorer.testnet.arc.io/tx/0x231522ab1da015056cf2a5558dafee773659d93763d888b679fdc9f2182b3109)).
+
+### Current deployment verification
+
+All eleven newly deployed contracts were verified by Sourcify exact-match and indexed by Arc Testnet Blockscout; the explorer API reports `is_verified: true` and includes source code for each address.
+
+| Contract | Blockscout source |
+|---|---|
+| TestAsset | [0xDeA9…688f](https://explorer.testnet.arc.io/address/0xDeA9A56A10BCFbd86717fb5Dd58e2eb52255688f#code) |
+| MockPriceOracle | [0x394E…D78c](https://explorer.testnet.arc.io/address/0x394E1E7609a9a8E8AB60d359f77960afC488D78c#code) |
+| ProposerRegistry | [0x1131…b012](https://explorer.testnet.arc.io/address/0x113120Cf3D8f55d155e069E5952A2aFa5E94b012#code) |
+| ProposalTokens | [0x14CE…f208](https://explorer.testnet.arc.io/address/0x14CE21b275616c46EBfe45e19b03f1a61cbbf208#code) |
+| WaveV4ProposalMarket | [0x7732…C034](https://explorer.testnet.arc.io/address/0x77320698947AeB2EF5B740fa893f6358EBe1C034#code) |
+| WaveHook | [0xc40F…8ac0](https://explorer.testnet.arc.io/address/0xc40F5F9F856eF0b64bC3fDc0AE8837CAac4c8ac0#code) |
+| QuantumRound | [0x9E4a…8dEF](https://explorer.testnet.arc.io/address/0x9E4aD1833F16C3dc6B6b18708aE086fa003e8dEF#code) |
+| Resolver | [0x33CA…5252](https://explorer.testnet.arc.io/address/0x33CA9beAEEA9f44457C6ff4FAfB694177cC55252#code) |
+| WavefundVault | [0x2ba9…799f](https://explorer.testnet.arc.io/address/0x2ba9271420082d05373282a9c6EFcB416acf799f#code) |
+| v4 pool callback | [0xf50B…A757](https://explorer.testnet.arc.io/address/0xf50B32E596f98e52cE5BC656d8a8C94372e6A757#code) |
+| WavefundPriceReceiver | [0xcf4e…838e](https://explorer.testnet.arc.io/address/0xcf4edC109B47BeF93Ad27e72C8DD906A5c94838e#code) |
+
+### Previous deployment (Phase B v2, per-proposal credit claims)
+
+The following table and the v2 verification section record the superseded deployment. Its historical rounds remain in [`demo-round.md`](./demo-round.md).
+
+Admin/deployer: `0xDA026fbF1F9a98632F52AA23F92c0041d6Ef3ac2`
+Keeper: `0xE7DD9a5fafa5739B466C61914311e39717f7192c`
+
+The per-proposal credit cap, winner-only redemption, status quo = no vault trade, `releaseSeed`, and proposal 0 mirroring the vault's allocation were introduced in this deployment.
 
 | Contract | Address | Deployment transaction |
 |---|---|---|
@@ -29,18 +83,12 @@ Redeployed after the contract fixes: per-proposal credit cap, winner-only redemp
 | WaveHook | `0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0` | [0x4d265401…b52a01](https://explorer.testnet.arc.io/tx/0x4d265401f057319908c067d2cefd37f59e1377ea2cd417ec013dbbab5cb52a01) |
 | QuantumRound | `0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A` | [0x73fab872…d0f65e](https://explorer.testnet.arc.io/tx/0x73fab8724e0ad4bf99f337ae3fa727f0134354f1378ee2750bbb623405d0f65e) |
 | Resolver | `0x20932A078D333A3A628E32f20C79105D914d3506` | [0x305d0cbc…af3c20](https://explorer.testnet.arc.io/tx/0x305d0cbcf3ef5eaf38c79841563d6bebb495e2f767985c299e3078bc80af3c20) |
-| WavefundVault (queued WAVE shares) | `0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137` | [0x8aae934a…c50d61](https://explorer.testnet.arc.io/tx/0x8aae934a22302a380da1e58908f2abe105009a47291af7fe2da1ff77cec50d61) |
-| QuantumLP (reused) | `0x885512902D1f5d05f81A678FdFFE0e339623c415` | Existing |
+| WavefundVault | `0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137` | [0x8aae934a…c50d61](https://explorer.testnet.arc.io/tx/0x8aae934a22302a380da1e58908f2abe105009a47291af7fe2da1ff77cec50d61) |
+| QuantumLP (reused, unused) | `0x885512902D1f5d05f81A678FdFFE0e339623c415` | Existing |
 | MockPriceOracle (reused) | `0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d` | Existing |
 | WavefundPriceReceiver | `0x0D8A4F9f2c5252436d61aCB9a21aEcf0CE760823` | [0x4bd65df6…0a4b95](https://explorer.testnet.arc.io/tx/0x4bd65df6e242257bfbb7373501e7e920ee2dc6c86e930400e1112039020a4b95) |
 
-The frontend, keeper and demo scripts read these addresses from `current.json`. Wiring (`WirePhaseB`) verified every role on-chain, including `allocationSource = vault` and the revocation of the previous round's roles on the registry and `QuantumLP` and of the previous vault's roles on the previous round and resolver. Funding: 20 USDC protocol seed ([approve](https://explorer.testnet.arc.io/tx/0x207efa1c24a02994417cd91f054c260389ea79bb6ec40e8c9d67aefb49c7d9fc), [addProtocolLiquiditySeed](https://explorer.testnet.arc.io/tx/0x957325718a12d0a589de7ec590f20d59e9f20a303d636dc13c8b60159db653db)) and a 5 USDC vault bootstrap ([approve](https://explorer.testnet.arc.io/tx/0x7db28061b1ca82c0cdec7c08fef1f492769e54ab5d92c39da116aef94d885ddb), [fundVault](https://explorer.testnet.arc.io/tx/0xe5f23dfa3f5287903fcb1e23e1655c05415cf7f4bbbed6ac0f766b1c2d4f053d)).
-
-CRE receiver (testnet simulation only): forwarder `0x6E9EE680ef59ef64Aa8C7371279c27E496b5eDc1`, selector `3034092155422581607`, allowed transmitter `0xa2A470207A21f957e3c0223d77fb4B46fb32b8d8` ([configuration](https://explorer.testnet.arc.io/tx/0xdae3479d259ffb8aee83b8a9550d6683331ec1f6efd6845acd96b5a1eacf5677)). The oracle granted the receiver `KEEPER_ROLE` ([grant](https://explorer.testnet.arc.io/tx/0x20c9cdc97d4a989b2c00996301a94b61ab58e2a8fc3f4a984ba1b9b7b11ae678)); the existing keeper retains the role. The keeper funded the transmitter with 0.5 USDC ([transfer](https://explorer.testnet.arc.io/tx/0x6072ee33e1fed23c914b3f0fb250f0fb2610af57cf836af6d7ab0ad9b30e58b9)). The receiver is unaudited; the CRE workflow is not yet deployed.
-
-Wiring transactions: [transferOwnership(market→round)](https://explorer.testnet.arc.io/tx/0x47056e893171fd54afb7603e974c03a40ae77351e74078e9c16062d48278e590), [setInitialLiquidityPerProposal](https://explorer.testnet.arc.io/tx/0x92dcea0d5e4897d8b483afc538aa1e7e6f35ded9bc0cd038629b0c4f09107972), [setAllocationSource](https://explorer.testnet.arc.io/tx/0x8028c731581ed506309a9de1bd9e452a0f6339a73d945bd33add182bdcb02e91); the remaining grant/revoke transactions are in `broadcast/WirePhaseB.s.sol/5042002/run-latest.json`.
-
-## Blockscout (explorer) verification (v2)
+## Blockscout (explorer) verification (previous v2 deployment)
 
 Checked through `https://explorer.testnet.arc.io/api/v2/smart-contracts/<address>`: every contract below returns `is_verified: true` with source code, not only a Sourcify job. The v2 contracts were submitted with `forge verify-contract --verifier blockscout` (compiler 0.8.26, optimizer 200 runs, via-IR). The explorer reports `evm_version` as `cancun` and flags the matches as partial (metadata hash differs), which is how it records Sourcify/Blockscout mirrors.
 

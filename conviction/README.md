@@ -7,7 +7,7 @@ AI agents propose trades for a shared USDC vault. Traders forecast how the vault
 > **Event:** ETHGlobal Mumbai
 > **Chain:** Arc testnet (Circle's stablecoin-native L1, USDC as gas)
 > **Target prizes:** Arc "Best DeFi / Onchain Finance App Built End to End in Arc Studio" and Uniswap Foundation "Build with Uniswap". Chainlink CRE is on the [roadmap](#roadmap), not built.
-> **Status:** Phase B v2 (Uniswap v4 hook proposal markets, per-proposal credit claims) is deployed, verified and smoke-tested on Arc Testnet, and the live frontend, keeper and demo scripts run against it. Earlier deployments are superseded (see `contracts/deployments/SOURCES.md`). Current vault: [`0x3AdB…e137`](https://explorer.testnet.arc.io/address/0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137#code).
+> **Status:** The fresh Wavefund deployment (Uniswap v4 hook proposal markets, per-proposal credit claims) is live on Arc Testnet; the frontend, keeper and demo scripts use its new registry, oracle, tETH, markets and vault. Earlier deployments remain history only (see `contracts/deployments/SOURCES.md`). Current vault: [`0x2ba9…799f`](https://explorer.testnet.arc.io/address/0x2ba9271420082d05373282a9c6EFcB416acf799f#code).
 > **Based on:** "Quantum Markets" by Alpin Yukseloglu and Sofiane Larbi (Paradigm, June 2025). Implemented from scratch; see [Relationship to the reference implementation](#relationship-to-the-reference-implementation).
 
 ---
@@ -68,7 +68,7 @@ Everything below runs on Arc testnet today, is verified on the Arc explorer, and
 - **Keeper service** (`npm run keeper:run`): collapses at trading end, runs the vault trade immediately, reports and settles at evaluation end, runs the oracle watcher, optionally opens the next round.
 - **Frontend** (Next.js, plain viem, no wagmi): live mode on Arc testnet with adapter quotes, round states, vault, portfolio and agents pages, plus a mock mode.
 - **Agents:** three proposer agents (Momentum, Mean-reversion, News) and two forecaster agents (Quant, Guardian), each with a Circle developer-controlled wallet, live on Arc testnet; the Agents page shows on-chain stats and proposal cards show agent name, type and rationale.
-- **Resolution today:** the keeper reads the oracle and reports the vault's realised return (NAV ratio) to the contracts.
+- **Resolution today:** the keeper reads the oracle and reports the vault's realised return (NAV ratio) to the contracts. A Chainlink CRE receiver is deployed against the Arc Testnet simulation forwarder; the production CRE workflow is not live.
 
 ## Roadmap
 
@@ -579,7 +579,7 @@ forge test             # 218 tests (run from this folder; needs ~/.foundry/bin o
 
 ### Manual test checklist (live mode, current deployment)
 
-Vault: `0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137` · QuantumRound: `0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A` (full table in `SOURCES.md`).
+Vault: `0x2ba9271420082d05373282a9c6EFcB416acf799f` · QuantumRound: `0x9E4aD1833F16C3dc6B6b18708aE086fa003e8dEF` (full table in `SOURCES.md`).
 
 1. Operator: `npm run pool:recenter`, then `-- --execute` if needed; `npm run demo:open-round -- --minutes 30 --with-demo-proposals --execute`; start `npm run keeper:run`.
 2. Open `/demo`, switch to **Use on-chain data**, connect MetaMask (Arc Testnet, chain `5042002`, is added automatically). The header shows your ERC-20 USDC balance (6 decimals).

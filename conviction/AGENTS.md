@@ -1,27 +1,27 @@
 # AGENTS.md — Wavefund Project Notes
 
-**Current deployment = Phase B v2** (per-proposal credit claims). The single source of truth is `contracts/deployments/current.json` (mirrored in `contracts/deployments/SOURCES.md`). Phase A contracts are **superseded**: never send transactions to, fund, or wire the frontend/scripts to them.
+**Current deployment = fresh Arc Testnet redeployment** (per-proposal credit claims). The single source of truth is `contracts/deployments/current.json` (mirrored in `contracts/deployments/SOURCES.md`). Earlier deployments remain history only: never send transactions to, fund, or wire the frontend/scripts to them.
 
-## Deployed Contracts — Phase B v2, Arc Testnet (chain 5042002)
+## Deployed Contracts — fresh deployment, Arc Testnet (chain 5042002)
 
 | Contract | Address |
 |---|---|
-| QuantumRound | `0xc60ce44f777A0Cf0981AF2aF70f42ded2f80Aa9A` |
-| WaveV4ProposalMarket (adapter, `market`) | `0xC32e0b3d5b49Cbd66dce5b97E616Ddbfc3681159` |
-| WaveHook (shared, one pool per proposal) | `0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0` |
-| ProposalTokens (credits 6 decimals) | `0xB5c884d76a29A7dA7B290d14BB8616E4CFB32884` |
-| Resolver | `0x20932A078D333A3A628E32f20C79105D914d3506` |
-| WavefundVault | `0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137` |
-| ProposerRegistry (reused) | `0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346` |
-| MockPriceOracle (reused) | `0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d` |
-| TestAsset tETH (reused) | `0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d` |
-| QuantumLP (reused, not wired into Phase B markets) | `0x885512902D1f5d05f81A678FdFFE0e339623c415` |
-| v4 callback (owns the USDC/tETH position) | `0xFaDBe81aF357757d2cd84e33883fe41579f88c97` |
+| QuantumRound | `0x9E4aD1833F16C3dc6B6b18708aE086fa003e8dEF` |
+| WaveV4ProposalMarket (adapter, `market`) | `0x77320698947AeB2EF5B740fa893f6358EBe1C034` |
+| WaveHook (shared, one pool per proposal) | `0xc40F5F9F856eF0b64bC3fDc0AE8837CAac4c8ac0` |
+| ProposalTokens (credits 6 decimals) | `0x14CE21b275616c46EBfe45e19b03f1a61cbbf208` |
+| Resolver | `0x33CA9beAEEA9f44457C6ff4FAfB694177cC55252` |
+| WavefundVault | `0x2ba9271420082d05373282a9c6EFcB416acf799f` |
+| ProposerRegistry | `0x113120Cf3D8f55d155e069E5952A2aFa5E94b012` |
+| MockPriceOracle | `0x394E1E7609a9a8E8AB60d359f77960afC488D78c` |
+| TestAsset tETH | `0xDeA9A56A10BCFbd86717fb5Dd58e2eb52255688f` |
+| WavefundPriceReceiver (simulation forwarder) | `0xcf4edC109B47BeF93Ad27e72C8DD906A5c94838e` |
+| v4 callback (owns the USDC/tETH position) | `0xf50B32E596f98e52cE5BC656d8a8C94372e6A757` |
 | USDC (predeploy) | `0x3600000000000000000000000000000000000000` |
 | Uniswap v4 PoolManager | `0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A` |
 | Multicall3 | `0xcA11bde05977b3631167028862bE2a173976CA11` |
 
-Phase B v2 contracts are verified on the Arc explorer (Blockscout). **Superseded:** the first Phase B deployment (QuantumRound `0x74b7…`, vault `0xA1E3…`, hook `0xA2FD…`, market `0x5A2D…`, tokens `0xA399…`, resolver `0x74Fd…`) was emptied and its reserve rescued; 5 USDC (round 3's seed) is permanently locked there. Never use it. Superseded Phase A addresses (QuantumRound `0x82a6…`, ConstantProductMarket `0xEC6d…`, old vaults) are listed only in `SOURCES.md` under "superseded".
+New registry starts empty; the three configured proposer agents register themselves on their first proposal run. Forecasters do not use the proposer registry. `QuantumLP` is not part of this deployment and remains historical only. The CRE receiver uses simulation forwarder `0x6E9EE680ef59ef64Aa8C7371279c27E496b5eDc1`, selector `3034092155422581607`, and transmitter `0xa2A470207A21f957e3c0223d77fb4B46fb32b8d8`; production workflow identity checks are still required. Earlier deployments and rounds are documented in `contracts/deployments/SOURCES.md` and `contracts/deployments/demo-round.md`.
 
 ## Wallets
 - Deployer/Admin: `0xDA026fbF1F9a98632F52AA23F92c0041d6Ef3ac2`
@@ -40,7 +40,7 @@ Phase B v2 contracts are verified on the Arc explorer (Blockscout). **Superseded
 - Winner selection uses the final-window probability TWAP (0–1); a proposal must beat the status quo by 0.005. All bonds (1 USDC, constant) are refunded at collapse; price-based slashing is roadmap work.
 - Implied return = `rMin + pLong × (rMax − rMin)`, shown as a percentage change. Settled payout per LONG is π credits and per SHORT 1 − π, where π = (clamped return − rMin)/(rMax − rMin).
 - Vault: deposits/withdrawals queue as WAVE shares and process at the next `executeTrade`. A 500 bps oracle-relative slippage breach cancels the round (all deposits redeem at par). Seed returns to the protocol reserve through collapse and settlement.
-- `protocolLiquiditySeed` must cover 5 USDC × 4 markets per round. QuantumLP is not part of Phase B; external LP shares are roadmap.
+- `protocolLiquiditySeed` must cover `initialLiquidityPerProposal × (1 + active proposer agents)`. The current value is 5 USDC per market; three proposers require 20 USDC, covered by the 30 USDC reserve. QuantumLP is historical and not wired into the current deployment.
 - Oracle: keeper-updated `MockPriceOracle` (8 decimals, 5-minute max age). The watcher updates every 60 s only while a round is open.
 - Arc Uniswap v4 is v4-core 1.0.2-compatible. `HookMiner` is used only by the hook deployment script.
 - Do not change deployed addresses, open rounds, or spend USDC beyond what the user approved.
@@ -48,6 +48,7 @@ Phase B v2 contracts are verified on the Arc explorer (Blockscout). **Superseded
 ## Operating commands (run from `conviction/`)
 - `npm run check:contracts` — code at every address, ABI selectors, linkage, roles, `creditDecimals == 6`.
 - `npm run pool:recenter [-- --execute]` — re-centre the ±20% concentrated position on the oracle price (`-- --remove --execute` recovers it).
+- `npm run pool:init` — initialize the fresh USDC/tETH v4 pool at the fresh on-chain oracle price.
 - `npm run demo:open-round -- --minutes 30 --execute` — open a round with three proposals and start the oracle watcher (`--test` relaxes the pool checks).
 - `npm run demo:close-round -- --execute` — collapse, execute the vault trade, wait for evaluation, settle, stop the watcher.
 - `npm run keeper:run [-- --poll 15 --open-every <min> --window <min>]` — keeper service: collapses at trading end, runs the vault trade immediately, reports and settles at evaluation end, optionally opens the next round, runs the oracle watcher while a round is active, logs every tx, stops cleanly on Ctrl+C. Needs `KEEPER_PK`.
@@ -61,5 +62,6 @@ Phase B v2 contracts are verified on the Arc explorer (Blockscout). **Superseded
 - [x] Frontend cut over to Phase B (live Markets, Vault, Portfolio, Agents, round states, real quotes)
 - [x] RPC rate-limit hardening (multicall, fallback transport, backoff, stale notice)
 - [ ] Decision-quality page (what each proposal would have returned)
-- [x] Phase B v2 redeploy (per-proposal claims, seed release, status-quo no-trade), smoke rounds A and B, `keeper:run`
+- [x] Phase B v2 redeploy and its completed rounds (historical; see `contracts/deployments/demo-round.md`)
+- [x] Fresh Arc Testnet redeployment, new registry/oracle/tETH, 30 USDC reserve, 5 USDC vault, concentrated pool and CRE simulation receiver
 - [ ] AI agents as proposers; external LP shares (roadmap)

@@ -12,7 +12,6 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 
 address constant POOL_MANAGER = 0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A;
 address constant USDC = 0x3600000000000000000000000000000000000000;
-address constant TETH = 0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d;
 
 /// @title V4SmokeTest
 /// @notice Deploys the owner-restricted callback used by the viem-based Arc v4 smoke test.
@@ -24,9 +23,10 @@ contract V4SmokeTest is Script {
     function run() external {
         uint256 pk = vm.envUint("DEPLOYER_PK");
         address deployer = vm.addr(pk);
+        address tEth = vm.envAddress("NEW_TEST_ASSET");
 
         vm.startBroadcast(pk);
-        callback = new TestCallback(POOL_MANAGER, USDC, TETH, deployer);
+        callback = new TestCallback(POOL_MANAGER, USDC, tEth, deployer);
         vm.stopBroadcast();
         console2.log("V4 smoke callback:", address(callback));
     }
