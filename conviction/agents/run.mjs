@@ -37,6 +37,8 @@ import {
 import { FINAL_WINDOW_INTERVAL_SECONDS, nextAgentEvaluation } from "./scheduler.mjs";
 import { runIndependentLoops } from "./loops.mjs";
 import { loadRuntimeState, saveRuntimeState } from "./runtime-state.mjs";
+import { agentRuntimeLockPath } from "./runtime-lock.mjs";
+import { shouldWaitForNextRound } from "./round-wait.mjs";
 import { assertPrincipalWithinCap, assertProposalCountWithinCap, PER_AGENT_GAS_CAP_WEI } from "./safety.mjs";
 import { parseAbi, parseUnits } from "viem";
 import { PRESETS } from "../contracts/script/presets.mjs";
@@ -119,7 +121,7 @@ const agents = readAgents().filter((agent) => !agentFilter
   || agentFilter.includes(`${agent.type}s`));
 if (agents.length === 0) throw new Error("No configured agent matches --agents.");
 const statePath = resolve(dirname(scriptPath), ".runtime-state.json");
-const lockPath = resolve(dirname(scriptPath), ".runtime.lock");
+const lockPath = agentRuntimeLockPath;
 const state = dryRun ? { version: 1, rounds: {} } : loadRuntimeState(statePath);
 
 function saveState() {
@@ -132,8 +134,9 @@ const signerFor = (agent) => {
   return signers.get(agent.id);
 };
 
-// Every on-chain failure is fatal: the runtime stops and reports instead of retrying in a loop.
 async function submit(agent, call) {
+  const blocked = state.blockedAgents?.[agent.id];
+  if (blocked) throw Object.assign(new Error(`${agent.name} is paused after a previous transaction failure; inspect it before clearing the runtime state.`), { fatal: true, agentId: agent.id });
   try {
     const result = await signerFor(agent).executeContractCall(call);
     const transaction = { label: call.label, hash: result.hash, explorerUrl: `${EXPLORER_TX}${result.hash}` };
@@ -141,7 +144,13 @@ async function submit(agent, call) {
     return transaction;
   } catch (error) {
     const failure = new Error(`${agent.name} ${call.label} failed: ${safeErrorMessage(error)}`);
-    failure.fatal = true;
+    failure.agentId = agent.id;
+    if (!error?.safeToRetry) {
+      failure.fatal = true;
+      state.blockedAgents ??= {};
+      state.blockedAgents[agent.id] = { label: call.label, error: failure.message };
+      saveState();
+    }
     throw failure;
   }
 }
@@ -246,35 +255,45 @@ async function ensureForecasterDeposit(agent, roundCount) {
 
 async function redeemForecasters({ round, roundCount, roundState }) {
   const redeemed = roundState.redeemed ??= {};
+  let firstError;
   for (const agent of agents.filter(({ type }) => type === "forecaster")) {
-    if (redeemed[agent.id]) continue;
-    const deposited = await publicClient.readContract({
-      address: deployment.contracts.quantumRound,
-      abi: quantumAbi,
-      functionName: "deposits",
-      args: [roundCount, agent.address],
-    });
-    if (deposited === 0n) {
+    if (redeemed[agent.id] || state.blockedAgents?.[agent.id]) continue;
+    try {
+      const deposited = await publicClient.readContract({
+        address: deployment.contracts.quantumRound,
+        abi: quantumAbi,
+        functionName: "deposits",
+        args: [roundCount, agent.address],
+      });
+      if (deposited === 0n) {
+        redeemed[agent.id] = true;
+        continue;
+      }
+      const before = await publicClient.readContract({ address: deployment.contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [agent.address] });
+      const transaction = await submit(agent, buildRedeemCall({ roundContract: deployment.contracts.quantumRound, roundId: roundCount }));
+      const after = await publicClient.readContract({ address: deployment.contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [agent.address] });
       redeemed[agent.id] = true;
-      continue;
+      state.rounds[round.id] = roundState;
+      saveState();
+      log(jsonSafe({
+        type: "forecaster_redeem",
+        roundId: round.id,
+        agentId: agent.id,
+        agentName: agent.name,
+        deposited,
+        usdcBalanceBefore: before,
+        usdcBalanceAfter: after,
+        transaction,
+      }));
+    } catch (error) {
+      if (error.fatal && error.agentId === agent.id) {
+        log({ type: "agent_paused", agentId: agent.id, error: safeErrorMessage(error), note: "Inspect the transaction before clearing the agent's blocked state." });
+      } else {
+        firstError ??= error;
+      }
     }
-    const before = await publicClient.readContract({ address: deployment.contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [agent.address] });
-    const transaction = await submit(agent, buildRedeemCall({ roundContract: deployment.contracts.quantumRound, roundId: roundCount }));
-    const after = await publicClient.readContract({ address: deployment.contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [agent.address] });
-    redeemed[agent.id] = true;
-    state.rounds[round.id] = roundState;
-    saveState();
-    log(jsonSafe({
-      type: "forecaster_redeem",
-      roundId: round.id,
-      agentId: agent.id,
-      agentName: agent.name,
-      deposited,
-      usdcBalanceBefore: before,
-      usdcBalanceAfter: after,
-      transaction,
-    }));
   }
+  if (firstError) throw firstError;
 }
 
 function safeErrorMessage(error) {
@@ -292,6 +311,8 @@ function safeErrorMessage(error) {
   return message;
 }
 
+let waitAfterRound = null;
+let waitingLogged = false;
 async function observeRound({ agentFilter = () => true, handlesRedeem = true } = {}) {
   const [roundCount, block] = await Promise.all([
     publicClient.readContract({
@@ -302,9 +323,16 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
     publicClient.getBlock({ blockTag: "latest" }),
   ]);
   if (roundCount === 0n) {
-    log({ type: "idle", reason: "No round has been opened yet.", dryRun });
+    if (!waitingLogged) log({ type: "waiting_for_next_round", afterRound: "0", dryRun });
+    waitingLogged = true;
     return;
   }
+  if (shouldWaitForNextRound(roundCount, waitAfterRound)) {
+    if (!waitingLogged) log({ type: "waiting_for_next_round", afterRound: waitAfterRound.toString(), dryRun });
+    waitingLogged = true;
+    return;
+  }
+  waitingLogged = false;
   setActiveGasRound(roundCount);
   const result = await publicClient.readContract({
     address: deployment.contracts.quantumRound,
@@ -360,6 +388,7 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
   let changed = false;
   const evaluations = [];
   for (const agent of agents.filter(agentFilter)) {
+    if (state.blockedAgents?.[agent.id]) continue;
     const previous = roundState[agent.id] ?? {};
     const evaluation = nextAgentEvaluation(agent, round, chainTimestamp, previous, {
       periodicSeconds: preset?.forecasterPeriodicSeconds,
@@ -440,7 +469,11 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
     for (const { agent, evaluation, decision, resolved, task } of prepared) {
       const outcome = await task;
       if (outcome.error) {
-        firstError ??= outcome.error;
+        if (outcome.error.fatal && outcome.error.agentId === agent.id) {
+          log({ type: "agent_paused", agentId: agent.id, error: safeErrorMessage(outcome.error), note: "Inspect the transaction before clearing the agent's blocked state." });
+        } else {
+          firstError ??= outcome.error;
+        }
         continue;
       }
       const execution = outcome.value;
@@ -832,6 +865,13 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
 
 async function main() {
   await assertArcTestnet();
+  if (execute && !once && preset?.name === "demo3") {
+    waitAfterRound = await publicClient.readContract({
+      address: deployment.contracts.quantumRound,
+      abi: roundAbi,
+      functionName: "roundCount",
+    });
+  }
   log({
     type: "runtime_started",
     chain: deployment.chainName,
@@ -841,10 +881,21 @@ async function main() {
     agents: agents.map(({ id, name, type, address }) => ({ id, name, type, address })),
     signerBackend: execute ? (process.env.AGENT_SIGNER_BACKEND ?? "circle") : "not initialized in dry-run",
   });
+  if (waitAfterRound !== null) {
+    log({ type: "waiting_for_next_round", afterRound: waitAfterRound.toString(), dryRun });
+    waitingLogged = true;
+  }
+  for (const [agentId, blocked] of Object.entries(state.blockedAgents ?? {})) {
+    log({ type: "agent_paused", agentId, error: blocked.error, note: "Inspect the previous transaction before clearing the agent's blocked state." });
+  }
   let stopping = false;
   process.on("SIGINT", () => {
     stopping = true;
     log({ type: "shutdown_requested", reason: "SIGINT; finishing the current read cycle." });
+  });
+  process.on("SIGTERM", () => {
+    stopping = true;
+    log({ type: "shutdown_requested", reason: "SIGTERM; finishing the current read cycle." });
   });
   // Live mode runs proposers, Quant and Guardian as independent loops so one agent's pending
   // transaction never delays another. Dry-run keeps one sequential loop so the Guardian can reason over the Quant's plan.
@@ -876,8 +927,8 @@ async function main() {
       pollSeconds,
       once,
       isStopping: () => stopping,
-      requestStop: () => { stopping = true; },
       onError: ({ name, error, backoffSeconds }) => log({ type: "runtime_error", loop: name, error: safeErrorMessage(error), retryInSeconds: backoffSeconds, dryRun }),
+      onFatal: ({ name, error }) => log({ type: "agent_loop_paused", loop: name, error: safeErrorMessage(error), note: "Other loops continue. Inspect the failed transaction before restarting this agent." }),
     });
   } catch (error) {
     if (error.fatal) {

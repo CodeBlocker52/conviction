@@ -243,6 +243,7 @@ test("Circle signer gives up after four failed estimates and never submits", asy
       createContractExecutionTransaction: async () => { submissions += 1; },
     },
   });
-  await assert.rejects(signer.executeContractCall({ address: agent.address, signature: "approve(address,uint256)", args: [agent.address, 1n], label: "approval" }), /after 4 attempts; no transaction was submitted/);
+  await assert.rejects(signer.executeContractCall({ address: agent.address, signature: "approve(address,uint256)", args: [agent.address, 1n], label: "approval" }),
+    (error) => error.safeToRetry === true && /after 4 attempts; no transaction was submitted/.test(error.message));
   assert.equal(submissions, 0);
 });

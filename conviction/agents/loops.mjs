@@ -4,8 +4,8 @@ export async function runIndependentLoops({
   pollSeconds,
   once = false,
   isStopping,
-  requestStop,
   onError,
+  onFatal,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   const waitFor = async (durationMs) => {
@@ -22,8 +22,9 @@ export async function runIndependentLoops({
         failures = 0;
       } catch (error) {
         if (error.fatal) {
-          requestStop();
-          throw error;
+          onFatal({ name, error });
+          if (once) throw error;
+          return;
         }
         failures += 1;
         const backoffSeconds = Math.min(loopPoll * 2 ** (failures - 1), 120);

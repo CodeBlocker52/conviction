@@ -114,14 +114,14 @@ export class CircleAgentSigner {
           agentId: this.agent.id,
           label,
           attempt,
-          httpStatus: error?.response?.status ?? null,
-          errorCode: error?.response?.data?.code ?? null,
+          httpStatus: error?.response?.status ?? error?.status ?? null,
+          errorCode: error?.response?.data?.code ?? error?.code ?? null,
           message: String(error?.response?.data?.message ?? error?.message ?? "unknown").slice(0, 200),
         });
         if (attempt >= attempts) {
-          throw new Error(`Circle could not estimate the fee for ${label} after ${attempts} attempts; no transaction was submitted.`);
+          throw Object.assign(new Error(`Circle could not estimate the fee for ${label} after ${attempts} attempts; no transaction was submitted.`), { safeToRetry: true });
         }
-        await new Promise((resolve) => setTimeout(resolve, this.estimateRetryDelayMs));
+        await new Promise((resolve) => setTimeout(resolve, this.estimateRetryDelayMs * 2 ** (attempt - 1)));
       }
     }
     const mediumFee = estimate.data?.medium;

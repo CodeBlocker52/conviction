@@ -31,9 +31,11 @@ Judge round timeline: 8-minute trading window, proposals in the first 4 minutes,
 The automatic demo3 cycle has not yet been validated end-to-end live. Its 120 s trading window and 60 s TWAP leave a 60 s on-chain proposal window, with a 45 s evaluation. Proposers target the first 30 s; Quant checks every 10 s and Guardian every 3 s in the final window. Keeper polling is 1 s and it opens another round about 20 s after settlement.
 
 ```
-npm run keeper:run -- --preset demo3
 npm run agents:run -- --execute --preset demo3
+npm run keeper:run -- --preset demo3
 ```
+
+Start the agents first and wait for `runtime_started` and `waiting_for_next_round`, then start the keeper in a second terminal. The demo3 agent runtime waits for a new round after startup; it does not join an already-open round. If a round is unsettled, the keeper must finish it before opening the next one. Confirm Circle credentials work before starting: runtime startup alone does not authenticate the signer.
 
 The demo3 preset uses the judge-mode daily gas cap (3 USDC per agent) and keeps the existing 0.25 USDC per-round cap. Its 45 s horizon and 120 s trading window are preset-only; manual short values remain rejected.
 When using the keeper-managed cycle, do not also run `demo:open-round`; that command refuses to open while the keeper lock is active or any previous round remains unsettled or uncancelled.
@@ -58,7 +60,7 @@ When using the keeper-managed cycle, do not also run `demo:open-round`; that com
 ## If something fails
 
 1. **Stop the agents first** (Ctrl-C in the agents terminal). They release their lock on exit; if a crash left `agents/.runtime.lock`, delete that file before restarting.
-2. Do not retry in a loop. Run `npm run demo:preflight` to see which wallet, the reserve, the pool or the oracle is the problem.
+2. The runtime retries fee-estimation failures with backoff; a transaction with an uncertain outcome pauses the affected agent and must be inspected before clearing its blocked state. Run `npm run demo:preflight` to see which wallet, the reserve, the pool or the oracle is the problem.
    - Stale oracle: `npm run oracle:update`. Pool off: step 2 above. Low agent balance: top it up from the deployer.
 3. If a round is stuck open, the keeper still collapses and settles it at the right time; leave `keeper:run` running.
 4. If it cannot be recovered in time, **show a recorded round**: use the links above and [demo-round.md](contracts/deployments/demo-round.md), which has every transaction, price and reconciliation.

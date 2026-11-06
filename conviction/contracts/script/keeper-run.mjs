@@ -33,6 +33,7 @@ import { parseTwapWindowArg, resolveTwapWindow } from "./twap-window.mjs";
 import { parsePresetArg } from "./presets.mjs";
 import { resolveHorizonSeconds, resolveKeeperOpenIntervalSeconds, resolveTradingSeconds } from "./preset-timings.mjs";
 import { KEEPER_LOCK_PATH } from "./round-open-guard.mjs";
+import { agentRuntimeIsRunning } from "../../agents/runtime-lock.mjs";
 
 const { contracts } = deployment;
 const proposerCount = readAgents().filter((agent) => agent.type === "proposer").length;
@@ -203,6 +204,7 @@ process.on("exit", () => rmSync(KEEPER_LOCK_PATH, { force: true }));
 
 await assertArcTestnet();
 log(`Keeper ${keeper.address} running on ${deployment.chainName}; poll ${pollSeconds}s${openEverySeconds ? `, next round ${openEverySeconds}s after settlement` : ""}.`);
+if (!agentRuntimeIsRunning()) log("WARNING: No live agent runtime found. Start agents:run before the keeper so proposers can catch the next round.");
 while (!stopping) {
   try {
     await step();
