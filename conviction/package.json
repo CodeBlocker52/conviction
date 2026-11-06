@@ -12,6 +12,8 @@
     "pool:init": "node --env-file=.env contracts/script/initialize-pool.mjs",
     "demo:round": "node --env-file=.env contracts/script/demo-round.mjs",
     "demo:preflight": "node --env-file=.env contracts/script/demo-preflight.mjs",
+    "demo:live": "node --env-file=.env scripts/demo-live.mjs",
+    "demo:stop": "node --env-file=.env scripts/demo-stop.mjs",
     "demo:open-round": "node --env-file=.env contracts/script/demo-open-round.mjs",
     "demo:close-round": "node --env-file=.env contracts/script/demo-close-round.mjs",
     "keeper:run": "node --env-file=.env contracts/script/keeper-run.mjs",

@@ -16,7 +16,13 @@ const pages = [
   ["Portfolio", "/demo/portfolio"],
   ["Agents", "/demo/agents"],
 ];
-const rpcPattern = /rpc\.testnet\.arc\.io/;
+const rpcHosts = new Set([
+  "rpc.testnet.arc.io",
+  "rpc.testnet.arc.network",
+  "arc-testnet.drpc.org",
+  "arc-testnet-rpc.publicnode.com",
+]);
+const isArcRpc = (url) => rpcHosts.has(new URL(url).hostname);
 const problems = [];
 
 async function run(mode) {
@@ -25,7 +31,7 @@ async function run(mode) {
   let rpcRequests = 0;
   let rpcCalls = 0;
   page.on("request", (request) => {
-    if (request.method() === "POST" && rpcPattern.test(request.url())) {
+    if (request.method() === "POST" && isArcRpc(request.url())) {
       rpcRequests += 1;
       try {
         const body = JSON.parse(request.postData() ?? "null");
@@ -38,7 +44,7 @@ async function run(mode) {
   });
   page.on("pageerror", (error) => problems.push(`[${mode}] page error: ${error.message}`));
   page.on("response", async (response) => {
-    if (rpcPattern.test(response.url()) && response.status() === 429) problems.push(`[${mode}] RPC 429 from ${response.url()}`);
+    if (isArcRpc(response.url()) && response.status() === 429) problems.push(`[${mode}] RPC 429 from ${response.url()}`);
   });
 
   await page.goto(`${baseUrl}/demo`, { waitUntil: "networkidle" });

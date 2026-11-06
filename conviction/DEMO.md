@@ -28,6 +28,10 @@ Judge round timeline: 8-minute trading window, proposals in the first 4 minutes,
 
 ## Demo3 quick cycle
 
+For an integrated terminal, run `npm run demo:live -- --preset demo3` (or `judge` / `full`). The launcher checks locks and preflight, starts agents before the keeper, prints status, and writes full logs under `logs/`. Add `--one-round` to stop after the next round settles and forecaster deposits are redeemed. Ctrl+C or `npm run demo:stop` stops the services. The `full` preset still does not automatically open a new round.
+
+Scripts use `ARC_RPC_URL` as the primary and a comma-separated `ARC_TESTNET_RPC_FALLBACK` list on authorization failures, HTTP 429 or read timeouts. Do not put secret RPC URLs in public frontend settings or logs. If a transaction submission times out, inspect its outcome before retrying.
+
 The automatic demo3 cycle has not yet been validated end-to-end live. Its 120 s trading window and 60 s TWAP leave a 60 s on-chain proposal window, with a 45 s evaluation. Proposers target the first 30 s; Quant checks every 10 s and Guardian every 3 s in the final window. Keeper polling is 1 s and it opens another round about 20 s after settlement.
 
 ```
@@ -36,6 +40,10 @@ npm run keeper:run -- --preset demo3
 ```
 
 Start the agents first and wait for `runtime_started` and `waiting_for_next_round`, then start the keeper in a second terminal. The demo3 agent runtime waits for a new round after startup; it does not join an already-open round. If a round is unsettled, the keeper must finish it before opening the next one. Confirm Circle credentials work before starting: runtime startup alone does not authenticate the signer.
+
+After separately authorizing idle registration and token approvals, append `--prepare-proposers` to the agents command and wait for `proposer_prepared` for each proposer before starting the keeper. The option permits registration and a 15 USDC bond allowance per proposer (override with `--bond-allowance-usdc`, between 1 and 15). This is an allowance, not a transfer; each proposal's 1 USDC bond cap remains unchanged. Existing larger allowances are not reduced. Without this opt-in, no idle registration or approval is sent. The runtime checks for an open round before each preparation transaction, but coordinate startup to avoid a keeper opening concurrently.
+
+The demo3 runtime warms its Coinbase candle cache in the background. Proposers can immediately use the last successful fetch for up to five minutes, including when a refresh fails; a missing or older cache requires a fresh fetch and fails explicitly if unavailable. Set a distinct `ARC_TESTNET_RPC_FALLBACK` privately in `.env` to enable the existing fallback after repeated primary HTTP 429 responses. Backoff and network delays can still exceed the proposal window.
 
 The demo3 preset uses the judge-mode daily gas cap (3 USDC per agent) and keeps the existing 0.25 USDC per-round cap. Its 45 s horizon and 120 s trading window are preset-only; manual short values remain rejected.
 When using the keeper-managed cycle, do not also run `demo:open-round`; that command refuses to open while the keeper lock is active or any previous round remains unsettled or uncancelled.

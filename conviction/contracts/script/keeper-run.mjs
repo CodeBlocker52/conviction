@@ -43,6 +43,8 @@ const opt = (name, fallback) => {
   return i >= 0 ? Number(args[i + 1]) : fallback;
 };
 const preset = parsePresetArg(args);
+const stopAfterRoundIndex = args.indexOf("--stop-after-round");
+const stopAfterRound = stopAfterRoundIndex < 0 ? null : BigInt(args[stopAfterRoundIndex + 1]);
 const pollSeconds = opt("poll", preset?.name === "demo3" ? 1 : 15);
 // Explicit flags override the preset; without a preset the original defaults apply.
 const openEverySeconds = resolveKeeperOpenIntervalSeconds({ args, preset });
@@ -107,6 +109,14 @@ async function freshOracle() {
 
 async function step() {
   const roundCount = await publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "roundCount" });
+  if (stopAfterRound !== null && roundCount >= stopAfterRound) {
+    const target = await readRound(stopAfterRound);
+    if (target[10] || target[13]) {
+      log(`Round ${stopAfterRound} finished; stopping before opening another round.`);
+      stopping = true;
+      return;
+    }
+  }
   const now = BigInt((await publicClient.getBlock({ blockTag: "latest" })).timestamp);
 
   if (roundCount > 0n) {

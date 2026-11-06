@@ -39,6 +39,8 @@ import { runIndependentLoops } from "./loops.mjs";
 import { loadRuntimeState, saveRuntimeState } from "./runtime-state.mjs";
 import { agentRuntimeLockPath } from "./runtime-lock.mjs";
 import { shouldWaitForNextRound } from "./round-wait.mjs";
+import { prepareProposer, readProposerReadiness } from "./proposer-preparation.mjs";
+import { createCandleCache } from "./candle-cache.mjs";
 import { assertPrincipalWithinCap, assertProposalCountWithinCap, PER_AGENT_GAS_CAP_WEI } from "./safety.mjs";
 import { parseAbi, parseUnits } from "viem";
 import { PRESETS } from "../contracts/script/presets.mjs";
@@ -82,14 +84,23 @@ const args = process.argv.slice(2);
 let execute = false;
 let dryRunRequested = false;
 let once = false;
+let waitNextRound = false;
 let agentFilter = null;
 let pollSeconds = 10;
 let presetName;
+let prepareProposers = false;
+let bondAllowanceUsdc = "15";
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
   if (arg === "--execute") execute = true;
   else if (arg === "--dry-run") dryRunRequested = true;
   else if (arg === "--once") once = true;
+  else if (arg === "--wait-next-round") waitNextRound = true;
+  else if (arg === "--prepare-proposers") prepareProposers = true;
+  else if (arg === "--bond-allowance-usdc") {
+    bondAllowanceUsdc = args[++index];
+    if (!bondAllowanceUsdc || !/^\d+(\.\d{1,6})?$/.test(bondAllowanceUsdc)) throw new Error("--bond-allowance-usdc needs a nonnegative amount with at most 6 decimals.");
+  }
   else if (arg === "--agents") {
     const value = args[index + 1];
     if (!value) throw new Error("--agents needs a comma-separated list of agent names, proposers or forecasters.");
@@ -114,6 +125,13 @@ if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
   throw new Error("--poll must be a whole number between 1 and 300 seconds.");
 }
 if (dryRunRequested && execute) throw new Error("Choose either --dry-run or --execute, not both.");
+if (prepareProposers && (!execute || once || presetName !== "demo3")) {
+  throw new Error("--prepare-proposers requires --execute --preset demo3 without --once.");
+}
+const bondAllowance = parseUnits(bondAllowanceUsdc, 6);
+if (prepareProposers && (bondAllowance < 1_000_000n || bondAllowance > 15_000_000n)) {
+  throw new Error("The demo3 bond allowance must be between 1 and 15 USDC per proposer.");
+}
 
 const log = (event) => writeAgentEvent(event);
 const agents = readAgents().filter((agent) => !agentFilter
@@ -129,6 +147,7 @@ function saveState() {
 }
 
 const signers = new Map();
+const preparedProposers = new Set();
 const signerFor = (agent) => {
   if (!signers.has(agent.id)) signers.set(agent.id, createAgentSigner(agent, process.env, log, { gasCapWei: dailyGasCapWei }));
   return signers.get(agent.id);
@@ -175,7 +194,7 @@ async function ensureApproval(agent, spender, amount, label) {
   return transactions;
 }
 
-async function executeProposal({ agent, round, roundCount, resolved, existingProposals }) {
+async function executeProposal({ agent, round, roundCount, resolved, existingProposals, readiness }) {
   const owner = agent.address.toLowerCase();
   if (existingProposals.some((proposal) => String(proposal[1]).toLowerCase() === owner)) {
     return { executed: false, note: "This agent already has a proposal in the round; not proposing again.", transactions: [] };
@@ -192,12 +211,13 @@ async function executeProposal({ agent, round, roundCount, resolved, existingPro
     };
   }
   const transactions = [];
-  const info = await publicClient.readContract({
-    address: deployment.contracts.proposerRegistry,
-    abi: registryAbi,
-    functionName: "agents",
-    args: [agent.address],
-  });
+  const info = readiness.registryInfo;
+  const bond = readiness.bond;
+  assertPrincipalWithinCap("proposer", bond);
+  if (prepareProposers && (info[1] === "0x0000000000000000000000000000000000000000" || !info[2] || readiness.allowance < bond)) {
+    preparedProposers.delete(agent.id);
+    throw new Error(`${agent.name} is not prepared; registration and bond allowance must be completed while idle.`);
+  }
   if (info[1] === "0x0000000000000000000000000000000000000000") {
     transactions.push(await submit(agent, {
       address: deployment.contracts.proposerRegistry,
@@ -208,13 +228,7 @@ async function executeProposal({ agent, round, roundCount, resolved, existingPro
   } else if (!info[2]) {
     throw Object.assign(new Error(`${agent.name} is registered but deactivated.`), { fatal: true });
   }
-  const bond = await publicClient.readContract({
-    address: deployment.contracts.quantumRound,
-    abi: quantumAbi,
-    functionName: "DEFAULT_BOND",
-  });
-  assertPrincipalWithinCap("proposer", bond);
-  transactions.push(...await ensureApproval(agent, deployment.contracts.proposerRegistry, bond, "approve bond"));
+  if (readiness.allowance < bond) transactions.push(...await ensureApproval(agent, deployment.contracts.proposerRegistry, bond, "approve bond"));
   const proposalBlock = await publicClient.getBlock({ blockTag: "latest" });
   if (Number(proposalBlock.timestamp) >= proposalCutoff) {
     return {
@@ -225,6 +239,7 @@ async function executeProposal({ agent, round, roundCount, resolved, existingPro
       transactions,
     };
   }
+  log({ type: "proposer_submission_started", roundId: round.id, agentId: agent.id, chainTimestamp: Number(proposalBlock.timestamp) });
   transactions.push(await submit(agent, {
     address: deployment.contracts.quantumRound,
     signature: "propose(uint256,(uint16),string)",
@@ -232,6 +247,45 @@ async function executeProposal({ agent, round, roundCount, resolved, existingPro
     label: `propose ${resolved.tEthBps} bps`,
   }));
   return { executed: true, attemptedAt: Number(proposalBlock.timestamp), transactions };
+}
+
+async function roundIsIdle() {
+  const count = await publicClient.readContract({ address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "roundCount" });
+  if (count === 0n) return true;
+  const round = await publicClient.readContract({ address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "rounds", args: [count] });
+  return round[10] || round[13];
+}
+
+async function prepareIdleProposers() {
+  const pending = agents.filter((agent) => agent.type === "proposer" && !preparedProposers.has(agent.id) && !state.blockedAgents?.[agent.id]);
+  if (pending.length === 0 || !await roundIsIdle()) return;
+  const readiness = await readProposerReadiness({
+    client: publicClient, agents: pending,
+    round: deployment.contracts.quantumRound, registry: deployment.contracts.proposerRegistry, usdc: deployment.contracts.usdc,
+    roundAbi: quantumAbi, registryAbi, usdcAbi,
+  });
+  const results = await Promise.allSettled(pending.map(async (agent) => {
+    log({ type: "proposer_preparation_started", agentId: agent.id, allowanceUsdc: bondAllowanceUsdc });
+    await prepareProposer({
+      agent, readiness: readiness.get(agent.id), targetAllowance: bondAllowance,
+      registry: deployment.contracts.proposerRegistry, usdc: deployment.contracts.usdc,
+      submit,
+      assertIdle: async () => {
+        if (!await roundIsIdle()) throw new Error("A round is open; proposer preparation will resume when it settles.");
+      },
+      assertBond: (amount) => assertPrincipalWithinCap("proposer", amount),
+    });
+    preparedProposers.add(agent.id);
+    log({ type: "proposer_prepared", agentId: agent.id, allowanceUsdc: bondAllowanceUsdc });
+  }));
+  let firstError;
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    if (result.status !== "rejected") continue;
+    log({ type: "proposer_preparation_failed", agentId: pending[index].id, error: safeErrorMessage(result.reason) });
+    if (!result.reason?.fatal) firstError ??= result.reason;
+  }
+  if (firstError) throw firstError;
 }
 
 async function ensureForecasterDeposit(agent, roundCount) {
@@ -303,6 +357,8 @@ function safeErrorMessage(error) {
     "CIRCLE_ENTITY_SECRET",
     "DEPLOYER_PK",
     "KEEPER_PK",
+    "ARC_RPC_URL",
+    "ARC_TESTNET_RPC",
     ...Object.keys(process.env).filter((name) => name.endsWith("_PRIVATE_KEY")),
   ]) {
     const secret = process.env[key];
@@ -313,7 +369,14 @@ function safeErrorMessage(error) {
 
 let waitAfterRound = null;
 let waitingLogged = false;
+let lastObservedProposerRound = null;
+let lastProposerPollLogAt = 0;
 async function observeRound({ agentFilter = () => true, handlesRedeem = true } = {}) {
+  const observesProposers = agents.some((agent) => agent.type === "proposer" && agentFilter(agent));
+  if (observesProposers && Date.now() - lastProposerPollLogAt >= 15_000) {
+    log({ type: "proposer_poll_started" });
+    lastProposerPollLogAt = Date.now();
+  }
   const [roundCount, block] = await Promise.all([
     publicClient.readContract({
       address: deployment.contracts.quantumRound,
@@ -352,6 +415,10 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
     settled: result[10],
     cancelled: result[13],
   };
+  if (observesProposers && lastObservedProposerRound !== round.id) {
+    log({ type: "proposer_round_observed", roundId: round.id, chainTimestamp: Number(block.timestamp), proposalCutoff: Number(round.tradingEnd) - round.twapWindow });
+    lastObservedProposerRound = round.id;
+  }
   assertProposalCountWithinCap(round.proposalCount);
   if (round.settled || round.cancelled) {
     if (execute && round.settled && handlesRedeem) {
@@ -370,16 +437,15 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
 
   const chainTimestamp = Number(block.timestamp);
   const roundState = state.rounds[round.id] ??= {};
-  const existingProposals = await Promise.all(
-    Array.from({ length: round.proposalCount }, (_, proposalIndex) =>
-      publicClient.readContract({
+  const existingProposals = round.proposalCount === 0 ? [] : await publicClient.multicall({
+    allowFailure: false,
+    contracts: Array.from({ length: round.proposalCount }, (_, proposalIndex) => ({
         address: deployment.contracts.quantumRound,
         abi: roundAbi,
         functionName: "proposals",
         args: [roundCount, BigInt(proposalIndex)],
-      }),
-    ),
-  );
+    })),
+  });
   const consideredProposals = existingProposals.map((proposal, proposalIndex) => ({
     id: proposalIndex,
     tEthBps: Number(proposal[2]),
@@ -420,9 +486,22 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
   }
   const activeProposerEvaluations = proposerEvaluations.filter(({ evaluation }) => evaluation.cadence !== "missed-window");
   if (activeProposerEvaluations.length > 0) {
-    // Candles come from the shared cache the forecasters keep warm; the three proposers then submit in
-    // parallel so a slow RPC or Coinbase cannot push later agents past the proposal cutoff.
-    const candles = await forecasterCandles({ inFinalWindow: true });
+    for (const { agent } of activeProposerEvaluations) log({ type: "proposer_decision_started", roundId: round.id, agentId: agent.id });
+    log({ type: "proposer_candles_started", roundId: round.id });
+    const candles = await forecasterCandles({ freshForMs: 300_000, maxFallbackAgeMs: 300_000 });
+    log({ type: "proposer_candles_ready", roundId: round.id });
+    if (execute) log({ type: "proposer_readiness_started", roundId: round.id });
+    const readiness = execute ? await readProposerReadiness({
+      client: publicClient,
+      agents: activeProposerEvaluations.map(({ agent }) => agent),
+      round: deployment.contracts.quantumRound,
+      registry: deployment.contracts.proposerRegistry,
+      usdc: deployment.contracts.usdc,
+      roundAbi: quantumAbi,
+      registryAbi,
+      usdcAbi,
+    }) : null;
+    if (execute) log({ type: "proposer_readiness_ready", roundId: round.id });
     const momentumDecision = calculateMomentumProposal(candles);
     let headlines;
     let rssError;
@@ -459,7 +538,7 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
         });
       }
       const task = execute && !resolved.skip
-        ? executeProposal({ agent, round, roundCount, resolved, existingProposals })
+        ? executeProposal({ agent, round, roundCount, resolved, existingProposals, readiness: readiness.get(agent.id) })
           .then((value) => ({ value }), (error) => ({ error }))
         : Promise.resolve({ value: { executed: false, transactions: [] } });
       prepared.push({ agent, evaluation, decision, resolved, task });
@@ -478,13 +557,14 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
       }
       const execution = outcome.value;
       if (execution.executed) {
-        const proposals = await Promise.all(
-          Array.from({ length: Number((await publicClient.readContract({
+        const proposals = await publicClient.multicall({
+          allowFailure: false,
+          contracts: Array.from({ length: Number((await publicClient.readContract({
             address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "rounds", args: [roundCount],
-          }))[7]) }, (_, index) => publicClient.readContract({
+          }))[7]) }, (_, index) => ({
             address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "proposals", args: [roundCount, BigInt(index)],
           })),
-        );
+        });
         const index = proposals.findIndex((proposal) => String(proposal[1]).toLowerCase() === agent.address.toLowerCase());
         if (index >= 0) {
           existingProposals.push(proposals[index]);
@@ -559,28 +639,18 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
   }
 }
 
-let lastGoodCandles = null;
 const MAX_CACHED_CANDLE_AGE_MS = 10 * 60_000;
 const FINAL_WINDOW_CACHE_MS = 120_000;
 
 // Forecasters reuse the last good candles for up to 10 minutes if Coinbase is briefly stale, so a
 // transient outage cannot silence them inside the final TWAP window. Inside that window a candle set
 // under 2 minutes old is used without refetching, because every second counts. Drift is shrunk, so this is safe.
-async function forecasterCandles({ inFinalWindow = false } = {}) {
-  if (inFinalWindow && lastGoodCandles && Date.now() - lastGoodCandles.at <= FINAL_WINDOW_CACHE_MS) {
-    return lastGoodCandles.candles;
-  }
-  try {
-    const candles = await fetchRecentEthCandles();
-    lastGoodCandles = { candles, at: Date.now() };
-    return candles;
-  } catch (error) {
-    if (lastGoodCandles && Date.now() - lastGoodCandles.at <= MAX_CACHED_CANDLE_AGE_MS) {
-      log({ type: "candles_cached", reason: safeErrorMessage(error), ageSeconds: Math.round((Date.now() - lastGoodCandles.at) / 1000) });
-      return lastGoodCandles.candles;
-    }
-    throw error;
-  }
+const cachedCandles = createCandleCache({
+  fetchCandles: fetchRecentEthCandles,
+  onFallback: ({ error, ageMs }) => log({ type: "candles_cached", reason: safeErrorMessage(error), ageSeconds: Math.round(ageMs / 1000) }),
+});
+async function forecasterCandles({ inFinalWindow = false, freshForMs = inFinalWindow ? FINAL_WINDOW_CACHE_MS : 0, maxFallbackAgeMs = MAX_CACHED_CANDLE_AGE_MS } = {}) {
+  return cachedCandles({ freshForMs, maxFallbackAgeMs });
 }
 
 const fairCache = createFairCache();
@@ -865,7 +935,7 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
 
 async function main() {
   await assertArcTestnet();
-  if (execute && !once && preset?.name === "demo3") {
+  if (execute && !once && (preset?.name === "demo3" || waitNextRound)) {
     waitAfterRound = await publicClient.readContract({
       address: deployment.contracts.quantumRound,
       abi: roundAbi,
@@ -902,6 +972,12 @@ async function main() {
   const hasProposerLoop = agents.some((agent) => agent.type !== "forecaster");
   const loops = execute
     ? [
+      ...(preset?.name === "demo3" && !once
+        ? [{ name: "candle-cache", pollSeconds: 60, tick: () => forecasterCandles({ inFinalWindow: true, maxFallbackAgeMs: 300_000 }) }]
+        : []),
+      ...(prepareProposers
+        ? [{ name: "proposer-preparation", pollSeconds: 10, tick: prepareIdleProposers }]
+        : []),
       ...(hasProposerLoop
         ? [{
           name: "proposers",

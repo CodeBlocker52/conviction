@@ -13,4 +13,5 @@ pnpm-debug.log*
 agents/logs/
 agents/.runtime-state.json*
 agents/.runtime.lock
+logs/
 agents/agents.json.tmp

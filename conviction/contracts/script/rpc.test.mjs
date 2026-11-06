@@ -1,70 +1,70 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { create429RetryFetch } from "./rpc.mjs";
+import { create429RetryFetch, withRpcAffinity } from "./rpc.mjs";
 
-test("429 retry uses the configured exponential backoff before succeeding", async () => {
-  const delays = [];
-  let calls = 0;
-  const fetchWithRetry = create429RetryFetch("https://primary.example", "", {
-    fetchImpl: async () => {
-      calls += 1;
-      return new Response(null, { status: calls < 3 ? 429 : 200 });
-    },
-    sleep: async (delay) => delays.push(delay),
-    warn: () => {},
+const read = { body: JSON.stringify({ method: "eth_blockNumber" }) };
+test("rotates immediately on 429, prefers success and retries primary after cooldown", async () => {
+  let time = 0;
+  const calls = [];
+  const fetch = create429RetryFetch("primary", "second,third", {
+    now: () => time, cooldownMs: 100, warn: () => {},
+    fetchImpl: async (url) => { calls.push(url); return new Response(null, { status: url === "primary" && time < 100 ? 429 : 200 }); },
   });
-
-  const response = await fetchWithRetry("ignored", {});
-  assert.equal(response.status, 200);
-  assert.equal(calls, 3);
-  assert.deepEqual(delays, [2_000, 4_000]);
+  await fetch("", read);
+  await fetch("", read);
+  time = 100;
+  await fetch("", read);
+  assert.deepEqual(calls, ["primary", "second", "second", "primary"]);
 });
 
-test("repeated primary 429 responses switch to the fallback after all backoff delays", async () => {
-  const delays = [];
-  const requests = [];
-  const fetchWithRetry = create429RetryFetch("https://primary.example", "https://fallback.example", {
-    fetchImpl: async (url) => {
-      requests.push(url);
-      return new Response(null, { status: url.includes("primary") ? 429 : 200 });
-    },
-    sleep: async (delay) => delays.push(delay),
+test("read timeouts rotate but ambiguous broadcast timeouts do not", async () => {
+  const calls = [];
+  const fetch = create429RetryFetch("primary", "secondary", {
     warn: () => {},
+    fetchImpl: async (url) => { calls.push(url); if (url === "primary") throw new DOMException("timed out", "TimeoutError"); return new Response(null, { status: 200 }); },
   });
-
-  const response = await fetchWithRetry("ignored", {});
-  assert.equal(response.status, 200);
-  assert.deepEqual(delays, [2_000, 4_000, 8_000, 16_000, 32_000]);
-  assert.equal(requests.filter((url) => url.includes("primary")).length, 6);
-  assert.equal(requests.at(-1), "https://fallback.example");
+  await fetch("", read);
+  assert.deepEqual(calls, ["primary", "secondary"]);
+  const broadcast = create429RetryFetch("primary", "secondary", {
+    warn: () => {},
+    fetchImpl: async (url) => { calls.push(url); throw new DOMException("timed out", "TimeoutError"); },
+  });
+  await assert.rejects(broadcast("", { body: JSON.stringify({ method: "eth_sendRawTransaction" }) }), /timed out/);
+  assert.equal(calls.at(-1), "primary");
 });
 
-test("repeated 429 responses fail explicitly when no fallback is configured", async () => {
+test("all limited endpoints back off and fail explicitly", async () => {
   const delays = [];
-  const fetchWithRetry = create429RetryFetch("https://primary.example", "", {
+  const fetch = create429RetryFetch("primary", "second", {
+    warn: () => {}, sleep: async (delay) => delays.push(delay),
     fetchImpl: async () => new Response(null, { status: 429 }),
-    sleep: async (delay) => delays.push(delay),
-    warn: () => {},
   });
-
-  await assert.rejects(fetchWithRetry("ignored", {}), /no distinct fallback RPC is configured/);
-  assert.deepEqual(delays, [2_000, 4_000, 8_000, 16_000, 32_000]);
+  await assert.rejects(fetch("", read), /unavailable/);
+  assert.deepEqual(delays, [2000, 4000, 8000, 16000, 32000]);
 });
 
-test("concurrent Arc requests are serialized", async () => {
-  let activeRequests = 0;
-  let peakRequests = 0;
-  const fetchWithRetry = create429RetryFetch("https://primary.example", "", {
-    fetchImpl: async () => {
-      activeRequests += 1;
-      peakRequests = Math.max(peakRequests, activeRequests);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      activeRequests -= 1;
-      return new Response(null, { status: 200 });
-    },
-    warn: () => {},
+test("authorization errors rotate without exposing URLs", async () => {
+  const warnings = [];
+  const fetch = create429RetryFetch("primary-secret", "fallback-secret", {
+    warn: (line) => warnings.push(line),
+    fetchImpl: async (url) => new Response(null, { status: url === "primary-secret" ? 401 : 200 }),
   });
+  assert.equal((await fetch("", read)).status, 200);
+  assert.ok(warnings.every((line) => !line.includes("secret")));
+});
 
-  await Promise.all([fetchWithRetry("ignored", {}), fetchWithRetry("ignored", {}), fetchWithRetry("ignored", {})]);
-  assert.equal(peakRequests, 1);
+test("transaction affinity pins reads and broadcast to the same endpoint", async () => {
+  const calls = [];
+  const fetch = create429RetryFetch("primary", "secondary", {
+    warn: () => {},
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return new Response(null, { status: url === "primary" ? 401 : 200 });
+    },
+  });
+  await withRpcAffinity(async () => {
+    await fetch("", read);
+    await fetch("", { body: JSON.stringify({ method: "eth_sendRawTransaction" }) });
+  });
+  assert.deepEqual(calls, ["primary", "secondary", "secondary"]);
 });

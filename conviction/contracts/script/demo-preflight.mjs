@@ -65,7 +65,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   if (count > 0n) {
     const last = await publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "rounds", args: [count] });
-    if (!last[10] && !last[13]) problems.push(`Round ${count} is still open; let keeper:run settle it first.`);
+    if (!last[10] && !last[13]) {
+      const message = `Round ${count} is still open; let keeper:run settle it first.`;
+      if (process.argv.includes("--allow-open-round")) console.log(`WARNING: ${message}`);
+      else problems.push(message);
+    }
   }
   console.log(`ANTHROPIC_API_KEY set: ${process.env.ANTHROPIC_API_KEY ? "yes" : "no"}${process.env.ANTHROPIC_API_KEY ? "" : " (News will use its fallback)"}`);
 
