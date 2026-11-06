@@ -8,6 +8,7 @@ import {
   roundAbi,
 } from "../contracts/script/demo-round-common.mjs";
 import { readAgents } from "./config.mjs";
+import { readProposalTokenAddresses, readTokenHoldings } from "./chain-reads.mjs";
 import { setActiveGasRound, writeAgentEvent } from "./logging.mjs";
 import {
   applySlippage,
@@ -678,18 +679,14 @@ async function proposalTokenAddresses(roundCount, proposalId) {
   const key = `${roundCount}:${proposalId}`;
   if (tokenAddressCache.has(key)) return tokenAddressCache.get(key);
   const tokens = await publicClient.readContract({ address: deployment.contracts.quantumRound, abi: quantumAbi, functionName: "proposalTokens" });
-  const read = (functionName) => publicClient.readContract({ address: tokens, abi: proposalTokensAbi, functionName, args: [roundCount, BigInt(proposalId)] });
-  const [credit, long, short] = await Promise.all([read("creditToken"), read("longToken"), read("shortToken")]);
-  const addresses = { credit, long, short };
+  const addresses = await readProposalTokenAddresses(publicClient, tokens, proposalTokensAbi, roundCount, proposalId);
   tokenAddressCache.set(key, addresses);
   return addresses;
 }
 
 async function readHoldings(agent, roundCount, proposalId) {
   const addresses = await proposalTokenAddresses(roundCount, proposalId);
-  const balance = (address) => publicClient.readContract({ address, abi: erc20BalanceAbi, functionName: "balanceOf", args: [agent.address] });
-  const [credit, long, short] = await Promise.all([balance(addresses.credit), balance(addresses.long), balance(addresses.short)]);
-  return { credit, long, short };
+  return readTokenHoldings(publicClient, addresses, erc20BalanceAbi, agent.address);
 }
 
 // Claims credits in every proposal up to the per-proposal cap right after the deposit, so a later trade is

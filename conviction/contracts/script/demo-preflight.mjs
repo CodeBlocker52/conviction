@@ -16,40 +16,61 @@ export function roundsAffordable(balanceUsdc, role, gasPerRound) {
   return Math.max(0, Math.floor((balanceUsdc - headroom) / gasPerRound));
 }
 
+export async function readPreflightContracts(client, contracts, agents, admin, keeper) {
+  const balances = [...agents.map((agent) => agent.address), admin, keeper].map((address) => ({
+    address: contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [address],
+  }));
+  const results = await client.multicall({
+    contracts: [
+      ...balances,
+      { address: contracts.quantumRound, abi: roundAbi, functionName: "protocolLiquiditySeed" },
+      { address: contracts.quantumRound, abi: roundAbi, functionName: "initialLiquidityPerProposal" },
+      { address: contracts.quantumRound, abi: roundAbi, functionName: "roundCount" },
+      { address: contracts.priceOracle, abi: oracleAbi, functionName: "latestPrice" },
+    ],
+    allowFailure: false,
+    batchSize: 64_000,
+  });
+  const offset = balances.length;
+  return {
+    balances: results.slice(0, offset),
+    reserve: results[offset],
+    perProposal: results[offset + 1],
+    count: results[offset + 2],
+    oracle: results[offset + 3],
+  };
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { contracts } = deployment;
   const problems = [];
-  const balance = async (address) => Number(await publicClient.readContract({ address: contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [address] })) / 1e6;
   const agents = readAgents();
+  const data = await readPreflightContracts(publicClient, contracts, agents, deployment.admin, deployment.keeper);
 
   console.log("Agents (USDC balance, judge rounds affordable)");
-  for (const agent of agents) {
+  for (const [index, agent] of agents.entries()) {
     const role = agent.type === "proposer" ? "proposer" : "forecaster";
     const gas = agent.name === "Quant" ? PER_ROUND_GAS.quant : agent.name === "Guardian" ? PER_ROUND_GAS.guardian : PER_ROUND_GAS.proposer;
-    const bal = await balance(agent.address);
+    const bal = Number(data.balances[index]) / 1e6;
     const rounds = roundsAffordable(bal, role, gas);
     console.log(`  ${agent.name.padEnd(15)} ${bal.toFixed(4).padStart(9)} USDC  ~${rounds} rounds`);
     if (rounds < 3) problems.push(`Top up ${agent.name} (only ~${rounds} rounds affordable).`);
   }
 
-  const deployerBal = await balance(deployment.admin);
-  const keeperBal = await balance(deployment.keeper);
+  const deployerBal = Number(data.balances[agents.length]) / 1e6;
+  const keeperBal = Number(data.balances[agents.length + 1]) / 1e6;
   console.log(`Deployer ${deployerBal.toFixed(4)} USDC, keeper ${keeperBal.toFixed(4)} USDC`);
   if (keeperBal < 1) problems.push("Keeper balance is below 1 USDC; top it up for gas.");
 
-  const [reserve, perProposal] = await Promise.all([
-    publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "protocolLiquiditySeed" }),
-    publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "initialLiquidityPerProposal" }),
-  ]);
+  const { reserve, perProposal, count } = data;
   const proposerCount = agents.filter((agent) => agent.type === "proposer").length;
   const needed = requiredProtocolSeed(perProposal, proposerCount);
   console.log(`Protocol reserve ${usdc(reserve)} USDC; a round needs ${usdc(needed)} USDC`);
   if (reserve < needed) problems.push("Reserve is below one round's need: addProtocolLiquiditySeed from the deployer.");
 
-  const [price, pool, count] = await Promise.all([
+  const [price, pool] = await Promise.all([
     fetchCoinbasePrice(),
     readPool(),
-    publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "roundCount" }),
   ]);
   const oracle = Number(price.priceUsdc) / 1e6;
   const spot = usdcPerTEthFromSqrt(pool.sqrtPriceX96);
@@ -57,7 +78,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log(`Pool ${spot.toFixed(2)} vs Coinbase ${oracle.toFixed(2)}: ${(deviation * 100).toFixed(3)}% off`);
   if (deviation > MAX_POOL_DEVIATION) problems.push("Pool is more than 0.5% off: npm run pool:recenter -- --max-new-usdc 1 --execute --yes");
 
-  const [, , updatedAt] = await publicClient.readContract({ address: contracts.priceOracle, abi: oracleAbi, functionName: "latestPrice" });
+  const [, , updatedAt] = data.oracle;
   const block = await publicClient.getBlock();
   const age = Number(block.timestamp) - Number(updatedAt);
   console.log(`On-chain oracle age ${age}s (the keeper's watcher refreshes it every 60 s)`);
