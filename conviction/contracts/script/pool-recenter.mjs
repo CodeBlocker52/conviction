@@ -213,7 +213,12 @@ const capTEth = needed.amount1 * 1_005n / 1_000n + 1n;
 
 // Alignment swap uses only the full-range dust liquidity, so it is cheap after the managed position is removed.
 let align = null;
-if (BigInt(deviationBps) > alignToleranceBps && fullRangeLiquidity > 0n) {
+if (BigInt(deviationBps) > alignToleranceBps && fullRangeLiquidity === 0n && pool.liquidity === 0n) {
+  // Empty pool: a dust swap against the price limit moves the price for free.
+  align = pool.sqrtPriceX96 > oracleSqrt
+    ? { zeroForOne: true, amountIn: 1_000n, token: "USDC" }
+    : { zeroForOne: false, amountIn: 1_000n, token: "tETH" };
+} else if (BigInt(deviationBps) > alignToleranceBps && fullRangeLiquidity > 0n) {
   if (pool.sqrtPriceX96 > oracleSqrt) {
     // Pool tETH too cheap in USDC terms is sqrt price above target: USDC in lowers sqrt price.
     const amountIn = ceilDiv(fullRangeLiquidity * Q96 * (pool.sqrtPriceX96 - oracleSqrt), pool.sqrtPriceX96 * oracleSqrt);

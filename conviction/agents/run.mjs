@@ -391,7 +391,9 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
   }
   const activeProposerEvaluations = proposerEvaluations.filter(({ evaluation }) => evaluation.cadence !== "missed-window");
   if (activeProposerEvaluations.length > 0) {
-    const candles = await fetchRecentEthCandles();
+    // Candles come from the shared cache the forecasters keep warm; the three proposers then submit in
+    // parallel so a slow RPC or Coinbase cannot push later agents past the proposal cutoff.
+    const candles = await forecasterCandles({ inFinalWindow: true });
     const momentumDecision = calculateMomentumProposal(candles);
     let headlines;
     let rssError;
@@ -403,33 +405,57 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
         rssError = safeErrorMessage(error);
       }
     }
+    const newsPromise = activeProposerEvaluations.some(({ agent }) => agent.name === "News")
+      ? calculateNewsProposal({
+        headlines,
+        marketSignal: momentumDecision.signal,
+        apiKey: rssError ? undefined : process.env.ANTHROPIC_API_KEY,
+        unavailableReason: rssError ? `RSS unavailable: ${rssError}` : undefined,
+      })
+      : null;
 
+    const prepared = [];
     for (const { agent, evaluation } of activeProposerEvaluations) {
       let decision;
       if (agent.name === "Momentum") decision = momentumDecision;
       else if (agent.name === "Mean-reversion") decision = calculateMeanReversionProposal(candles);
-      else if (agent.name === "News") {
-        decision = await calculateNewsProposal({
-          headlines,
-          marketSignal: momentumDecision.signal,
-          apiKey: rssError ? undefined : process.env.ANTHROPIC_API_KEY,
-          unavailableReason: rssError ? `RSS unavailable: ${rssError}` : undefined,
-        });
-      } else {
-        throw new Error(`No proposer strategy is configured for ${agent.name}.`);
-      }
+      else if (agent.name === "News") decision = await newsPromise;
+      else throw new Error(`No proposer strategy is configured for ${agent.name}.`);
       const resolved = resolveDistinctProposal(decision, consideredProposals, MIN_PROPOSAL_GAP_BPS);
-      let execution = { executed: false, transactions: [] };
-      if (execute && !resolved.skip) {
-        execution = await executeProposal({ agent, round, roundCount, resolved, existingProposals });
-        if (execution.executed) {
-          const count = Number(await publicClient.readContract({
+      if (!resolved.skip) {
+        consideredProposals.push({
+          id: `dry-run-${agent.id}`,
+          tEthBps: resolved.tEthBps,
+          source: "earlier-dry-run-agent",
+        });
+      }
+      const task = execute && !resolved.skip
+        ? executeProposal({ agent, round, roundCount, resolved, existingProposals })
+          .then((value) => ({ value }), (error) => ({ error }))
+        : Promise.resolve({ value: { executed: false, transactions: [] } });
+      prepared.push({ agent, evaluation, decision, resolved, task });
+    }
+
+    let firstError;
+    for (const { agent, evaluation, decision, resolved, task } of prepared) {
+      const outcome = await task;
+      if (outcome.error) {
+        firstError ??= outcome.error;
+        continue;
+      }
+      const execution = outcome.value;
+      if (execution.executed) {
+        const proposals = await Promise.all(
+          Array.from({ length: Number((await publicClient.readContract({
             address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "rounds", args: [roundCount],
-          }).then((value) => value[7]));
-          existingProposals.push(await publicClient.readContract({
-            address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "proposals", args: [roundCount, BigInt(count - 1)],
-          }));
-          execution.proposalId = count - 1;
+          }))[7]) }, (_, index) => publicClient.readContract({
+            address: deployment.contracts.quantumRound, abi: roundAbi, functionName: "proposals", args: [roundCount, BigInt(index)],
+          })),
+        );
+        const index = proposals.findIndex((proposal) => String(proposal[1]).toLowerCase() === agent.address.toLowerCase());
+        if (index >= 0) {
+          existingProposals.push(proposals[index]);
+          execution.proposalId = index;
         }
       }
       if (execution.missedWindow) {
@@ -443,13 +469,6 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
           transactionsBeforeCutoff: execution.transactions,
           note: execution.note,
           dryRun,
-        });
-      }
-      if (!resolved.skip) {
-        consideredProposals.push({
-          id: `dry-run-${agent.id}`,
-          tEthBps: resolved.tEthBps,
-          source: "earlier-dry-run-agent",
         });
       }
       log({
@@ -491,6 +510,7 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
       saveState();
       changed = true;
     }
+    if (firstError) throw firstError;
   }
 
   const forecasterEvaluations = evaluations

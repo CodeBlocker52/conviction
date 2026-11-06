@@ -158,7 +158,7 @@ export async function ensureAllowance(label, walletClient, token, owner, spender
 
 export async function fetchCoinbasePrice() {
   const response = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot", {
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Coinbase price request failed: HTTP ${response.status}`);
   const { data } = await response.json();
