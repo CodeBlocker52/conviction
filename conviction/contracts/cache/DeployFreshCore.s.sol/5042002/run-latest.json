@@ -1,0 +1,41 @@
+{
+  "transactions": [
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    }
+  ],
+  "recovery_generation": "0xf9dce5e923b4912fa4212a520b2e0411da535995d14c46239d7189083365b6ad"
+}

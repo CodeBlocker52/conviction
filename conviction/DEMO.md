@@ -28,15 +28,15 @@ Judge round timeline: 8-minute trading window, proposals in the first 4 minutes,
 
 ## Demo3 quick cycle
 
-For code/test demonstrations only; this preset has not been run live. Its 120 s trading window and 60 s TWAP leave a 60 s on-chain proposal window, with a 45 s evaluation. Proposers target the first 30 s; Quant checks every 10 s and Guardian every 3 s in the final window. Keeper polling is 1 s and it opens another round about 20 s after settlement.
+The automatic demo3 cycle has not yet been validated end-to-end live. Its 120 s trading window and 60 s TWAP leave a 60 s on-chain proposal window, with a 45 s evaluation. Proposers target the first 30 s; Quant checks every 10 s and Guardian every 3 s in the final window. Keeper polling is 1 s and it opens another round about 20 s after settlement.
 
 ```
-npm run demo:open-round -- --preset demo3 --execute --yes
-npm run keeper:run -- --preset demo3 --open-every-seconds 20
+npm run keeper:run -- --preset demo3
 npm run agents:run -- --execute --preset demo3
 ```
 
 The demo3 preset uses the judge-mode daily gas cap (3 USDC per agent) and keeps the existing 0.25 USDC per-round cap. Its 45 s horizon and 120 s trading window are preset-only; manual short values remain rejected.
+When using the keeper-managed cycle, do not also run `demo:open-round`; that command refuses to open while the keeper lock is active or any previous round remains unsettled or uncancelled.
 
 ## Four-minute slot
 

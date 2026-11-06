@@ -9,8 +9,6 @@
 //   (d) optionally opens the next round after settlement (--open-every <minutes>, or demo3's --open-every-seconds).
 // Every transaction is logged. Ctrl+C stops cleanly (finishes the current step, stops the watcher).
 import { closeSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { parseAbi } from "viem";
 import {
   AlreadyDoneError,
@@ -34,6 +32,7 @@ import { requiredProtocolSeed } from "../../agents/safety.mjs";
 import { parseTwapWindowArg, resolveTwapWindow } from "./twap-window.mjs";
 import { parsePresetArg } from "./presets.mjs";
 import { resolveHorizonSeconds, resolveKeeperOpenIntervalSeconds, resolveTradingSeconds } from "./preset-timings.mjs";
+import { KEEPER_LOCK_PATH } from "./round-open-guard.mjs";
 
 const { contracts } = deployment;
 const proposerCount = readAgents().filter((agent) => agent.type === "proposer").length;
@@ -182,26 +181,25 @@ async function step() {
 }
 
 // Two keepers on one deployment race each other (round 13: both tried to collapse in the same second).
-const lockPath = join(tmpdir(), "wavefund-keeper.lock");
 function acquireLock() {
   try {
-    const pid = Number(readFileSync(lockPath, "utf8"));
+    const pid = Number(readFileSync(KEEPER_LOCK_PATH, "utf8"));
     try {
       process.kill(pid, 0);
-      throw new Error(`Another keeper (PID ${pid}) is already running; stop it first (lock ${lockPath}).`);
+      throw new Error(`Another keeper (PID ${pid}) is already running; stop it first (lock ${KEEPER_LOCK_PATH}).`);
     } catch (error) {
       if (error.code !== "ESRCH") throw error;
     }
-    rmSync(lockPath, { force: true });
+    rmSync(KEEPER_LOCK_PATH, { force: true });
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const fd = openSync(lockPath, "wx", 0o600);
+  const fd = openSync(KEEPER_LOCK_PATH, "wx", 0o600);
   writeSync(fd, String(process.pid));
   closeSync(fd);
 }
 acquireLock();
-process.on("exit", () => rmSync(lockPath, { force: true }));
+process.on("exit", () => rmSync(KEEPER_LOCK_PATH, { force: true }));
 
 await assertArcTestnet();
 log(`Keeper ${keeper.address} running on ${deployment.chainName}; poll ${pollSeconds}s${openEverySeconds ? `, next round ${openEverySeconds}s after settlement` : ""}.`);

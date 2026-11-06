@@ -1,0 +1,14 @@
+{
+  "transactions": [
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.io"
+    }
+  ],
+  "recovery_generation": "0x83d33be29ad86149c937a0324a9b88192c39a47364d437d4e1fc135772142eae"
+}

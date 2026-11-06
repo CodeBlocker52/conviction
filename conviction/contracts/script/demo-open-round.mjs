@@ -22,6 +22,7 @@ import { requiredProtocolSeed } from "../../agents/safety.mjs";
 import { parseTwapWindowArg, resolveTwapWindow } from "./twap-window.mjs";
 import { parsePresetArg } from "./presets.mjs";
 import { resolveHorizonSeconds, resolveTradingSeconds } from "./preset-timings.mjs";
+import { assertRoundCanBeOpened } from "./round-open-guard.mjs";
 import {
   liquidityForBuyImpact,
   readPool,
@@ -64,12 +65,10 @@ const read = (address, abi, functionName, fnArgs = []) =>
 await assertArcTestnet();
 
 const roundCount = await read(contracts.quantumRound, roundAbi, "roundCount");
-if (roundCount > 0n) {
-  const previous = await read(contracts.quantumRound, roundAbi, "rounds", [roundCount]);
-  if (!previous[10] && !previous[13]) {
-    throw new Error(`Round ${roundCount} is not settled; run \`npm run demo:close-round -- --execute\` first.`);
-  }
-}
+await assertRoundCanBeOpened({
+  roundCount,
+  readRound: (roundId) => read(contracts.quantumRound, roundAbi, "rounds", [roundId]),
+});
 
 const [bond, seed, perProposal, coinbase, candles, pool, keeperUsdc, legacyInfo] = await Promise.all([
   withDemoProposals
