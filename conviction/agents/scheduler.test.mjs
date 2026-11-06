@@ -12,6 +12,12 @@ test("proposers schedule one early evaluation per round", () => {
   assert.equal(nextAgentEvaluation(proposer, round, 901, first.nextState), null);
 });
 
+test("proposers are skipped and logged by the caller once the on-chain cutoff has passed", () => {
+  const missed = nextAgentEvaluation(proposer, round, 940);
+  assert.equal(missed.cadence, "missed-window");
+  assert.equal(nextAgentEvaluation(proposer, round, 941, missed.nextState), null);
+});
+
 test("forecasters schedule every 15 s, then every 5 s in the final TWAP window", () => {
   const first = nextAgentEvaluation(forecaster, round, 900);
   assert.equal(first.cadence, "periodic");
@@ -22,6 +28,24 @@ test("forecasters schedule every 15 s, then every 5 s in the final TWAP window",
   const next = nextAgentEvaluation(forecaster, round, 945, final.nextState);
   assert.equal(next.cadence, "final-window");
   assert.equal(nextAgentEvaluation(forecaster, round, 950, next.nextState).cadence, "final-window");
+});
+
+test("demo3 uses the requested independent periodic and final-window cadences", () => {
+  const quant = { ...forecaster, name: "Quant" };
+  const guardian = { ...forecaster, name: "Guardian" };
+  const intervals = {
+    periodicSeconds: 10,
+    quantFinalSeconds: 10,
+    guardianFinalSeconds: 3,
+  };
+  const periodic = nextAgentEvaluation(quant, round, 900, {}, intervals);
+  assert.equal(periodic.cadence, "periodic");
+  assert.equal(nextAgentEvaluation(quant, round, 909, periodic.nextState, intervals), null);
+  assert.equal(nextAgentEvaluation(quant, round, 910, periodic.nextState, intervals).cadence, "periodic");
+
+  assert.equal(nextAgentEvaluation(quant, round, 940, { lastForecastAt: 937 }, intervals), null);
+  assert.equal(nextAgentEvaluation(quant, round, 947, { lastForecastAt: 937 }, intervals).cadence, "final-window");
+  assert.equal(nextAgentEvaluation(guardian, round, 940, { lastForecastAt: 937 }, intervals).cadence, "final-window");
 });
 
 test("closed rounds and rounds past trading end are not scheduled", () => {

@@ -1,5 +1,5 @@
 // Opens a status-quo-only Phase B round; legacy demo proposals require an explicit opt-in.
-// Usage: npm run demo:open-round [-- --minutes 20] [-- --horizon 600] [-- --twap-window 300] [-- --preset judge|full] [-- --test] [-- --with-demo-proposals] [-- --execute]
+// Usage: npm run demo:open-round [-- --minutes 20] [-- --horizon 600] [-- --twap-window 300] [-- --preset judge|full|demo3] [-- --test] [-- --with-demo-proposals] [-- --execute]
 import {
   accountFor,
   assertArcTestnet,
@@ -21,6 +21,7 @@ import { readAgents } from "../../agents/config.mjs";
 import { requiredProtocolSeed } from "../../agents/safety.mjs";
 import { parseTwapWindowArg, resolveTwapWindow } from "./twap-window.mjs";
 import { parsePresetArg } from "./presets.mjs";
+import { resolveHorizonSeconds, resolveTradingSeconds } from "./preset-timings.mjs";
 import {
   liquidityForBuyImpact,
   readPool,
@@ -39,22 +40,23 @@ const execute = args.includes("--execute");
 const testMode = args.includes("--test");
 const withDemoProposals = args.includes("--with-demo-proposals");
 const preset = parsePresetArg(args);
-const minutesIndex = args.indexOf("--minutes");
-const horizonIndex = args.indexOf("--horizon");
-const tradingMinutes = minutesIndex === -1
-  ? Number(preset?.tradingMinutes ?? process.env.DEMO_TRADING_WINDOW_MINUTES ?? 15)
-  : Number(args[minutesIndex + 1]);
-if (!Number.isInteger(tradingMinutes) || tradingMinutes < 3 || tradingMinutes > 1_440) {
-  throw new Error("Trading window must be between 3 and 1440 whole minutes.");
-}
-const horizonSeconds = horizonIndex === -1
-  ? Number(preset?.horizonSeconds ?? process.env.DEMO_EVALUATION_WINDOW_SECONDS ?? 600)
-  : Number(args[horizonIndex + 1]);
-if (!Number.isInteger(horizonSeconds) || horizonSeconds < 60 || horizonSeconds > 86_400) {
-  throw new Error("Evaluation window must be between 60 and 86400 whole seconds.");
-}
+const tradingSeconds = resolveTradingSeconds({
+  args,
+  preset,
+  environmentMinutes: process.env.DEMO_TRADING_WINDOW_MINUTES,
+  defaultMinutes: 15,
+  manualFlag: "minutes",
+});
+const horizonSeconds = resolveHorizonSeconds({
+  args,
+  preset,
+  environmentSeconds: process.env.DEMO_EVALUATION_WINDOW_SECONDS,
+});
 const horizon = BigInt(horizonSeconds);
-const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args) ?? preset?.twapWindow, tradingMinutes * 60);
+const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args) ?? preset?.twapWindow, tradingSeconds);
+const tradingWindowLabel = tradingSeconds % 60 === 0
+  ? `${tradingSeconds / 60}-minute`
+  : `${tradingSeconds}-second`;
 
 const read = (address, abi, functionName, fnArgs = []) =>
   publicClient.readContract({ address, abi, functionName, args: fnArgs });
@@ -89,7 +91,7 @@ const [bond, seed, perProposal, coinbase, candles, pool, keeperUsdc, legacyInfo]
 ]);
 const [deployerUsdc, deployerAgent, keeperAgent] = legacyInfo;
 
-const riskModel = calculateRiskModel(candles, horizonSeconds);
+const riskModel = calculateRiskModel(candles, horizonSeconds, { minimumHorizonSeconds: preset?.name === "demo3" ? 45 : 60 });
 const spot = usdcPerTEthFromSqrt(pool.sqrtPriceX96);
 const oracle = Number(coinbase.priceUsdc) / 1e6;
 const deviationBps = Math.abs(spot / oracle - 1) * 10_000;
@@ -131,7 +133,7 @@ if (!execute) {
   process.exit(0);
 }
 await confirm(
-  `Open a ${tradingMinutes}-minute Phase B round ${withDemoProposals ? "with legacy demo proposals" : "with status quo only"} and start the oracle watcher.`,
+  `Open a ${tradingWindowLabel} Phase B round ${withDemoProposals ? "with legacy demo proposals" : "with status quo only"} and start the oracle watcher.`,
   "EXECUTE DEMO ROUND",
 );
 
@@ -146,7 +148,7 @@ if (withDemoProposals) {
 }
 
 const block = await publicClient.getBlock({ blockTag: "latest" });
-const tradingEnd = block.timestamp + BigInt(tradingMinutes * 60);
+const tradingEnd = block.timestamp + BigInt(tradingSeconds);
 const roundId = roundCount + 1n;
 await sendContract("Open Phase B round", keeperClient, contracts.quantumRound, roundAbi, "openRound", [
   tradingEnd,
@@ -170,4 +172,4 @@ if (withDemoProposals) {
   }
 }
 startOracleWatcher();
-console.log(`Round ${roundId} opened${withDemoProposals ? " with legacy demo proposals" : " with status quo only"}. Trading ends at ${new Date(Number(tradingEnd) * 1000).toISOString()} (TWAP window ${TWAP_WINDOW}s); the oracle watcher is running.`);
+console.log(`Round ${roundId} opened${withDemoProposals ? " with legacy demo proposals" : " with status quo only"}. Trading window ${tradingSeconds}s ends at ${new Date(Number(tradingEnd) * 1000).toISOString()} (evaluation horizon ${horizonSeconds}s, TWAP window ${TWAP_WINDOW}s); the oracle watcher is running.`);

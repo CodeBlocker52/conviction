@@ -1,12 +1,12 @@
 // Keeper service: drives every round through its lifecycle automatically.
 //
-//   npm run keeper:run -- [--poll 15] [--preset judge|full] [--open-every 60 --window 30 --horizon 600]
+//   npm run keeper:run -- [--poll 15] [--preset judge|full|demo3] [--open-every 60 --window 30 --horizon 600]
 //
 // While a round is active it runs the oracle watcher (60 s price updates). It then
 //   (a) collapses as soon as trading ends,
 //   (b) immediately runs the vault's trade (so evaluation measures a real period),
 //   (c) reports and settles once the evaluation window ends,
-//   (d) optionally opens the next round (--open-every <minutes> after the previous round settled).
+//   (d) optionally opens the next round after settlement (--open-every <minutes>, or demo3's --open-every-seconds).
 // Every transaction is logged. Ctrl+C stops cleanly (finishes the current step, stops the watcher).
 import { closeSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +33,7 @@ import { readAgents } from "../../agents/config.mjs";
 import { requiredProtocolSeed } from "../../agents/safety.mjs";
 import { parseTwapWindowArg, resolveTwapWindow } from "./twap-window.mjs";
 import { parsePresetArg } from "./presets.mjs";
+import { resolveHorizonSeconds, resolveKeeperOpenIntervalSeconds, resolveTradingSeconds } from "./preset-timings.mjs";
 
 const { contracts } = deployment;
 const proposerCount = readAgents().filter((agent) => agent.type === "proposer").length;
@@ -41,25 +42,16 @@ const opt = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? Number(args[i + 1]) : fallback;
 };
-const pollSeconds = opt("poll", 15);
 const preset = parsePresetArg(args);
+const pollSeconds = opt("poll", preset?.name === "demo3" ? 1 : 15);
 // Explicit flags override the preset; without a preset the original defaults apply.
-const openEveryMinutes = opt("open-every", preset?.openEveryMinutes ?? 0);
-const windowMinutes = opt("window", preset?.tradingMinutes ?? 30);
-const horizonSeconds = opt("horizon", preset?.horizonSeconds ?? 600);
+const openEverySeconds = resolveKeeperOpenIntervalSeconds({ args, preset });
+const tradingSeconds = resolveTradingSeconds({ args, preset, defaultMinutes: 30, manualFlag: "window" });
+const horizonSeconds = resolveHorizonSeconds({ args, preset });
 if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
   throw new Error("--poll must be a whole number between 1 and 300 seconds.");
 }
-if (!Number.isInteger(openEveryMinutes) || openEveryMinutes < 0) {
-  throw new Error("--open-every must be a nonnegative whole number of minutes.");
-}
-if (!Number.isInteger(windowMinutes) || windowMinutes < 3 || windowMinutes > 1_440) {
-  throw new Error("--window must be between 3 and 1440 whole minutes.");
-}
-if (!Number.isInteger(horizonSeconds) || horizonSeconds < 60 || horizonSeconds > 86_400) {
-  throw new Error("--horizon must be between 60 and 86400 whole seconds.");
-}
-const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args) ?? preset?.twapWindow, windowMinutes * 60);
+const TWAP_WINDOW = resolveTwapWindow(parseTwapWindowArg(args) ?? preset?.twapWindow, tradingSeconds);
 
 const vaultAbi = parseAbi([
   "function executeTrade(uint256,uint16)",
@@ -159,7 +151,7 @@ async function step() {
     }
   }
 
-  if (openEveryMinutes > 0 && Date.now() - lastSettledAt >= openEveryMinutes * 60_000) {
+  if (openEverySeconds > 0 && Date.now() - lastSettledAt >= openEverySeconds * 1_000) {
     const [seed, perProposal] = await Promise.all([
       publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "protocolLiquiditySeed" }),
       publicClient.readContract({ address: contracts.quantumRound, abi: roundAbi, functionName: "initialLiquidityPerProposal" }),
@@ -171,12 +163,14 @@ async function step() {
       return;
     }
     const block = await publicClient.getBlock({ blockTag: "latest" });
-    const riskModel = calculateRiskModel(await fetchRecentEthCandles(), horizonSeconds);
+    const riskModel = calculateRiskModel(await fetchRecentEthCandles(), horizonSeconds, {
+      minimumHorizonSeconds: preset?.name === "demo3" ? 45 : 60,
+    });
     log(
       `Opening with ${horizonSeconds}s evaluation horizon; recent ${riskModel.sampleCount}-return 1m volatility gives ±${(riskModel.bandBps / 100).toFixed(2)}% bounds (raw 3σ ${(riskModel.rawBandBps / 100).toFixed(2)}%).`,
     );
-    await tx(`Open round ${roundCount + 1n} (${windowMinutes} min window)`, contracts.quantumRound, roundAbi, "openRound", [
-      block.timestamp + BigInt(windowMinutes * 60),
+    await tx(`Open round ${roundCount + 1n} (${tradingSeconds}s window)`, contracts.quantumRound, roundAbi, "openRound", [
+      block.timestamp + BigInt(tradingSeconds),
       BigInt(horizonSeconds),
       riskModel.rMin,
       riskModel.rMax,
@@ -210,7 +204,7 @@ acquireLock();
 process.on("exit", () => rmSync(lockPath, { force: true }));
 
 await assertArcTestnet();
-log(`Keeper ${keeper.address} running on ${deployment.chainName}; poll ${pollSeconds}s${openEveryMinutes ? `, next round ${openEveryMinutes} min after settlement` : ""}.`);
+log(`Keeper ${keeper.address} running on ${deployment.chainName}; poll ${pollSeconds}s${openEverySeconds ? `, next round ${openEverySeconds}s after settlement` : ""}.`);
 while (!stopping) {
   try {
     await step();

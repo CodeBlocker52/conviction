@@ -14,7 +14,8 @@ export const FAIR_PROBABILITY_MAX = 0.98;
 export const SUBMISSION_BUFFER_SECONDS = 15;
 // The Guardian defends right up to the wire: a late TradingClosed revert costs only gas, while an unanswered strike can decide the round.
 export const GUARDIAN_SUBMISSION_BUFFER_SECONDS = 5;
-export const submissionBufferFor = (agentName) => (agentName === "Guardian" ? GUARDIAN_SUBMISSION_BUFFER_SECONDS : SUBMISSION_BUFFER_SECONDS);
+export const submissionBufferFor = (agentName, guardianBuffer = GUARDIAN_SUBMISSION_BUFFER_SECONDS) =>
+  agentName === "Guardian" ? guardianBuffer : SUBMISSION_BUFFER_SECONDS;
 export const FAIR_CACHE_TTL_MS = 60_000;
 export const tooCloseToTradingEnd = ({ nowSeconds, tradingEnd, buffer = SUBMISSION_BUFFER_SECONDS }) =>
   nowSeconds >= Number(tradingEnd) - buffer;
@@ -30,13 +31,14 @@ export function applySlippage(quotedOut, slippageBps = SLIPPAGE_BPS) {
 
 // Fair probability for one proposal: pFair = clamp((E[R] - rMin) / (rMax - rMin), 0.02, 0.98).
 // estimateQuantFairProbability already halves the drift and caps its effect.
-export function quantFairProbability({ tEthBps, rMin, rMax, horizonSeconds, candles }) {
-  const risk = calculateRiskModel(candles, horizonSeconds);
+export function quantFairProbability({ tEthBps, rMin, rMax, horizonSeconds, candles, minimumHorizonSeconds = 60 }) {
+  const risk = calculateRiskModel(candles, horizonSeconds, { minimumHorizonSeconds });
   const estimate = estimateQuantFairProbability({
     tEthBps,
     rMin,
     rMax,
     horizonSeconds,
+    minimumHorizonSeconds,
     meanLogReturnPerMinute: risk.meanLogReturnPerMinute,
     sigmaLogReturnPerMinute: risk.sigmaLogReturnPerMinute,
   });

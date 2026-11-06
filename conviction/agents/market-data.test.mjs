@@ -59,6 +59,23 @@ test("risk model rejects noncontiguous or insufficient candle history", () => {
   assert.throws(() => calculateRiskModel(makeCandles(Array(40).fill(0)), 30), /at least 60 whole seconds/);
 });
 
+test("the 45-second demo3 horizon is explicitly opt-in", () => {
+  const candles = makeCandles(Array.from({ length: 40 }, (_, index) => index % 2 ? 0.001 : -0.001));
+  assert.throws(() => calculateRiskModel(candles, 45), /at least 60 whole seconds/);
+  assert.equal(calculateRiskModel(candles, 45, { minimumHorizonSeconds: 45 }).horizonSeconds, 45);
+
+  const inputs = {
+    tEthBps: 5_000,
+    rMin: 990_000_000_000_000_000n,
+    rMax: 1_010_000_000_000_000_000n,
+    horizonSeconds: 45,
+    meanLogReturnPerMinute: 0,
+    sigmaLogReturnPerMinute: 0.001,
+  };
+  assert.throws(() => estimateQuantFairProbability(inputs), /at least 60 whole seconds/);
+  assert.doesNotThrow(() => estimateQuantFairProbability({ ...inputs, minimumHorizonSeconds: 45 }));
+});
+
 test("candle fetch retries transient failures and then gives up", async () => {
   let calls = 0;
   const waits = [];

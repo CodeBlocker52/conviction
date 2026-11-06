@@ -60,9 +60,9 @@ function logReturns(candles) {
   return returns;
 }
 
-export function calculateRiskModel(candles, horizonSeconds = 600) {
-  if (!Number.isInteger(horizonSeconds) || horizonSeconds < CANDLE_SECONDS) {
-    throw new Error("Evaluation horizon must be at least 60 whole seconds.");
+export function calculateRiskModel(candles, horizonSeconds = 600, { minimumHorizonSeconds = CANDLE_SECONDS } = {}) {
+  if (!Number.isInteger(horizonSeconds) || horizonSeconds < minimumHorizonSeconds) {
+    throw new Error(`Evaluation horizon must be at least ${minimumHorizonSeconds} whole seconds.`);
   }
   const returns = logReturns(candles);
   const meanLogReturnPerMinute = returns.reduce((sum, value) => sum + value, 0) / returns.length;
@@ -100,6 +100,7 @@ export function estimateQuantFairProbability({
   horizonSeconds,
   meanLogReturnPerMinute,
   sigmaLogReturnPerMinute,
+  minimumHorizonSeconds = CANDLE_SECONDS,
   driftShrink = 0.5,
   maxDriftBandFraction = 0.25,
 }) {
@@ -109,8 +110,8 @@ export function estimateQuantFairProbability({
   if (typeof rMin !== "bigint" || typeof rMax !== "bigint" || rMax <= rMin) {
     throw new Error("Risk bounds must be increasing bigint ratios.");
   }
-  if (!Number.isInteger(horizonSeconds) || horizonSeconds < CANDLE_SECONDS) {
-    throw new Error("Evaluation horizon must be at least 60 whole seconds.");
+  if (!Number.isInteger(horizonSeconds) || horizonSeconds < minimumHorizonSeconds) {
+    throw new Error(`Evaluation horizon must be at least ${minimumHorizonSeconds} whole seconds.`);
   }
   if (!Number.isFinite(meanLogReturnPerMinute) || !Number.isFinite(sigmaLogReturnPerMinute) || sigmaLogReturnPerMinute < 0) {
     throw new Error("Drift and volatility must be finite, and volatility cannot be negative.");

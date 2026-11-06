@@ -105,6 +105,7 @@ for (let index = 0; index < args.length; index += 1) {
 }
 const dryRun = !execute;
 if (presetName !== undefined && !Object.hasOwn(PRESETS, presetName)) throw new Error(`--preset must be one of: ${Object.keys(PRESETS).join(", ")}.`);
+const preset = presetName ? { name: presetName, ...PRESETS[presetName] } : undefined;
 // Daily (UTC) gas cap per agent comes from the preset; the per-round cap of 0.25 USDC never changes.
 const dailyGasCapWei = presetName ? parseUnits(PRESETS[presetName].dailyGasCapUsdc, 18) : PER_AGENT_GAS_CAP_WEI;
 if (!Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 300) {
@@ -170,6 +171,17 @@ async function executeProposal({ agent, round, roundCount, resolved, existingPro
   if (existingProposals.some((proposal) => String(proposal[1]).toLowerCase() === owner)) {
     return { executed: false, note: "This agent already has a proposal in the round; not proposing again.", transactions: [] };
   }
+  const proposalCutoff = Number(round.tradingEnd) - Number(round.twapWindow);
+  const initialBlock = await publicClient.getBlock({ blockTag: "latest" });
+  if (Number(initialBlock.timestamp) >= proposalCutoff) {
+    return {
+      executed: false,
+      missedWindow: true,
+      attemptedAt: Number(initialBlock.timestamp),
+      note: `Not submitted: the on-chain proposal cutoff (${proposalCutoff}) has passed.`,
+      transactions: [],
+    };
+  }
   const transactions = [];
   const info = await publicClient.readContract({
     address: deployment.contracts.proposerRegistry,
@@ -194,13 +206,23 @@ async function executeProposal({ agent, round, roundCount, resolved, existingPro
   });
   assertPrincipalWithinCap("proposer", bond);
   transactions.push(...await ensureApproval(agent, deployment.contracts.proposerRegistry, bond, "approve bond"));
+  const proposalBlock = await publicClient.getBlock({ blockTag: "latest" });
+  if (Number(proposalBlock.timestamp) >= proposalCutoff) {
+    return {
+      executed: false,
+      missedWindow: true,
+      attemptedAt: Number(proposalBlock.timestamp),
+      note: `Not submitted: the on-chain proposal cutoff (${proposalCutoff}) passed while registering or approving the bond.`,
+      transactions,
+    };
+  }
   transactions.push(await submit(agent, {
     address: deployment.contracts.quantumRound,
     signature: "propose(uint256,(uint16),string)",
     args: [roundCount, [resolved.tEthBps], resolved.rationale],
     label: `propose ${resolved.tEthBps} bps`,
   }));
-  return { executed: true, transactions };
+  return { executed: true, attemptedAt: Number(proposalBlock.timestamp), transactions };
 }
 
 async function ensureForecasterDeposit(agent, roundCount) {
@@ -339,19 +361,41 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
   const evaluations = [];
   for (const agent of agents.filter(agentFilter)) {
     const previous = roundState[agent.id] ?? {};
-    const evaluation = nextAgentEvaluation(agent, round, chainTimestamp, previous);
+    const evaluation = nextAgentEvaluation(agent, round, chainTimestamp, previous, {
+      periodicSeconds: preset?.forecasterPeriodicSeconds,
+      quantFinalSeconds: preset?.quantFinalWindowSeconds,
+      guardianFinalSeconds: preset?.guardianFinalWindowSeconds,
+    });
     if (!evaluation) continue;
 
     evaluations.push({ agent, evaluation });
   }
 
   const proposerEvaluations = evaluations.filter(({ agent }) => agent.type === "proposer");
-  if (proposerEvaluations.length > 0) {
+  const missedProposers = proposerEvaluations.filter(({ evaluation }) => evaluation.cadence === "missed-window");
+  for (const { agent, evaluation } of missedProposers) {
+    log({
+      type: "proposer_window_missed",
+      roundId: round.id,
+      agentId: agent.id,
+      agentName: agent.name,
+      proposalCutoff: Number(round.tradingEnd) - Number(round.twapWindow),
+      observedAt: chainTimestamp,
+      note: "No proposal transaction was submitted after the on-chain proposal cutoff.",
+      dryRun,
+    });
+    roundState[agent.id] = evaluation.nextState;
+    state.rounds[round.id] = roundState;
+    saveState();
+    changed = true;
+  }
+  const activeProposerEvaluations = proposerEvaluations.filter(({ evaluation }) => evaluation.cadence !== "missed-window");
+  if (activeProposerEvaluations.length > 0) {
     const candles = await fetchRecentEthCandles();
     const momentumDecision = calculateMomentumProposal(candles);
     let headlines;
     let rssError;
-    if (proposerEvaluations.some(({ agent }) => agent.name === "News")) {
+    if (activeProposerEvaluations.some(({ agent }) => agent.name === "News")) {
       try {
         headlines = await fetchCryptoHeadlines();
       } catch (error) {
@@ -360,7 +404,7 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
       }
     }
 
-    for (const { agent, evaluation } of proposerEvaluations) {
+    for (const { agent, evaluation } of activeProposerEvaluations) {
       let decision;
       if (agent.name === "Momentum") decision = momentumDecision;
       else if (agent.name === "Mean-reversion") decision = calculateMeanReversionProposal(candles);
@@ -388,6 +432,19 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
           execution.proposalId = count - 1;
         }
       }
+      if (execution.missedWindow) {
+        log({
+          type: "proposer_window_missed",
+          roundId: round.id,
+          agentId: agent.id,
+          agentName: agent.name,
+          proposalCutoff: Number(round.tradingEnd) - Number(round.twapWindow),
+          observedAt: execution.attemptedAt,
+          transactionsBeforeCutoff: execution.transactions,
+          note: execution.note,
+          dryRun,
+        });
+      }
       if (!resolved.skip) {
         consideredProposals.push({
           id: `dry-run-${agent.id}`,
@@ -402,6 +459,12 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
         agentName: agent.name,
         publicAddress: agent.address,
         cadence: evaluation.cadence,
+        proposalTargetDeadline: preset?.name === "demo3"
+          ? Number(round.tradingEnd) - Number(preset.tradingSeconds) + Number(preset.proposerTargetSeconds)
+          : undefined,
+        targetMissed: preset?.name === "demo3"
+          ? (execution.attemptedAt ?? chainTimestamp) > Number(round.tradingEnd) - Number(preset.tradingSeconds) + Number(preset.proposerTargetSeconds)
+          : undefined,
         rawTEthBps: resolved.rawTEthBps,
         tEthBps: resolved.tEthBps,
         shifted: resolved.shifted,
@@ -420,6 +483,7 @@ async function observeRound({ agentFilter = () => true, handlesRedeem = true } =
         submitted: execution.executed,
         proposalId: execution.proposalId,
         executionNote: execution.note,
+        proposalWindowMissed: execution.missedWindow ?? false,
         transactions: execution.transactions,
       });
       roundState[agent.id] = evaluation.nextState;
@@ -597,7 +661,14 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
       const proposal = existingProposals[proposalId];
       const tEthBps = Number(proposal[2]);
       const fairKey = `${round.id}:${proposalId}`;
-      const fair = fairCache.get(fairKey) ?? fairCache.set(fairKey, quantFairProbability({ tEthBps, rMin: round.rMin, rMax: round.rMax, horizonSeconds, candles }));
+      const fair = fairCache.get(fairKey) ?? fairCache.set(fairKey, quantFairProbability({
+        tEthBps,
+        rMin: round.rMin,
+        rMax: round.rMax,
+        horizonSeconds,
+        candles,
+        minimumHorizonSeconds: preset?.name === "demo3" ? 45 : 60,
+      }));
       const window = windowAt();
       // Re-read the price right before deciding: an earlier trade in this cycle may have moved it.
       const pMarket = tradesThisPass === 0 ? snapshotMarket : await readMarket(proposalId);
@@ -627,9 +698,13 @@ async function runForecasters({ round, roundCount, roundState, forecasterEvaluat
       let executedQuote;
       let pMarketAfter;
       const blockedByDeadline = execute && plan.action !== "none"
-        && tooCloseToTradingEnd({ nowSeconds: chainNow(), tradingEnd: round.tradingEnd, buffer: submissionBufferFor(agent.name) });
+        && tooCloseToTradingEnd({
+          nowSeconds: chainNow(),
+          tradingEnd: round.tradingEnd,
+          buffer: submissionBufferFor(agent.name, preset?.guardianSubmissionGuardSeconds),
+        });
       if (blockedByDeadline) {
-        plan.reason = `${plan.reason} Not submitted: under ${submissionBufferFor(agent.name)} s of trading left, too close to the deadline for Circle to confirm.`;
+        plan.reason = `${plan.reason} Not submitted: under ${submissionBufferFor(agent.name, preset?.guardianSubmissionGuardSeconds)} s of trading left, too close to the deadline for Circle to confirm.`;
         plan.action = "none";
       }
       if (plan.action === "buy" || plan.action === "sell") {
@@ -757,11 +832,20 @@ async function main() {
   const loops = execute
     ? [
       ...(hasProposerLoop
-        ? [{ name: "proposers", tick: () => observeRound({ agentFilter: (agent) => agent.type !== "forecaster", handlesRedeem: true }) }]
+        ? [{
+          name: "proposers",
+          pollSeconds: preset?.proposerPollSeconds ?? pollSeconds,
+          tick: () => observeRound({ agentFilter: (agent) => agent.type !== "forecaster", handlesRedeem: true }),
+        }]
         : []),
       ...agents.filter((agent) => agent.type === "forecaster").map((agent, index) => ({
         name: agent.name,
-        pollSeconds: Math.min(pollSeconds, FINAL_WINDOW_INTERVAL_SECONDS),
+        pollSeconds: Math.min(
+          pollSeconds,
+          preset
+            ? (agent.name === "Guardian" ? preset.guardianFinalWindowSeconds : preset.quantFinalWindowSeconds)
+            : FINAL_WINDOW_INTERVAL_SECONDS,
+        ),
         tick: () => observeRound({ agentFilter: (candidate) => candidate.id === agent.id, handlesRedeem: index === 0 && !hasProposerLoop }),
       })),
     ]

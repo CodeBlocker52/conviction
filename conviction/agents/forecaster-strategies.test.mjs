@@ -60,6 +60,13 @@ test("fair value uses shrunk, capped drift and clamps to 0.02-0.98", () => {
   assert.equal(low.pFair, 0.02);
 });
 
+test("the 45-second fair-value horizon is opt-in for demo3", () => {
+  const candlesForShortHorizon = noisy(0);
+  const inputs = { ...bounds, horizonSeconds: 45, tEthBps: 5_000, candles: candlesForShortHorizon };
+  assert.throws(() => quantFairProbability(inputs), /at least 60 whole seconds/);
+  assert.doesNotThrow(() => quantFairProbability({ ...inputs, minimumHorizonSeconds: 45 }));
+});
+
 test("direction and threshold logic", () => {
   assert.deepEqual(decideDirection({ pMarket: 0.4, pFair: 0.5, threshold: 0.03 }).direction, "long");
   assert.deepEqual(decideDirection({ pMarket: 0.6, pFair: 0.5, threshold: 0.03 }).direction, "short");
