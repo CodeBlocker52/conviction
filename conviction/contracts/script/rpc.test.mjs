@@ -50,3 +50,21 @@ test("repeated 429 responses fail explicitly when no fallback is configured", as
   await assert.rejects(fetchWithRetry("ignored", {}), /no distinct fallback RPC is configured/);
   assert.deepEqual(delays, [2_000, 4_000, 8_000, 16_000, 32_000]);
 });
+
+test("concurrent Arc requests are serialized", async () => {
+  let activeRequests = 0;
+  let peakRequests = 0;
+  const fetchWithRetry = create429RetryFetch("https://primary.example", "", {
+    fetchImpl: async () => {
+      activeRequests += 1;
+      peakRequests = Math.max(peakRequests, activeRequests);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeRequests -= 1;
+      return new Response(null, { status: 200 });
+    },
+    warn: () => {},
+  });
+
+  await Promise.all([fetchWithRetry("ignored", {}), fetchWithRetry("ignored", {}), fetchWithRetry("ignored", {})]);
+  assert.equal(peakRequests, 1);
+});

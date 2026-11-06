@@ -230,10 +230,14 @@ if (!removeOnly) {
   console.log(`Position needs ${usdc(needed.amount0)} USDC + ${usdc(needed.amount1, 18)} tETH (caps ${usdc(capUsdc)} / ${usdc(capTEth, 18)})`);
   console.log(`${existingLiquidity > 0n ? "Current position holds" : "Reused from the recovered position"}: ${usdc(recovered.amount0)} USDC + ${usdc(recovered.amount1, 18)} tETH`);
   if (align) console.log(`Alignment swap: up to ${usdc(align.amountIn, align.token === "USDC" ? 6 : 18)} ${align.token} (unused input is not taken)`);
-  const [usdcBalance, tEthBalance] = await Promise.all([
-    publicClient.readContract({ address: contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [deployerAddress] }),
-    publicClient.readContract({ address: contracts.testAsset, abi: erc20Abi, functionName: "balanceOf", args: [deployerAddress] }),
-  ]);
+  const [usdcBalance, tEthBalance] = await publicClient.multicall({
+    contracts: [
+      { address: contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [deployerAddress] },
+      { address: contracts.testAsset, abi: erc20Abi, functionName: "balanceOf", args: [deployerAddress] },
+    ],
+    allowFailure: false,
+    batchSize: 64_000,
+  });
   const positionStillOnChain = existingLiquidity > 0n;
   const freshUsdc = capUsdc > recovered.amount0 ? capUsdc - recovered.amount0 : 0n;
   const alignmentUsdc = align?.token === "USDC" ? align.amountIn : 0n;

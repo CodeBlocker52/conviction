@@ -3,10 +3,13 @@
   "salt": "0x0",
   "tickLower": 197280,
   "tickUpper": 200220,
-  "liquidity": "4218321288196",
+  "liquidity": "0",
   "centerUsdcPerTEth": 2246.945,
   "lowerPct": 10,
   "upperPct": 20,
   "addTx": "0x79fe227da8ccb4db6105439141f5409b93373d68069615220f83be3e1589df88",
-  "updatedAt": "2026-11-05T20:47:40.418Z"
+  "updatedAt": "2026-11-05T20:47:40.418Z",
+  "recoveredAmount0": "10445423",
+  "recoveredAmount1": "7930522566048586",
+  "removedAt": "2026-11-06T12:34:58.590Z"
 }

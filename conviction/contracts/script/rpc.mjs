@@ -1,6 +1,7 @@
 import { BaseError, http } from "viem";
 
 const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
+let arcRequestQueue = Promise.resolve();
 
 class ArcRateLimitError extends BaseError {
   constructor(message) {
@@ -30,20 +31,24 @@ export function create429RetryFetch(
     return null;
   }
 
-  return async (_url, init) => {
-    const response = await fetchUntilAvailable(primaryUrl, "Primary Arc", init);
-    if (response) return response;
+  return (_url, init) => {
+    const request = arcRequestQueue.then(async () => {
+      const response = await fetchUntilAvailable(primaryUrl, "Primary Arc", init);
+      if (response) return response;
 
-    if (!fallbackUrl || fallbackUrl === primaryUrl) {
-      throw new ArcRateLimitError("Primary Arc RPC returned repeated HTTP 429 responses; no distinct fallback RPC is configured.");
-    }
+      if (!fallbackUrl || fallbackUrl === primaryUrl) {
+        throw new ArcRateLimitError("Primary Arc RPC returned repeated HTTP 429 responses; no distinct fallback RPC is configured.");
+      }
 
-    warn("Primary Arc RPC remains rate-limited; switching to ARC_TESTNET_RPC_FALLBACK.");
-    const fallbackResponse = await fetchUntilAvailable(fallbackUrl, "Fallback Arc", init);
-    if (!fallbackResponse) {
-      throw new ArcRateLimitError("Primary and fallback Arc RPCs returned repeated HTTP 429 responses.");
-    }
-    return fallbackResponse;
+      warn("Primary Arc RPC remains rate-limited; switching to ARC_TESTNET_RPC_FALLBACK.");
+      const fallbackResponse = await fetchUntilAvailable(fallbackUrl, "Fallback Arc", init);
+      if (!fallbackResponse) {
+        throw new ArcRateLimitError("Primary and fallback Arc RPCs returned repeated HTTP 429 responses.");
+      }
+      return fallbackResponse;
+    });
+    arcRequestQueue = request.then(() => undefined, () => undefined);
+    return request;
   };
 }
 

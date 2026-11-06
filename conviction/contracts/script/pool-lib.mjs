@@ -115,7 +115,18 @@ async function extsload(slot) {
 
 export async function readPool() {
   const base = poolStateSlot();
-  const [slot0, liquidityWord] = await Promise.all([extsload(base), extsload(base + 3n)]);
+  const [slot0Word, liquidityWordRaw] = await publicClient.multicall({
+    contracts: [base, base + 3n].map((slot) => ({
+      address: contracts.poolManager,
+      abi: poolManagerAbi,
+      functionName: "extsload",
+      args: [toHex(slot, { size: 32 })],
+    })),
+    allowFailure: false,
+    batchSize: 64_000,
+  });
+  const slot0 = BigInt(slot0Word);
+  const liquidityWord = BigInt(liquidityWordRaw);
   const sqrtPriceX96 = slot0 & ((1n << 160n) - 1n);
   const liquidity = liquidityWord & ((1n << 128n) - 1n);
   if (sqrtPriceX96 === 0n) throw new Error("The USDC/tETH v4 pool is uninitialized.");
