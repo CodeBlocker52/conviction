@@ -30,7 +30,7 @@ Judge round timeline: 8-minute trading window, proposals in the first 4 minutes,
 
 For an integrated terminal, run `npm run demo:live -- --preset demo3` (or `judge` / `full`). The launcher checks locks and preflight, starts agents before the keeper, prints status, and writes full logs under `logs/`. Add `--one-round` to stop after the next round settles and forecaster deposits are redeemed. Ctrl+C or `npm run demo:stop` stops the services. The `full` preset still does not automatically open a new round.
 
-Scripts use `ARC_RPC_URL` as the primary and a comma-separated `ARC_TESTNET_RPC_FALLBACK` list on authorization failures, HTTP 429 or read timeouts. Do not put secret RPC URLs in public frontend settings or logs. If a transaction submission times out, inspect its outcome before retrying.
+Scripts use `ARC_RPC_URL` as the primary and an optional single `ARC_TESTNET_RPC_FALLBACK` after repeated HTTP 429 responses. Do not put secret RPC URLs in public frontend settings or logs. If a transaction submission times out, inspect its outcome before retrying.
 
 The automatic demo3 cycle has not yet been validated end-to-end live. Its 120 s trading window and 60 s TWAP leave a 60 s on-chain proposal window, with a 45 s evaluation. Proposers target the first 30 s; Quant checks every 10 s and Guardian every 3 s in the final window. Keeper polling is 1 s and it opens another round about 20 s after settlement.
 

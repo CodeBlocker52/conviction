@@ -1,70 +1,61 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { create429RetryFetch, withRpcAffinity } from "./rpc.mjs";
+import { create429RetryFetch } from "./rpc.mjs";
 
-const read = { body: JSON.stringify({ method: "eth_blockNumber" }) };
-test("rotates immediately on 429, prefers success and retries primary after cooldown", async () => {
-  let time = 0;
-  const calls = [];
-  const fetch = create429RetryFetch("primary", "second,third", {
-    now: () => time, cooldownMs: 100, warn: () => {},
-    fetchImpl: async (url) => { calls.push(url); return new Response(null, { status: url === "primary" && time < 100 ? 429 : 200 }); },
-  });
-  await fetch("", read);
-  await fetch("", read);
-  time = 100;
-  await fetch("", read);
-  assert.deepEqual(calls, ["primary", "second", "second", "primary"]);
-});
-
-test("read timeouts rotate but ambiguous broadcast timeouts do not", async () => {
-  const calls = [];
-  const fetch = create429RetryFetch("primary", "secondary", {
-    warn: () => {},
-    fetchImpl: async (url) => { calls.push(url); if (url === "primary") throw new DOMException("timed out", "TimeoutError"); return new Response(null, { status: 200 }); },
-  });
-  await fetch("", read);
-  assert.deepEqual(calls, ["primary", "secondary"]);
-  const broadcast = create429RetryFetch("primary", "secondary", {
-    warn: () => {},
-    fetchImpl: async (url) => { calls.push(url); throw new DOMException("timed out", "TimeoutError"); },
-  });
-  await assert.rejects(broadcast("", { body: JSON.stringify({ method: "eth_sendRawTransaction" }) }), /timed out/);
-  assert.equal(calls.at(-1), "primary");
-});
-
-test("all limited endpoints back off and fail explicitly", async () => {
+test("primary 429 errors retry with backoff before succeeding", async () => {
   const delays = [];
-  const fetch = create429RetryFetch("primary", "second", {
-    warn: () => {}, sleep: async (delay) => delays.push(delay),
-    fetchImpl: async () => new Response(null, { status: 429 }),
+  let calls = 0;
+  const fetchWithRetry = create429RetryFetch("primary", "", {
+    fetchImpl: async () => new Response(null, { status: ++calls < 3 ? 429 : 200 }),
+    sleep: async (delay) => delays.push(delay), warn: () => {},
   });
-  await assert.rejects(fetch("", read), /unavailable/);
-  assert.deepEqual(delays, [2000, 4000, 8000, 16000, 32000]);
+  assert.equal((await fetchWithRetry("", {})).status, 200);
+  assert.deepEqual(delays, [2_000, 4_000]);
 });
 
-test("authorization errors rotate without exposing URLs", async () => {
-  const warnings = [];
-  const fetch = create429RetryFetch("primary-secret", "fallback-secret", {
-    warn: (line) => warnings.push(line),
-    fetchImpl: async (url) => new Response(null, { status: url === "primary-secret" ? 401 : 200 }),
-  });
-  assert.equal((await fetch("", read)).status, 200);
-  assert.ok(warnings.every((line) => !line.includes("secret")));
-});
-
-test("transaction affinity pins reads and broadcast to the same endpoint", async () => {
+test("a fallback is used only after primary retries are exhausted", async () => {
   const calls = [];
-  const fetch = create429RetryFetch("primary", "secondary", {
-    warn: () => {},
-    fetchImpl: async (url) => {
-      calls.push(url);
-      return new Response(null, { status: url === "primary" ? 401 : 200 });
-    },
+  const delays = [];
+  const fetchWithRetry = create429RetryFetch("primary", "fallback", {
+    fetchImpl: async (url) => { calls.push(url); return new Response(null, { status: url === "primary" ? 429 : 200 }); },
+    sleep: async (delay) => delays.push(delay), warn: () => {},
   });
-  await withRpcAffinity(async () => {
-    await fetch("", read);
-    await fetch("", { body: JSON.stringify({ method: "eth_sendRawTransaction" }) });
+  assert.equal((await fetchWithRetry("", {})).status, 200);
+  assert.equal(calls.filter((url) => url === "primary").length, 6);
+  assert.equal(calls.at(-1), "fallback");
+  assert.deepEqual(delays, [2_000, 4_000, 8_000, 16_000, 32_000]);
+});
+
+test("repeated 429 responses without a fallback fail explicitly", async () => {
+  const fetchWithRetry = create429RetryFetch("primary", "", {
+    fetchImpl: async () => new Response(null, { status: 429 }),
+    sleep: async () => {}, warn: () => {},
   });
-  assert.deepEqual(calls, ["primary", "secondary", "secondary"]);
+  await assert.rejects(fetchWithRetry("", {}), /no distinct fallback/);
+});
+
+test("aborted requests stop before retrying instead of reusing an expired signal", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const fetchWithRetry = create429RetryFetch("primary", "fallback", {
+    fetchImpl: async () => { calls += 1; return new Response(null, { status: 429 }); },
+    sleep: async () => controller.abort(), warn: () => {},
+  });
+  await assert.rejects(fetchWithRetry("", { signal: controller.signal }), { name: "AbortError" });
+  assert.equal(calls, 1);
+});
+
+test("concurrent Arc requests are serialized", async () => {
+  let active = 0;
+  let peak = 0;
+  const fetchWithRetry = create429RetryFetch("primary", "", {
+    fetchImpl: async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return new Response(null, { status: 200 });
+    }, warn: () => {},
+  });
+  await Promise.all([fetchWithRetry("", {}), fetchWithRetry("", {}), fetchWithRetry("", {})]);
+  assert.equal(peak, 1);
 });

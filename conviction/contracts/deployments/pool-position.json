@@ -3,10 +3,10 @@
   "salt": "0x0",
   "tickLower": 197400,
   "tickUpper": 200340,
-  "liquidity": "4251414145611",
-  "centerUsdcPerTEth": 2221.745,
+  "liquidity": "4250734999091",
+  "centerUsdcPerTEth": 2222.455,
   "lowerPct": 10,
   "upperPct": 20,
-  "addTx": "0xe1ec95619cb92c9e81c932f6bb222d8828fe1e5b32a4823403041fd0b5a6d7f8",
-  "updatedAt": "2026-11-06T16:42:09.805Z"
+  "addTx": "0x878c9b8d6c9abd43c53f0f70ed288adc355862f57318a9a08e67170c37e3c9fc",
+  "updatedAt": "2026-11-06T18:28:24.107Z"
 }

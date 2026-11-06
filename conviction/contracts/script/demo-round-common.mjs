@@ -9,7 +9,7 @@ import {
   parseAbi,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { arcHttpTransport, withRpcAffinity } from "./rpc.mjs";
+import { arcHttpTransport } from "./rpc.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const deployment = JSON.parse(
@@ -121,14 +121,14 @@ export async function sendContract(label, walletClient, address, abi, functionNa
   let hash;
   for (let attempt = 0; ; attempt++) {
     try {
-      hash = await withRpcAffinity(() => walletClient.writeContract({
+      hash = await walletClient.writeContract({
         account: walletClient.account,
         chain,
         address,
         abi,
         functionName,
         args,
-      }));
+      });
       break;
     } catch (error) {
       const name = revertName(error);
