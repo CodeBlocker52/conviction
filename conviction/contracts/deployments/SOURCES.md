@@ -32,8 +32,11 @@ Redeployed after the contract fixes: per-proposal credit cap, winner-only redemp
 | WavefundVault (queued WAVE shares) | `0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137` | [0x8aae934a…c50d61](https://explorer.testnet.arc.io/tx/0x8aae934a22302a380da1e58908f2abe105009a47291af7fe2da1ff77cec50d61) |
 | QuantumLP (reused) | `0x885512902D1f5d05f81A678FdFFE0e339623c415` | Existing |
 | MockPriceOracle (reused) | `0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d` | Existing |
+| WavefundPriceReceiver | `0x0D8A4F9f2c5252436d61aCB9a21aEcf0CE760823` | [0x4bd65df6…0a4b95](https://explorer.testnet.arc.io/tx/0x4bd65df6e242257bfbb7373501e7e920ee2dc6c86e930400e1112039020a4b95) |
 
 The frontend, keeper and demo scripts read these addresses from `current.json`. Wiring (`WirePhaseB`) verified every role on-chain, including `allocationSource = vault` and the revocation of the previous round's roles on the registry and `QuantumLP` and of the previous vault's roles on the previous round and resolver. Funding: 20 USDC protocol seed ([approve](https://explorer.testnet.arc.io/tx/0x207efa1c24a02994417cd91f054c260389ea79bb6ec40e8c9d67aefb49c7d9fc), [addProtocolLiquiditySeed](https://explorer.testnet.arc.io/tx/0x957325718a12d0a589de7ec590f20d59e9f20a303d636dc13c8b60159db653db)) and a 5 USDC vault bootstrap ([approve](https://explorer.testnet.arc.io/tx/0x7db28061b1ca82c0cdec7c08fef1f492769e54ab5d92c39da116aef94d885ddb), [fundVault](https://explorer.testnet.arc.io/tx/0xe5f23dfa3f5287903fcb1e23e1655c05415cf7f4bbbed6ac0f766b1c2d4f053d)).
+
+CRE receiver (testnet simulation only): forwarder `0x6E9EE680ef59ef64Aa8C7371279c27E496b5eDc1`, selector `3034092155422581607`, allowed transmitter `0xa2A470207A21f957e3c0223d77fb4B46fb32b8d8` ([configuration](https://explorer.testnet.arc.io/tx/0xdae3479d259ffb8aee83b8a9550d6683331ec1f6efd6845acd96b5a1eacf5677)). The oracle granted the receiver `KEEPER_ROLE` ([grant](https://explorer.testnet.arc.io/tx/0x20c9cdc97d4a989b2c00996301a94b61ab58e2a8fc3f4a984ba1b9b7b11ae678)); the existing keeper retains the role. The keeper funded the transmitter with 0.5 USDC ([transfer](https://explorer.testnet.arc.io/tx/0x6072ee33e1fed23c914b3f0fb250f0fb2610af57cf836af6d7ab0ad9b30e58b9)). The receiver is unaudited; the CRE workflow is not yet deployed.
 
 Wiring transactions: [transferOwnership(market→round)](https://explorer.testnet.arc.io/tx/0x47056e893171fd54afb7603e974c03a40ae77351e74078e9c16062d48278e590), [setInitialLiquidityPerProposal](https://explorer.testnet.arc.io/tx/0x92dcea0d5e4897d8b483afc538aa1e7e6f35ded9bc0cd038629b0c4f09107972), [setAllocationSource](https://explorer.testnet.arc.io/tx/0x8028c731581ed506309a9de1bd9e452a0f6339a73d945bd33add182bdcb02e91); the remaining grant/revoke transactions are in `broadcast/WirePhaseB.s.sol/5042002/run-latest.json`.
 
@@ -51,6 +54,7 @@ Checked through `https://explorer.testnet.arc.io/api/v2/smart-contracts/<address
 | WaveHook | [`0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0`](https://explorer.testnet.arc.io/address/0xeb0929eba8be7abD3231b0D14Fa8F782B578cac0#code) |
 | QuantumLP (reused) | [`0x885512902D1f5d05f81A678FdFFE0e339623c415`](https://explorer.testnet.arc.io/address/0x885512902D1f5d05f81A678FdFFE0e339623c415#code) |
 | MockPriceOracle (reused) | [`0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d`](https://explorer.testnet.arc.io/address/0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d#code) |
+| WavefundPriceReceiver | [`0x0D8A4F9f2c5252436d61aCB9a21aEcf0CE760823`](https://explorer.testnet.arc.io/address/0x0D8A4F9f2c5252436d61aCB9a21aEcf0CE760823#code) |
 | TestAsset tETH (reused) | [`0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d`](https://explorer.testnet.arc.io/address/0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d#code) |
 | ProposerRegistry (reused) | [`0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346`](https://explorer.testnet.arc.io/address/0x181E2AFEe1005fDd3D02BC293D99d72dAd69b346#code) |
 

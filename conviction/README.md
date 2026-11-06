@@ -122,6 +122,10 @@ Each round decides one thing: **what should the vault's allocation be for the ne
 
 The Arc Testnet price fallback is a keeper-updated 8-decimal ETH/USD adapter sourced from Coinbase's public spot API. Vault swaps are capped at 500 bps adverse slippage versus oracle-implied output; a breach reverts the swap and lets forecasters redeem their full round deposits at par. This is a centralized testnet fallback, not a decentralized oracle.
 
+The CRE price receiver is deployed on Arc Testnet for development; the CRE workflow itself is not yet built or live. Its owner has configured an allowed transaction origin because the simulation forwarder does not verify signatures; this is not production authentication. Before production, use the real CRE forwarder, configure workflow ID and author checks, and disable the transaction-origin check. The receiver owner can call `revokeOracleAccess()` to renounce its oracle `KEEPER_ROLE`; the oracle admin can also revoke that role directly. Neither action removes the existing keeper's role, which remains the fallback.
+
+The receiver permits observations up to 120 seconds old, while `MockPriceOracle` timestamps the update at publication. Consequently, the vault's requirement for a mark published at or after evaluation end does not guarantee that the underlying observation was taken after evaluation end.
+
 A forecaster who never traded in the winning market ends the round with exactly their deposit, the same as if they had sat it out.
 
 ---

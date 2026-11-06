@@ -7,6 +7,11 @@
   "explorerUrl": "https://explorer.testnet.arc.io",
   "admin": "0xDA026fbF1F9a98632F52AA23F92c0041d6Ef3ac2",
   "keeper": "0xE7DD9a5fafa5739B466C61914311e39717f7192c",
+  "crePriceReceiverConfig": {
+    "forwarder": "0x6E9EE680ef59ef64Aa8C7371279c27E496b5eDc1",
+    "allowedTransmitter": "0xa2A470207A21f957e3c0223d77fb4B46fb32b8d8",
+    "chainSelector": "3034092155422581607"
+  },
   "contracts": {
     "usdc": "0x3600000000000000000000000000000000000000",
     "testAsset": "0x82EA73ad4a39a5673a910c7Ef76BcF03b3DC531d",
@@ -19,6 +24,7 @@
     "vault": "0x3AdB8d5D0732Af22B64Cd63Bf15569B06332e137",
     "quantumLp": "0x885512902D1f5d05f81A678FdFFE0e339623c415",
     "priceOracle": "0xb064CeEd9E9a74FfAf89C6DeaDF902876e2e456d",
+    "crePriceReceiver": "0x0D8A4F9f2c5252436d61aCB9a21aEcf0CE760823",
     "poolManager": "0x2756F3F7bFAf103F4c550f4d24CdCa82B093240A",
     "positionManager": "0x87Dd714940ea540c921a92216e6E0DE1E2b1735C",
     "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",

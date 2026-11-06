@@ -8,6 +8,7 @@ import {
   encodeFunctionData,
   http,
   keccak256,
+  parseAbi,
   toFunctionSelector,
   toHex,
 } from "viem";
@@ -46,6 +47,15 @@ const chain = defineChain({
   rpcUrls: { default: { http: [deployment.rpcUrl] } },
 });
 const client = createPublicClient({ chain, transport: http(deployment.rpcUrl) });
+const creReceiverAbi = parseAbi([
+  "function onReport(bytes metadata, bytes report)",
+  "function allowedTransmitter() view returns (address)",
+  "function expectedChainSelector() view returns (uint64)",
+  "function oracle() view returns (address)",
+  "function getForwarderAddress() view returns (address)",
+  "function owner() view returns (address)",
+  "function revokeOracleAccess()",
+]);
 const abiChecks = [
   ["TestAsset", abis.testAssetAbi, deployment.contracts.testAsset],
   ["ProposalTokens", abis.proposalTokensAbi, deployment.contracts.proposalTokens],
@@ -57,6 +67,7 @@ const abiChecks = [
   ["WavefundVault", abis.wavefundVaultAbi, deployment.contracts.vault],
   ["QuantumLP", abis.quantumLpAbi, deployment.contracts.quantumLp],
   ["MockPriceOracle", abis.mockPriceOracleAbi, deployment.contracts.priceOracle],
+  ["WavefundPriceReceiver", creReceiverAbi, deployment.contracts.crePriceReceiver],
   ["PoolManager", abis.poolManagerAbi, deployment.contracts.poolManager],
   ["V4 callback", abis.v4CallbackAbi, deployment.contracts.v4Callback],
 ];
@@ -71,6 +82,7 @@ const sourceLabels = [
   ["WavefundVault (queued WAVE shares)", deployment.contracts.vault],
   ["QuantumLP (reused)", deployment.contracts.quantumLp],
   ["MockPriceOracle (reused)", deployment.contracts.priceOracle],
+  ["WavefundPriceReceiver", deployment.contracts.crePriceReceiver],
   ["Uniswap v4 PoolManager", deployment.contracts.poolManager],
   ["Uniswap v4 PositionManager", deployment.contracts.positionManager],
   ["Permit2", deployment.contracts.permit2],
@@ -132,6 +144,10 @@ for (const [contractAddress, abi, functionName, expectedAddress] of [
   [deployment.contracts.vault, abis.wavefundVaultAbi, "priceOracle", deployment.contracts.priceOracle],
   [deployment.contracts.vault, abis.wavefundVaultAbi, "poolManager", deployment.contracts.poolManager],
   [deployment.contracts.vault, abis.wavefundVaultAbi, "tEth", deployment.contracts.testAsset],
+  [deployment.contracts.crePriceReceiver, creReceiverAbi, "oracle", deployment.contracts.priceOracle],
+  [deployment.contracts.crePriceReceiver, creReceiverAbi, "owner", deployment.admin],
+  [deployment.contracts.crePriceReceiver, creReceiverAbi, "getForwarderAddress", deployment.crePriceReceiverConfig.forwarder],
+  [deployment.contracts.crePriceReceiver, creReceiverAbi, "allowedTransmitter", deployment.crePriceReceiverConfig.allowedTransmitter],
 ]) {
   const linkedAddress = await client.readContract({
     address: contractAddress,
@@ -141,6 +157,15 @@ for (const [contractAddress, abi, functionName, expectedAddress] of [
   if (typeof linkedAddress !== "string" || linkedAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
     throw new Error(`${functionName} wired into ${contractAddress} does not match current.json (${expectedAddress}).`);
   }
+}
+
+const creChainSelector = await client.readContract({
+  address: deployment.contracts.crePriceReceiver,
+  abi: creReceiverAbi,
+  functionName: "expectedChainSelector",
+});
+if (creChainSelector !== BigInt(deployment.crePriceReceiverConfig.chainSelector)) {
+  throw new Error(`CRE chain selector ${creChainSelector} does not match current.json.`);
 }
 
 const creditDecimals = await client.readContract({
@@ -158,6 +183,8 @@ const roleChecks = [
   [deployment.contracts.quantumRound, abis.quantumRoundAbi, "KEEPER_ROLE", deployment.keeper],
   [deployment.contracts.vault, abis.wavefundVaultAbi, "QUANTUM_ROUND_ROLE", deployment.contracts.quantumRound],
   [deployment.contracts.resolver, abis.resolverAbi, "RESOLVER_ROLE", deployment.contracts.vault],
+  [deployment.contracts.priceOracle, abis.mockPriceOracleAbi, "KEEPER_ROLE", deployment.contracts.crePriceReceiver],
+  [deployment.contracts.priceOracle, abis.mockPriceOracleAbi, "KEEPER_ROLE", deployment.keeper],
 ];
 for (const [address, abi, role, account] of roleChecks) {
   const granted = await client.readContract({
