@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm run check:contracts && next build",
+    "build": "next build",
+    "build:checked": "npm run check:contracts && npm run build",
     "start": "next start",
     "check:contracts": "node --env-file-if-exists=.env contracts/script/check-contracts.mjs",
     "e2e:live": "node scripts/e2e-live.mjs",

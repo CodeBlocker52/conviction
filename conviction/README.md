@@ -463,7 +463,7 @@ Arc is Circle's stablecoin-native L1. Uniswap's full v4 stack (the AMM, pools, r
 | **`PREVRANDAO` always returns 0.** | We use no on-chain randomness. |
 | **Sub-second finality.** | Collapse and execution can run in consecutive blocks with no confirmation wait. |
 
-**Tooling:** Foundry (`forge`) builds and tests the Solidity contracts. `npm run build` runs the deployment/ABI checks and Next.js production build. Arc USDC-moving operations use the project's viem scripts against the RPC because Forge simulation does not support Arc's blocklist precompile.
+**Tooling:** Foundry (`forge`) builds and tests the Solidity contracts. `npm run build` builds the Next.js frontend; `npm run build:checked` also runs the live deployment/ABI checks first. Arc USDC-moving operations use the project's viem scripts against the RPC because Forge simulation does not support Arc's blocklist precompile.
 
 **Addresses:** the Uniswap v4 PoolManager and the rest of the deployment are in `contracts/deployments/current.json`; external Arc contracts are listed in `SOURCES.md`.
 
@@ -553,12 +553,15 @@ If we want to reuse any reference code, we ask the authors for permission first 
 ```bash
 npm install
 npm run dev            # http://localhost:3000
-npm run build          # runs check:contracts, then next build
+npm run build          # Next.js production build; no live contract checks
+npm run build:checked  # runs check:contracts, then the production build
 npm run check:contracts   # code exists at every address, ABI selectors, roles, wiring
 npm run e2e:live       # Playwright against production (or E2E_URL=...)
 npm run test:agents    # Agent scheduling, signer safety and risk-model tests
 forge test             # 218 tests (run from this folder; needs ~/.foundry/bin on PATH)
 ```
+
+Vercel uses `npm run build`, so an unavailable or rate-limited Arc RPC does not block the frontend build. Run `npm run check:contracts` separately before demos and after contract or deployment changes; a successful frontend build does not verify the live contracts.
 
 `.env` (never committed) holds `DEPLOYER_PK`, `DEPLOYER_ADDR`, `KEEPER_PK`, `KEEPER_ADDR`, `ARC_RPC_URL`, `BLOCKSCOUT_API_KEY`, and (for user-run agent wallet setup) `CIRCLE_API_KEY` and `CIRCLE_ENTITY_SECRET`. The frontend RPC override is `NEXT_PUBLIC_ARC_RPC_URL`. Never print or commit credential values.
 
