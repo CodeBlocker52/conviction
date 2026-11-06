@@ -169,6 +169,31 @@ export function amountsForLiquidity(liquidity, sqrtPrice, sqrtLower, sqrtUpper) 
   return { amount0, amount1 };
 }
 
+export function planPoolAlignment({ pool, position, positionLiquidity, fullRangeLiquidity, oracleSqrt, deviationBps, toleranceBps }) {
+  const activeManaged = position && pool.sqrtPriceX96 >= sqrtPriceAtTick(position.tickLower)
+    && pool.sqrtPriceX96 < sqrtPriceAtTick(position.tickUpper) ? positionLiquidity : 0n;
+  if (activeManaged > pool.liquidity) throw new Error("Managed active liquidity exceeds pool liquidity; refusing to remove position.");
+  if (positionLiquidity > 0n && position?.tickLower === MIN_TICK && position?.tickUpper === MAX_TICK) {
+    throw new Error("Managed position is also the full-range position; refusing to recenter.");
+  }
+  const remainingLiquidity = pool.liquidity - activeManaged;
+  if (BigInt(deviationBps) <= toleranceBps) return { remainingLiquidity, align: null };
+  if (remainingLiquidity !== fullRangeLiquidity) {
+    throw new Error("Unexpected active liquidity will remain after removal; refusing to recenter without a safe alignment plan.");
+  }
+  const zeroForOne = pool.sqrtPriceX96 > oracleSqrt;
+  if (remainingLiquidity === 0n) {
+    return { remainingLiquidity, align: { zeroForOne, amountIn: 1_000n, token: zeroForOne ? "USDC" : "tETH" } };
+  }
+  const amountIn = zeroForOne
+    ? ceilDiv(remainingLiquidity * Q96 * (pool.sqrtPriceX96 - oracleSqrt), pool.sqrtPriceX96 * oracleSqrt)
+    : ceilDiv(remainingLiquidity * (oracleSqrt - pool.sqrtPriceX96), Q96);
+  return {
+    remainingLiquidity,
+    align: { zeroForOne, amountIn: amountIn * 1_100n / 1_000n + 1_000n, token: zeroForOne ? "USDC" : "tETH" },
+  };
+}
+
 // Liquidity at which `usdcIn` (after the pool fee) moves the spot USDC/tETH price up by `impactBps`.
 export function liquidityForBuyImpact(sqrtPriceX96, usdcIn, impactBps) {
   const target = sqrt((sqrtPriceX96 * sqrtPriceX96 * 10_000n) / (10_000n + BigInt(impactBps)));

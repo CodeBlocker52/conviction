@@ -32,6 +32,8 @@ For an integrated terminal, run `npm run demo:live -- --preset demo3` (or `judge
 
 Scripts use `ARC_RPC_URL` as the primary and an optional single `ARC_TESTNET_RPC_FALLBACK` after repeated HTTP 429 responses. Do not put secret RPC URLs in public frontend settings or logs. If a transaction submission times out, inspect its outcome before retrying.
 
+Pool recentering uses separate removal, alignment and add transactions; an interruption can leave the pool without managed liquidity. Check the transaction receipts and run `npm run pool:recenter -- --max-new-usdc 1` for a fresh read-only recovery plan before rerunning with `--execute`. Keep the updated `contracts/deployments/pool-position.json` so the recovered tokens are accounted for. Do not start a demo until the position is restored and preflight says `READY`.
+
 The automatic demo3 cycle has not yet been validated end-to-end live. Its 120 s trading window and 60 s TWAP leave a 60 s on-chain proposal window, with a 45 s evaluation. Proposers target the first 30 s; Quant checks every 10 s and Guardian every 3 s in the final window. Keeper polling is 1 s and it opens another round about 20 s after settlement.
 
 ```

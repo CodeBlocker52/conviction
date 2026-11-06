@@ -27,8 +27,8 @@ import {
   TICK_SPACING,
   amountsForLiquidity,
   callbackAddress,
-  ceilDiv,
   liquidityForBuyImpact,
+  planPoolAlignment,
   poolKey,
   poolKeyType,
   readPool,
@@ -158,7 +158,8 @@ async function approve(client, token, abi, amount, label) {
     account: client.account, chain, address: token, abi, functionName: "approve",
     args: [callbackAddress, amount], ...(await fees()),
   });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+  if (receipt.status !== "success") throw new Error(`${label} approval reverted: ${hash}`);
   console.log(`${label} approval: ${explorerUrl}/tx/${hash}`);
 }
 
@@ -211,23 +212,12 @@ const needed = amountsForLiquidity(newLiquidity, oracleSqrt, range.sqrtLower, ra
 const capUsdc = needed.amount0 * 1_005n / 1_000n + 1n;
 const capTEth = needed.amount1 * 1_005n / 1_000n + 1n;
 
-// Alignment swap uses only the full-range dust liquidity, so it is cheap after the managed position is removed.
-let align = null;
-if (BigInt(deviationBps) > alignToleranceBps && fullRangeLiquidity === 0n && pool.liquidity === 0n) {
-  // Empty pool: a dust swap against the price limit moves the price for free.
-  align = pool.sqrtPriceX96 > oracleSqrt
-    ? { zeroForOne: true, amountIn: 1_000n, token: "USDC" }
-    : { zeroForOne: false, amountIn: 1_000n, token: "tETH" };
-} else if (BigInt(deviationBps) > alignToleranceBps && fullRangeLiquidity > 0n) {
-  if (pool.sqrtPriceX96 > oracleSqrt) {
-    // Pool tETH too cheap in USDC terms is sqrt price above target: USDC in lowers sqrt price.
-    const amountIn = ceilDiv(fullRangeLiquidity * Q96 * (pool.sqrtPriceX96 - oracleSqrt), pool.sqrtPriceX96 * oracleSqrt);
-    align = { zeroForOne: true, amountIn: amountIn * 1_100n / 1_000n + 1_000n, token: "USDC" };
-  } else {
-    const amountIn = ceilDiv(fullRangeLiquidity * (oracleSqrt - pool.sqrtPriceX96), Q96);
-    align = { zeroForOne: false, amountIn: amountIn * 1_100n / 1_000n + 1_000n, token: "tETH" };
-  }
-}
+const { remainingLiquidity, align } = removeOnly
+  ? { remainingLiquidity: null, align: null }
+  : planPoolAlignment({
+    pool, position: priorPosition, positionLiquidity: existingLiquidity,
+    fullRangeLiquidity, oracleSqrt, deviationBps, toleranceBps: alignToleranceBps,
+  });
 
 if (!removeOnly) {
   console.log(`Range: -${lowerPct}% / +${upperPct}% of oracle => $${usdcPerTEthAtTick(range.tickUpper).toFixed(2)} .. $${usdcPerTEthAtTick(range.tickLower).toFixed(2)} (ticks ${range.tickLower}..${range.tickUpper})`);
@@ -293,6 +283,11 @@ if (removeOnly) {
   process.exit(0);
 }
 
+const afterRemoval = await readPool();
+if (afterRemoval.liquidity !== remainingLiquidity || afterRemoval.sqrtPriceX96 !== pool.sqrtPriceX96) {
+  throw new Error("Pool state changed during recentering; position may be removed. Inspect it and rerun the read-only plan.");
+}
+
 if (align) {
   const token = align.zeroForOne ? contracts.usdc : contracts.testAsset;
   await approve(client, token, align.zeroForOne ? usdcAbi : erc20Abi, align.amountIn, `${align.token} (align)`);
@@ -307,7 +302,7 @@ if (align) {
 
 const aligned = await readPool();
 const alignedBps = Math.round(Math.abs(aligned.usdcPerTEth / oracleUsdc - 1) * 10_000);
-if (alignedBps > 50) throw new Error(`Pool is still ${alignedBps} bps from the oracle after alignment; position not added.`);
+if (alignedBps > 50) throw new Error(`Pool is still ${alignedBps} bps from the oracle after alignment; position not added. Inspect the pool and rerun the read-only plan.`);
 const finalNeeded = amountsForLiquidity(newLiquidity, aligned.sqrtPriceX96, range.sqrtLower, range.sqrtUpper);
 const finalCapUsdc = finalNeeded.amount0 * 1_010n / 1_000n + 1n;
 const finalCapTEth = finalNeeded.amount1 * 1_010n / 1_000n + 1n;
@@ -317,9 +312,10 @@ const plannedNewUsdc = finalFreshUsdc + (align?.token === "USDC" ? align.amountI
 if (plannedNewUsdc > maxNewUsdcBudget) {
   throw new Error(`Aligned position needs ${usdc(plannedNewUsdc)} new USDC, above the ${usdc(maxNewUsdcBudget)} limit.`);
 }
-const addUsdcCap = maxUsdcBudget < recovered.amount0 + maxNewUsdcBudget
+const alignmentUsdcCap = align?.token === "USDC" ? align.amountIn : 0n;
+const addUsdcCap = maxUsdcBudget < recovered.amount0 + maxNewUsdcBudget - alignmentUsdcCap
   ? maxUsdcBudget
-  : recovered.amount0 + maxNewUsdcBudget;
+  : recovered.amount0 + maxNewUsdcBudget - alignmentUsdcCap;
 const addTEthCap = finalCapTEth > recovered.amount1 ? finalCapTEth : recovered.amount1;
 await approve(client, contracts.usdc, usdcAbi, addUsdcCap, "USDC (liquidity)");
 await approve(client, contracts.testAsset, erc20Abi, addTEthCap, "tETH (liquidity)");
